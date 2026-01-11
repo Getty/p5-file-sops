@@ -1,6 +1,6 @@
 package File::SOPS::Format::YAML;
 # ABSTRACT: YAML format handler for SOPS
-
+our $VERSION = '0.002';
 use Moo;
 use Carp qw(croak);
 use YAML::XS qw(Load Dump);

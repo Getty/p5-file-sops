@@ -1,6 +1,6 @@
 package File::SOPS::Format::JSON;
 # ABSTRACT: JSON format handler for SOPS
-
+our $VERSION = '0.002';
 use Moo;
 use Carp qw(croak);
 use JSON::MaybeXS qw(decode_json);
