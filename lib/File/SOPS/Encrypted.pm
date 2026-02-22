@@ -285,8 +285,9 @@ sub _deserialize_value {
     return $data + 0.0 if $type eq 'float';
     if ($type eq 'bool') {
         # SOPS uses "True"/"False" (titlecase)
-        return 1 if lc($data) eq 'true' || $data eq '1';
-        return 0;
+        # Return JSON::PP::Boolean to preserve bool type through YAML/JSON serialization
+        require JSON::PP;
+        return (lc($data) eq 'true' || $data eq '1') ? JSON::PP::true : JSON::PP::false;
     }
     return $data;
 }

@@ -690,7 +690,7 @@ sub _value_to_bytes_for_type {
 
     my $str;
     if ($type eq 'bool') {
-        # Already deserialized to 1/0 by decrypt_value
+        # Deserialized to JSON::PP::Boolean by decrypt_value
         $str = $value ? 'True' : 'False';
     } else {
         $str = "$value";

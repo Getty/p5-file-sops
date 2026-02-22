@@ -1,6 +1,8 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0
+    (YAML::XS with $Boolean='JSON::PP' now correctly serializes true/false)
 
 0.001     2026-01-11 04:00:35Z
   - Initial release
