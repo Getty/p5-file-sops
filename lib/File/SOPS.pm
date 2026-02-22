@@ -11,7 +11,7 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use namespace::clean;
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 
 =head1 SYNOPSIS
 
