@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:10:02Z
+id: 2
+priority: medium
+status: done
+tags:
+- docs
+- interop
+title: 'POD drift: iv attribute documents 12 bytes, code uses 32'
+updated: 2026-08-08T22:38:21Z
+---
+
+File::SOPS::Encrypted documents the iv attribute as 12 bytes for AES-GCM, but encrypt_value generates 32 random bytes because SOPS-Go uses a 32-byte nonce. The code is right, the POD is wrong. Fix the POD and record why 32 rather than the conventional 12, so the next reader does not change the code instead.
+FIXED, in both places: the =attr iv block and the separate 12-byte claim in the Encrypted DESCRIPTION list, which the first fix missed and the release audit caught.
