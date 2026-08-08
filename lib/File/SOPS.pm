@@ -640,6 +640,9 @@ sub rotate {
 
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
     my (undef, $metadata) = $format_class->parse($content);
+    croak "No SOPS metadata found in '$file'" unless $metadata;
+
+    _assert_rotatable($metadata, $file);
 
     # Get current recipients if not specified
     unless ($recipients) {
@@ -654,12 +657,12 @@ sub rotate {
         ignore_mac => $args{ignore_mac},
     );
 
-    # Re-encrypt with new data key
+    # Re-encrypt with new data key, under the rules this document already had
     my $encrypted = $class->encrypt(
-        data               => $data,
-        recipients         => $recipients,
-        format             => $format,
-        mac_only_encrypted => $metadata->mac_only_encrypted,
+        data       => $data,
+        recipients => $recipients,
+        format     => $format,
+        metadata   => $metadata,
     );
 
     # Write back
@@ -701,10 +704,32 @@ This operation:
 Key rotation is recommended periodically for security, or when removing
 a recipient's access.
 
-C<mac_only_encrypted> is carried over from the existing file. The other
-encryption rules (C<unencrypted_suffix> and friends) are B<not> yet -- L</encrypt>
-builds fresh metadata with the defaults, so rotating a file that customised
-them rewrites it under the default rules.
+The rotated file keeps the C<sops> section it had, apart from what a new data
+key necessarily replaces. Its encryption rules, C<mac_only_encrypted> and any
+field this distribution does not model -- C<shamir_threshold> and whatever a
+later sops adds -- are carried over; the wrapped data keys, the MAC and
+C<lastmodified> are regenerated. Until 0.003 none of that was carried: rotate
+called L</encrypt>, which built fresh metadata with the defaults, so a file
+that customised any of it was rewritten under the default rules.
+
+=head3 Files rotate refuses
+
+Rotation makes a new data key, and this distribution can only wrap one for age
+recipients. A file whose C<sops> section holds key material for another
+backend -- C<pgp>, C<kms>, C<gcp_kms>, C<azure_kv>, C<hc_vault> or
+C<key_groups> -- is therefore B<refused> rather than rotated:
+
+    Refusing to rotate 'shared.yaml': its sops section holds key material
+    this distribution cannot re-encrypt (pgp). ...
+
+Both alternatives are wrong and the quiet one is worse. Dropping those entries
+-- which is what happened before 0.003 -- revokes access for everyone behind
+them while reporting success, and the file still decrypts perfectly for
+whoever runs the command, so nothing looks amiss until someone else needs it.
+Keeping them would leave a wrapped copy of a key that no longer decrypts
+anything. Rotate such a file with the sops CLI, which can re-encrypt for every
+backend; or, if losing those recipients is the intention, say so by calling
+L</decrypt> and L</encrypt> yourself.
 
 C<ignore_mac> is passed through to L</decrypt>; rotating a file you could not
 verify re-signs whatever it contained, so prefer to fail.
@@ -767,6 +792,26 @@ sub _assert_rules_supported {
     }
 
     return 1;
+}
+
+# age is the only backend implemented here, so a document holding key material
+# for another one cannot be rotated: the new data key can be wrapped for its
+# age recipients and for nobody else. Both ways out of that are wrong, and the
+# quiet one is the worse -- dropping the entries revokes those recipients'
+# access while reporting success, and keeping them leaves a wrapped copy of a
+# key that no longer decrypts anything, which fails later and further away.
+sub _assert_rotatable {
+    my ($metadata, $file) = @_;
+
+    my @foreign = grep { $_ ne 'age' } $metadata->key_material_fields;
+    return 1 unless @foreign;
+
+    croak "Refusing to rotate '$file': its sops section holds key material "
+        . "this distribution cannot re-encrypt (" . join(', ', @foreign) . "). "
+        . "Rotation generates a new data key, so those entries would be "
+        . "silently dropped and the recipients behind them would lose access. "
+        . "Rotate this file with the sops CLI, or, if losing them is what you "
+        . "want, say so explicitly with decrypt followed by encrypt.";
 }
 
 sub _encryption_options {

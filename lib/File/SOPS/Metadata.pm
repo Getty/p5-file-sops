@@ -26,6 +26,15 @@ our @UNSUPPORTED_ENCRYPTION_RULES = qw(
 
 our $DEFAULT_UNENCRYPTED_SUFFIX = '_unencrypted';
 
+# Every field that holds the data key wrapped for one recipient or one
+# backend. key_groups is in the list although this class does not model it:
+# whatever else it is, it holds wrapped copies of the data key, and a caller
+# generating a new one has to know it is there.
+our @KEY_MATERIAL_FIELDS = qw(
+    age pgp kms gcp_kms azure_kv hc_vault key_groups
+);
+my %IS_KEY_MATERIAL = map { $_ => 1 } @KEY_MATERIAL_FIELDS;
+
 # Everything this class holds in an attribute of its own. Anything else in a
 # document's sops section goes to, and comes back out of, `extra`.
 my %MODELLED_FIELD = map { $_ => 1 } qw(
@@ -365,7 +374,15 @@ sub policy_args {
     # every key ending in _unencrypted in plaintext on the next write.
     my %args = map { $_ => $self->$_ } @ENCRYPTION_RULES;
     $args{mac_only_encrypted} = 1 if $self->mac_only_encrypted;
-    $args{extra} = { %{ $self->extra } };
+
+    # Unmodelled fields come along, minus any that turn out to hold key
+    # material: key_groups wraps the data key that is about to be replaced,
+    # so carrying it over would leave the new document advertising a stale
+    # copy of the old key.
+    $args{extra} = {
+        map  { $_ => $self->extra->{$_} }
+        grep { !$IS_KEY_MATERIAL{$_} } keys %{ $self->extra }
+    };
 
     return %args;
 }
@@ -388,6 +405,33 @@ file before.
 
 This is what L<File::SOPS/rotate> passes to L<File::SOPS/encrypt> so that a
 rotated file keeps the rules it was written under.
+
+=cut
+
+sub key_material_fields {
+    my ($self) = @_;
+
+    return grep {
+        my $value = $self->can($_) ? $self->$_ : $self->extra->{$_};
+        ref $value eq 'ARRAY' ? scalar @$value : defined $value;
+    } @KEY_MATERIAL_FIELDS;
+}
+
+=method key_material_fields
+
+    my @found = $meta->key_material_fields;
+    # => ('age', 'pgp')
+
+Returns the names of the fields in which this document actually carries a
+wrapped copy of the data key -- L</age>, L</pgp>, L</kms>, L</gcp_kms>,
+L</azure_kv>, L</hc_vault> and C<key_groups>, skipping the ones that are empty
+or absent. C<key_groups> is included although this class does not model it,
+because a caller about to replace the data key has to know it is there.
+
+This is what L<File::SOPS/rotate> asks before it generates a new data key: age
+is the only backend implemented here, so a document holding key material for
+any other one cannot be rotated without either revoking those recipients or
+leaving them a wrapped copy of a key that no longer encrypts anything.
 
 =cut
 

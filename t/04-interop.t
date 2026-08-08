@@ -919,4 +919,56 @@ subtest 'Non-default encryption rule' => sub {
     is_deeply($decrypted, $data, 'and returns it intact') if $decrypted;
 };
 
+###############################################################################
+# Test 21: Rotating a document sops wrote, and handing it back
+#
+# The rotate in test 13 uses a document this library wrote under the defaults,
+# so it could not see karr #13: rotate re-encrypted through encrypt, which
+# built fresh metadata, and everything the document had configured was reset.
+# Here sops chooses the rule, and sops has to accept the result -- which it
+# will not do if the rotated file carries two rule fields, or if its values no
+# longer match the rule it declares.
+###############################################################################
+subtest 'Rotate a sops-written document with a non-default rule' => sub {
+    my $plain_file = "$tempdir/rotate_rules_plain.yaml";
+    write_file($plain_file, "password_enc: hidden\nhost: db.example.com\n");
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+
+    # A field sops models and this distribution does not. sops carries it
+    # across its own rotate; dropping it here would change what sops does
+    # with the file afterwards. Injected into the text rather than through a
+    # parse and re-dump, because a re-dump sorts the keys and the MAC is
+    # order-dependent -- reordering a document invalidates it, by design.
+    my $with_extra = $sops_enc;
+    $with_extra =~ s/^sops:\n/sops:\n    shamir_threshold: 2\n/m
+        or die "could not find the sops section to inject into";
+
+    my $enc_file = "$tempdir/rotate_rules.yaml";
+    write_file($enc_file, $with_extra);
+
+    my $ok = eval {
+        File::SOPS->rotate(file => $enc_file, identities => [$secret]);
+        1;
+    };
+    is($ok, 1, 'File::SOPS rotates it') or diag("died: $@");
+
+    my $rotated = read_file($enc_file);
+    my $sops_meta = Load($rotated)->{sops};
+    is($sops_meta->{encrypted_suffix}, '_enc', 'the rule sops chose survived');
+    ok(!exists $sops_meta->{unencrypted_suffix},
+        'and no second rule was written next to it');
+    is($sops_meta->{shamir_threshold}, 2, 'so did the field we do not model');
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts the rotated document')
+        or diag("sops output: $output");
+    is_deeply(
+        Load($output),
+        { password_enc => 'hidden', host => 'db.example.com' },
+        'and every value survived the rotation',
+    ) if $? >> 8 == 0;
+};
+
 done_testing;

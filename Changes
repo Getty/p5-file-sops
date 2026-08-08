@@ -120,6 +120,24 @@ Revision history for File-SOPS
     came back as mojibake. decrypt, decrypt_file and extract now return
     characters. The bytes written to the file are unchanged. See the new
     "Character encoding" section in File::SOPS for the boundary rule.
+  - SECURITY: rotate no longer silently discards the parts of the sops
+    section it did not create. It re-encrypted through encrypt, which
+    built fresh metadata with the defaults, so a rotated file lost its
+    encryption rules and every backend's key material except age -
+    which survived only because rotate re-read the age recipients by
+    hand. Rotating a file shared with PGP or KMS recipients therefore
+    revoked their access while reporting success, and the file kept
+    decrypting perfectly for whoever ran the command, so nothing looked
+    wrong until someone else needed it. rotate now carries the
+    document's rules, mac_only_encrypted and unmodelled fields across,
+    and REFUSES a file holding key material it cannot re-encrypt (pgp,
+    kms, gcp_kms, azure_kv, hc_vault, key_groups) rather than dropping
+    it: a new data key makes those entries stale whatever is done with
+    them. Rotate such a file with the sops CLI, or drop those
+    recipients deliberately with decrypt followed by encrypt.
+  - rotate also dies with a clear message on a file that has no sops
+    section, instead of on an undefined method call.
+  - New File::SOPS::Metadata method key_material_fields.
   - The encryption rules are reachable at last. unencrypted_suffix,
     encrypted_suffix, unencrypted_regex and encrypted_regex have been
     documented since 0.001 and could not be set through the public API:
