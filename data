@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-08-08T23:32:40Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:38:27Z
+id: 15
+priority: medium
+started: 2026-08-08
+status: done
+tags:
+- architecture
+- interop
+title: Types are re-detected from stringified scalars instead of coming from the parser
+updated: 2026-08-08T23:34:17Z
+---
+
+The tree walk receives bare Perl scalars and re-runs type detection on them, so a quoted string of digits comes back as a number and the string true becomes a real boolean. The Go reference takes the type from the parser and a quoted numeric string stays a string end to end. Both directions reproduced. This is architectural rather than a typo, and it also feeds the MAC re-normalization bug. Worth a recorded decision (an ADR, once the repo has one) before anyone changes it, because the fix means carrying source type information through the walk.
+Evidence from sops 3.13.3, measured not reasoned: bare false gives type:bool, but quoted "false", "true", "1" and "0" are ALL type:str. sops types by the parsed value, never by string pattern. We pattern-match the scalar, so every quoted true/false/1/0 comes back from a round trip as a bool or int instead of the string that went in. Perl can distinguish these (YAML::XS and JSON::MaybeXS preserve the SV string-vs-number distinction), so it is fixable. Note the file-sops-core skill previously asserted the current ladder was deliberate and matched Go; that claim was wrong and has been corrected in the skill. Wants an ADR before the fix, since it touches both type ladders and all three conversions. The interop suite does not cover quoted scalars, which is why this stayed hidden.
+Also bites in the Perl to sops direction, measured: we encrypt the string 007 as type:int and 1.50 as type:float; Go normalises those to 7 and 1.5 when recomputing the MAC, so sops -d rejects the file outright. The MAC rewrite deliberately did not paper over this - t/07-mac.t asserts only numeric equality at those points, with a comment pointing here, so it will not obstruct the real fix.
+Fixed. ADR 0002 written first (docs/adr/0002-value-type-comes-from-the-scalar-not-from-a-pattern.md). Type now comes from the SV's public IOK/NOK flags via the new Encrypted->detect_type; wire bytes from the new Encrypted->value_to_bytes, which also canonicalises numeric plaintext to Go's form (007->7, 1.50->1.5, 1e20->100000000000000000000) because a parser-derived type without the matching byte form is still a file sops rejects. Both ladders collapsed into one: SOPS::_detect_type_for_mac deleted, SOPS::_value_to_bytes delegates. t/07-mac.t's two placeholder numeric-equality assertions sharpened to string equality plus a new bare-number case; t/06 section 3's claim replaced (the string 'false' is no longer a boolean at all, so the old assertion was pinning the wrong rule) and a new section 4 added for the full type table plus a no-mutation regression; t/01's bool case now uses JSON->true. Interop suite gained two subtests covering quoted scalars in both directions, YAML and JSON, plus unencrypted quoted scalars for the MAC path. Verified against sops 3.13.3 on PATH: prove -lr t/ 240 tests PASS with t/04-interop.t actually running, and both new interop subtests confirmed failing on the pre-fix lib (sops -d refused our files; we failed sops's MAC). Not committed - maintainer reviews the diff. Follow-on drift filed as #28 (int precision), #29 (parser resolution divergence), #30 (no per-leaf type override).
+Fixed in 5f7b502. detect_type/value_to_bytes are now single class methods in Encrypted.pm; the duplicate MAC-side ladder is gone. ADR 0002 records the rule and the caller-visible round-trip changes. Interop asserted in both directions against sops 3.13.3, not skipped. Spun off #28, #29, #30.
