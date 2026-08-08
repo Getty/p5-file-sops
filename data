@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:51:28Z
+id: 24
+priority: critical
+status: done
+tags:
+- release
+- testing
+title: New wire-format regression tests are untracked, will not ship in dzil build
+updated: 2026-08-08T21:54:20Z
+---
+
+git status shows t/05-format-key-order.t and t/06-wire-format-regressions.t as untracked (??). The GETTY bundle gathers files via Git::GatherDir, which only picks up files known to git. Verified: built with `dzil build` into a scratch dir on 2026-08-08 -- the resulting t/ contains only 00-load, 01-encrypted, 02-encrypt-decrypt, 03-metadata, 04-interop, author-pod-syntax, release-changes_has_content. t/05 and t/06 are absent from the tarball tree despite existing on disk and passing when run directly (`prove -lr t/` shows Files=7, Tests=95, all green including them).
+
+These are exactly the tests the {{$NEXT}} Changes entry cites as new compatibility coverage ("New regression tests pin the wire format ... which is what let the above ship unnoticed"). Releasing without `git add`-ing them reproduces the same failure mode this release is fixing: a green suite that silently didn't run the assertions that matter.
+
+Fix: `git add t/05-format-key-order.t t/06-wire-format-regressions.t` (and anything else currently untracked that should ship) before `dzil release`, then rebuild and confirm both files appear in the tarball's t/.
+Fixed: both test files staged with git add, so git ls-files now sees them and Git::GatherDir will ship them. Verified via git ls-files t/. Not committed - the maintainer owns commits.
