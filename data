@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:28:55Z
+id: 5
+priority: critical
+status: done
+tags:
+- interop
+- yaml
+- bug
+title: 'YAML: lastmodified emitted unquoted, sops rejects every file we write'
+updated: 2026-08-08T21:41:22Z
+---
+
+sops -d on any YAML file produced by File::SOPS fails with: decoding failed due to the following error(s): lastmodified expected type string, got unconvertible type time.Time. We emit the timestamp as an unquoted YAML scalar, so the Go YAML parser types it as time.Time while sops expects a string. JSON is unaffected because JSON has no timestamp type, which is why JSON passes both directions and YAML only passes sops to Perl. This single root cause accounts for all 9 failing interop subtests. Both CLAUDE.md and the File::SOPS POD show the field correctly quoted, so the documentation was right and the code drifted. Discovered on the first ever real run of t/04-interop.t, against sops 3.13.3.
+FIXED. lastmodified is now emitted quoted, matching what sops itself writes. This single root cause accounted for all 9 interop failures: the suite went from 4/13 to 13/13 on this fix alone. Investigated and ruled out for other fields: YAML::XS QuoteNumericStrings is on by default and already quotes numbers, bools and nulls, so timestamps were the only gap; version 3.13.3 is emitted unquoted by sops itself and read back as a string. Post-processing the dumped text was the only route with this emitter (no per-scalar style hook); scoped to the top-level sops block and one key. Regression tests in t/06-wire-format-regressions.t, no binary required.
