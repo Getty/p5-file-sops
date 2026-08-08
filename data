@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:38:11Z
+id: 12
+priority: high
+status: done
+tags:
+- bug
+- encoding
+title: 'UTF-8: decrypt returns bytes and decrypt_file double-encodes into mojibake'
+updated: 2026-08-08T22:37:19Z
+---
+
+Serialize encodes to UTF-8 bytes, nothing ever decodes, and the file writer encodes again via YAML::XS::Dump and JSON with utf8 set. A file containing a-umlaut and a CJK character comes back through encrypt_file then decrypt_file as double-encoded mojibake. Separately, decrypt hands back byte strings where encrypt accepted character strings, so a deep comparison of the decrypted structure against the original fails for any non-ASCII input. The bytes on the wire are correct, which is why the interop unicode subtest never caught it: it only checks the sops side.
+FIXED. The boundary rule is now explicit and documented in a Character encoding section in the File::SOPS DESCRIPTION: the API boundary is characters, the wire is UTF-8 bytes, encoding happens exactly once and the library owns it. type:bytes and a type:str whose plaintext is not valid UTF-8 come back as bytes rather than being mangled. The wire output did not change and the MAC digest did not move. Regression tests in t/08-encoding.t, no binary required.
