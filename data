@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:38:00Z
+id: 10
+priority: high
+status: done
+tags:
+- bug
+- mac
+title: 'The mac: skip heuristic swallows any user key ending in mac'
+updated: 2026-08-08T22:13:13Z
+---
+
+The regex that skips the metadata MAC while scraping ENC values in document order is unanchored on the left, so hmac: and webmac: match it too. That value never reaches the digest and verification fails, for self-produced and sops-produced files alike, with no workaround short of renaming the key. The guard is also unnecessary: the metadata MAC lives in the sops branch which parse already removed from the tree, so it has no path entry and is dropped by the existing next unless path check.
+FIXED as part of one coherent MAC rewrite: both directions now funnel through a shared digest helper, differing only in how leaves are collected and what a leaf contributes. Verified against sops 3.13.3 in both directions. Suite went from 82/95 to 96/113 tests (without/with binary); each fix was confirmed by reverting it and watching the named subtest fail. Regression tests in t/07-mac.t.
