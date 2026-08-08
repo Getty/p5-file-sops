@@ -42,23 +42,37 @@ library's own tests, and fails against the real `sops` binary.
    *parent's* path — no index. `_encrypt_tree`/`_decrypt_tree`/`_build_enc_path_mapping`
    all implement this; they must stay in agreement.
 3. **The IV is 32 bytes**, not the AES-GCM-conventional 12. SOPS-Go uses a 32-byte
-   nonce. (`=attr iv` in the POD still says 12 bytes — the POD is wrong, the code is
-   right.)
+   nonce. (`=attr iv` in the POD said 12 for two releases; it now says 32 and explains
+   why. Do not "correct" either back.)
 4. **Booleans serialize Go-style titlecase**: `True` / `False` — on the wire *and* in
    the bytes fed to the MAC digest. Never `1`/`0`, never lowercase.
-5. **Type detection is a fixed ladder** (`_detect_type`): `JSON::PP::Boolean` → bool;
-   the literal strings `'true'`/`'false'` → bool; `/^-?\d+$/` → int; `/^-?\d+\.\d+$/` →
-   float; else str.
+5. **The type comes from the scalar, never from its text** — `Encrypted->detect_type`:
+   `JSON::PP::Boolean` → bool; public `SVf_IOK` → int; public `SVf_NOK` → float; else
+   str. SOPS types a value by what the *parser* returned, and YAML::XS and
+   Cpanel::JSON::XS both preserve the SV's string-vs-number distinction, so a quoted
+   scalar is a string end to end. Verified against sops 3.13.3: bare `false` →
+   `type:bool`, but quoted `"false"`, `"true"`, `"1"`, `"0"`, `"007"`, `"1.50"` are all
+   `type:str`. Perl's own literals set the same flags, so `5432` is int and `'5432'` is
+   str for a structure passed straight to `encrypt`. Decided in **ADR 0002** (karr #15);
+   read it before changing any of this.
 
-   **This ladder does NOT match Go, and that is a known defect, not a design choice**
-   (karr #15). SOPS types a value by what the *parser* produced, never by pattern-
-   matching its text. Verified against sops 3.13.3: bare `false` → `type:bool`, but
-   quoted `"false"`, `"true"`, `"1"`, `"0"` are all `type:str`. We turn every one of
-   those into a bool or an int, so a quoted scalar does not survive a round trip as
-   the string it went in as. Perl can tell the two apart — YAML::XS and JSON::MaybeXS
-   preserve the SV's string-vs-number distinction — so this is fixable, but the fix
-   touches both type ladders and all three conversions and wants an ADR first.
-   Until then: treat the ladder as *what the code does*, not as what is correct.
+   Two things follow, and both are load-bearing:
+
+   - **Do not pattern-match a value's text anywhere.** `looks_like_number`, `/^\d+$/`
+     and `$v eq 'true'` are all the defect this replaced. And do not read the *private*
+     `SVp_IOK`/`SVp_NOK`: those are set by merely reading a string numerically, so a
+     caller's `if ($h{port} > 1024)` would retype the document.
+   - **A numeric plaintext is canonical, not the source spelling.** Go re-derives the
+     digest input from the type, so `007` under `type:int` must be written `7` and
+     `1.50` under `type:float` must be written `1.5` (`strconv.Itoa` /
+     `strconv.FormatFloat(v,'f',-1,64)`, the latter reimplemented in
+     `Encrypted::_float_bytes`). Writing the source spelling makes `sops -d` reject the
+     whole file. A *string* is always written verbatim.
+
+   **There is now ONE ladder and ONE conversion**, `Encrypted->detect_type` and
+   `Encrypted->value_to_bytes`; `SOPS::_value_to_bytes` delegates and
+   `SOPS::_detect_type_for_mac` is gone. Keep it that way — a second copy is how this
+   distribution produces files that verify against themselves and against nothing else.
 6. **`bool` deserializes to `JSON::PP::Boolean`** (`JSON->true` / `JSON->false`), not to
    `1`/`0`, so that YAML::XS (with `$YAML::XS::Boolean = 'JSON::PP'`) and JSON::MaybeXS
    emit real `true`/`false` on re-serialization. A plain `1` here silently degrades

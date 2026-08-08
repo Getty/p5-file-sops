@@ -11,6 +11,9 @@ requires 'Moo';
 requires 'namespace::clean';
 
 # Core, but declared explicitly because this distribution has no AutoPrereqs
+# B is used to read a scalar's IOK/NOK flags, which is how a value's SOPS type
+# is determined -- see File::SOPS::Encrypted::detect_type and docs/adr/0002.
+requires 'B';
 requires 'Carp';
 requires 'Digest::SHA';
 requires 'MIME::Base64';

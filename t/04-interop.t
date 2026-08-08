@@ -5,7 +5,7 @@ use utf8;
 use Test::More;
 use File::Temp qw(tempfile tempdir);
 use File::Slurp qw(read_file write_file);
-use JSON::MaybeXS qw(decode_json encode_json);
+use JSON::MaybeXS qw(decode_json encode_json JSON);
 use YAML::XS qw(Load Dump);
 
 use File::SOPS;
@@ -681,6 +681,192 @@ subtest 'Values that do not survive Perl numeric conversion' => sub {
     is($@, '', 'Perl verifies a sops file holding values Perl would renormalise')
         or diag("died: $@");
     cmp_ok($decrypted->{big}, '==', 1e20, 'and gets the value back') if $decrypted;
+};
+
+###############################################################################
+# Test 18: Quoted scalars, us -> sops
+#
+# The hole that hid karr #15 for two releases: nothing in this file used a
+# string that looks like a number or a boolean. sops types a value by what the
+# parser returned, so a quoted "false" is type:str and a bare false is
+# type:bool -- and a numeric value's plaintext is Go's canonical form, so 007
+# is stored as 7 and 1.50 as 1.5. Writing the source spelling instead does not
+# merely look odd: Go recomputes the MAC from the canonical form, so `sops -d`
+# rejects the whole file. Before the fix these two assertions failed with
+# "Failed to verify data integrity".
+###############################################################################
+subtest 'Quoted scalars: Perl encrypt -> sops decrypt' => sub {
+    # Strings on the left, real numbers/booleans on the right. The numbers
+    # come from a YAML parse rather than Perl literals so that 007 and 1.50
+    # keep a source spelling that is not their canonical form.
+    my $numbers = Load("n_pad: 007\nn_float: 1.50\nn_int: 5432\nn_e: 1e20\nn_one: 1.0\n");
+
+    my $data = {
+        %$numbers,
+        s_true  => 'true',
+        s_false => 'false',
+        s_one   => '1',
+        s_zero  => '0',
+        s_pad   => '007',
+        s_float => '1.50',
+        b_true  => JSON->true,
+        b_false => JSON->false,
+    };
+
+    for my $format (qw(yaml json)) {
+        my $encrypted = File::SOPS->encrypt(
+            data       => $data,
+            recipients => [$public],
+            format     => $format,
+        );
+
+        # The wire types, before sops sees the file.
+        for my $key (qw(s_true s_false s_one s_zero s_pad s_float)) {
+            like($encrypted, qr{\Q$key\E"?\s*:\s*"?ENC\[[^\]]*type:str\]},
+                "[$format] $key is written as type:str");
+        }
+        like($encrypted, qr{b_false"?\s*:\s*"?ENC\[[^\]]*type:bool\]},
+            "[$format] a real false is written as type:bool");
+        like($encrypted, qr{n_pad"?\s*:\s*"?ENC\[[^\]]*type:int\]},
+            "[$format] a bare 007 is written as type:int");
+
+        my $enc_file = "$tempdir/quoted.$format";
+        write_file($enc_file, $encrypted);
+
+        my $output = `$sops_bin -d $enc_file 2>&1`;
+        my $exit_code = $? >> 8;
+        is($exit_code, 0, "[$format] sops decrypts a document of quoted scalars")
+            or diag("sops output: $output");
+        next unless $exit_code == 0;
+
+        # sops re-emits a string quoted and a number bare, so its own output
+        # says which type it read back. This is the assertion that cannot be
+        # satisfied by File::SOPS agreeing with itself.
+        if ($format eq 'yaml') {
+            like($output, qr/^s_pad: "007"$/m,     'sops read s_pad back as the string 007');
+            like($output, qr/^s_float: "1\.50"$/m, 'sops read s_float back as the string 1.50');
+            like($output, qr/^s_false: "false"$/m, 'sops read s_false back as the string false');
+            like($output, qr/^s_one: "1"$/m,       'sops read s_one back as the string 1');
+            like($output, qr/^n_pad: 7$/m,         'sops read a bare 007 back as the number 7');
+            like($output, qr/^n_float: 1\.5$/m,    'sops read a bare 1.50 back as the number 1.5');
+            like($output, qr/^b_false: false$/m,   'sops read a real false back as a boolean');
+        }
+        else {
+            like($output, qr/"s_pad":\s*"007"/,     'sops read s_pad back as the string 007');
+            like($output, qr/"s_false":\s*"false"/, 'sops read s_false back as the string false');
+            like($output, qr/"n_pad":\s*7\b/,       'sops read a bare 007 back as the number 7');
+            like($output, qr/"b_false":\s*false/,   'sops read a real false back as a boolean');
+        }
+
+        my $back = $format eq 'json' ? decode_json($output) : Load($output);
+        is($back->{$_}, $data->{$_}, "[$format] $_ survives the trip through sops")
+            for qw(s_true s_false s_one s_zero s_pad s_float);
+    }
+};
+
+###############################################################################
+# Test 19: Quoted scalars, sops -> us
+#
+# The other direction of the same defect: a quoted "false" written by sops
+# came back from File::SOPS as a boolean and "007" as the integer 7, so the
+# library silently changed values it exists to preserve.
+#
+# The unencrypted key is the MAC half of it. Go hashes an unencrypted value
+# through the same ToBytes, so a plaintext "true" that the parser returned as
+# a STRING contributes 'true' to the digest -- not the 'True' the old ladder
+# produced for it. That one is a MAC failure, not a wrong value.
+###############################################################################
+subtest 'Quoted scalars: sops encrypt -> Perl decrypt' => sub {
+    # Written by hand rather than dumped from a Perl structure: the quoting is
+    # the input to the test, and going through an emitter would make it depend
+    # on the same Perl flags that are under test.
+    my %source;
+
+    $source{yaml} = <<'YAML';
+q_false: "false"
+q_true: "true"
+q_one: "1"
+q_zero: "0"
+q_pad: "007"
+q_float: "1.50"
+b_false: false
+b_true: true
+b_int: 5432
+b_float: 1.50
+b_pad: 007
+flag_unencrypted: "true"
+pad_unencrypted: "007"
+YAML
+
+    $source{json} = <<'JSON';
+{
+  "q_false": "false",
+  "q_true": "true",
+  "q_one": "1",
+  "q_zero": "0",
+  "q_pad": "007",
+  "q_float": "1.50",
+  "b_false": false,
+  "b_true": true,
+  "b_int": 5432,
+  "b_float": 1.50,
+  "flag_unencrypted": "true",
+  "pad_unencrypted": "007"
+}
+JSON
+
+    for my $format (qw(yaml json)) {
+        my $plain_file = "$tempdir/quoted_src.$format";
+        write_file($plain_file, $source{$format});
+
+        my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops encrypts the source document")
+            or diag($sops_enc);
+
+        # What sops decided the types are -- the specification this test is
+        # written against, restated as an assertion so a change in sops shows
+        # up here rather than as a mysterious failure below.
+        like($sops_enc, qr{q_false"?\s*:\s*"?ENC\[[^\]]*type:str\]},
+            "[$format] sops typed a quoted false as str");
+        like($sops_enc, qr{b_false"?\s*:\s*"?ENC\[[^\]]*type:bool\]},
+            "[$format] sops typed a bare false as bool");
+
+        my $got = eval {
+            File::SOPS->decrypt(
+                encrypted => $sops_enc, identities => [$secret], format => $format,
+            );
+        };
+        is($@, '', "[$format] Perl verifies the MAC of a document with quoted scalars")
+            or diag("died: $@");
+        next unless $got;
+
+        is($got->{q_false}, 'false', "[$format] quoted false comes back as the string");
+        is($got->{q_true},  'true',  "[$format] quoted true comes back as the string");
+        is($got->{q_one},   '1',     "[$format] quoted 1 comes back as the string");
+        is($got->{q_pad},   '007',   "[$format] quoted 007 keeps its padding");
+        is($got->{q_float}, '1.50',  "[$format] quoted 1.50 keeps its trailing zero");
+
+        ok(!ref $got->{q_false}, "[$format] quoted false is not a boolean object");
+        ok(!ref $got->{q_true},  "[$format] quoted true is not a boolean object");
+
+        isa_ok($got->{b_false}, 'JSON::PP::Boolean', "[$format] bare false");
+        isa_ok($got->{b_true},  'JSON::PP::Boolean', "[$format] bare true");
+        ok(!$got->{b_false}, "[$format] and bare false is false");
+
+        cmp_ok($got->{b_int},   '==', 5432, "[$format] bare integer survives");
+        cmp_ok($got->{b_float}, '==', 1.5,  "[$format] bare float survives");
+
+        # The MAC half. These are never encrypted, so their plaintext IS the
+        # document text and both implementations hash it through the same
+        # ToBytes. The old ladder hashed the string "true" as 'True' -- which
+        # is what Go writes for a real boolean, not for a quoted one -- so
+        # this document failed verification outright rather than returning a
+        # wrong value.
+        is($got->{flag_unencrypted}, 'true',
+            "[$format] an unencrypted quoted true stays a string");
+        is($got->{pad_unencrypted}, '007',
+            "[$format] an unencrypted quoted 007 keeps its padding");
+    }
 };
 
 done_testing;

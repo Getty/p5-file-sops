@@ -5,6 +5,7 @@ use Test::More;
 
 use Digest::SHA ();
 use JSON::MaybeXS;
+use YAML::XS ();
 use Crypt::Age;
 
 use File::SOPS;
@@ -174,21 +175,44 @@ subtest 'lossy values survive a File::SOPS round trip' => sub {
     # the live scalar, so anything the decrypt side normalises differently
     # made the document reject itself.
     #
-    # Only the MAC is asserted here. These values do NOT come back as the
-    # strings they went in as -- '007' returns 7 and '1.50' returns 1.5 --
-    # because the type ladder calls them int and float and the deserializer
-    # converts accordingly. That is a separate, still-open defect in type
-    # detection (karr #15); it is not what this subtest is about, and pinning
-    # the wrong behaviour here would only make #15 harder to fix.
-    for my $value (qw( 007 1.50 -0.0 0.00000015 )) {
+    # These are Perl STRINGS, so since karr #15 / ADR 0002 they are type:str
+    # and are written verbatim -- there is no numeric normalisation left for
+    # the two sides to disagree about, and the value that comes back is the
+    # one that went in. That is the assertion; it used to be a weaker
+    # `== $value`, which passed while '007' was silently returning 7.
+    for my $value (qw( 007 1.50 -0.0 0.00000015 1e20 )) {
         my $encrypted = File::SOPS->encrypt(
             data       => { v => $value },
             recipients => [$public],
             format     => 'yaml',
         );
+        like($encrypted, qr/^v: ENC\[[^\]]*type:str\]$/m,
+            "the string '$value' is written as type:str");
         my $out = decrypt_ok($encrypted, "round trip of '$value' passes its own MAC");
-        cmp_ok($out->{v}, '==', $value, "'$value' still compares equal numerically")
-            if $out;
+        is($out->{v}, $value, "'$value' comes back as the string it was") if $out;
+    }
+
+    # And the numbers, which DO get normalised. Taken from a YAML parse rather
+    # than written as Perl literals, because the point is a bare scalar whose
+    # source spelling is not its canonical form: sops stores 007 as 7 and 1.50
+    # as 1.5, and recomputes the MAC from that canonical form. Writing the
+    # source spelling instead is what made `sops -d` refuse our files.
+    my $numbers = YAML::XS::Load("a: 007\nb: 1.50\nc: 1e20\nd: 1.0\n");
+
+    my $encrypted = File::SOPS->encrypt(
+        data       => $numbers,
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    like($encrypted, qr/^a: ENC\[[^\]]*type:int\]$/m,   'bare 007 is type:int');
+    like($encrypted, qr/^b: ENC\[[^\]]*type:float\]$/m, 'bare 1.50 is type:float');
+
+    my $out = decrypt_ok($encrypted, 'document of bare non-canonical numbers passes its own MAC');
+    if ($out) {
+        cmp_ok($out->{a}, '==', 7,    'bare 007 is the number 7');
+        cmp_ok($out->{b}, '==', 1.5,  'bare 1.50 is the number 1.5');
+        cmp_ok($out->{c}, '==', 1e20, 'bare 1e20 survives');
+        cmp_ok($out->{d}, '==', 1,    'bare 1.0 survives');
     }
 };
 
@@ -496,8 +520,7 @@ subtest 'the same rules hold for JSON' => sub {
     is($out->{cfg_unencrypted}, 'notsecret', 'unencrypted value returned');
     is($out->{hmac},            'h',         'hmac key returned');
     is($out->{nested}{zz},      'last',      'nested value returned');
-    # '007' returns as 7 -- see the note in the round-trip subtest (karr #15).
-    cmp_ok($out->{padded}, '==', 7, 'zero-padded value returned');
+    is($out->{padded},          '007',       'zero-padded string returned verbatim');
 };
 
 done_testing;

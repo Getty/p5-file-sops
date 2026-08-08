@@ -158,58 +158,179 @@ for my $format (qw(yaml json)) {
 }
 
 # ----------------------------------------------------------------------------
-# 3. The string 'false' must serialize to 'False', not 'True'.
+# 3. Serializing a bool must not fall through to Perl truthiness.
 #
 # Both bool serializers ended in a bare Perl truthiness fallback:
 #
 #   ($value eq 'true' || $value eq '1' || $value) ? 'True' : 'False'
 #
 # The non-empty string 'false' is truthy in Perl, so it fell through to
-# 'True'. The bug was present identically in BOTH twins
-# (File::SOPS::Encrypted::_serialize_value, which produces the ciphertext, and
-# File::SOPS::_value_to_bytes, which produces the MAC digest input), which is
-# precisely why it never showed up as a MAC failure: the ciphertext and the
-# MAC were consistently wrong together.
+# 'True'. The bug was present identically in BOTH twins (the one producing the
+# ciphertext and the one producing the MAC digest input), which is precisely
+# why it never showed up as a MAC failure: the ciphertext and the MAC were
+# consistently wrong together. There is now one implementation --
+# File::SOPS::Encrypted->value_to_bytes -- and File::SOPS::_value_to_bytes
+# calls it, so the twins cannot drift.
 #
-# The round-trip assertion below covers the ciphertext; the MAC assertion
-# covers the twin. If only one twin were fixed, the MAC check would fail.
+# The rule only applies where a caller has forced type => 'bool' on a plain
+# scalar, since that is the only route left by which a string reaches the
+# boolean branch (see section 4).
 # ----------------------------------------------------------------------------
 
 {
     my $key = "\x01" x 32;
 
     my %expected = (
-        'true'  => 1,
-        'false' => 0,
+        'true'  => 'True',
+        'false' => 'False',
+        '1'     => 'True',
+        '0'     => 'False',
+        'True'  => 'True',
+        'FALSE' => 'False',
     );
 
     for my $literal (sort keys %expected) {
+        is(File::SOPS::Encrypted->value_to_bytes($literal, 'bool'),
+            $expected{$literal},
+            "forced type:bool serializes '$literal' as $expected{$literal}");
+
         my $enc = File::SOPS::Encrypted->encrypt_value(
-            value => $literal, key => $key, aad => 'a:',
+            value => $literal, type => 'bool', key => $key, aad => 'a:',
         );
         my $back = $enc->decrypt_value(key => $key, aad => 'a:');
-
-        is(!!$back, !!$expected{$literal},
-            "string '$literal' round-trips to $literal, not its opposite");
+        is(!!$back, ($expected{$literal} eq 'True' ? 1 : ''),
+            "forced type:bool round-trips '$literal' to $expected{$literal}");
     }
 }
 
+# ----------------------------------------------------------------------------
+# 4. A value's type comes from the SCALAR, not from a pattern match on its
+#    text (karr #15, ADR 0002).
+#
+# The old ladder read 'true'/'false' as booleans and /^-?\d+$/ as integers, so
+# a quoted "false" in a document came back as a boolean and "007" as 7. sops
+# 3.13.3, measured: bare false is type:bool, but "false", "true", "1", "0",
+# "007" and "1.50" are ALL type:str, and their plaintext is the string
+# verbatim. A bare number is stored in Go's canonical form instead -- 007 as
+# 7, 1.50 as 1.5 -- which is what the reference re-derives when it recomputes
+# the MAC, and therefore what a file has to contain for `sops -d` to accept
+# it.
+#
+# t/04-interop.t proves this against the binary. This is the half that runs
+# without one.
+# ----------------------------------------------------------------------------
+
 {
-    # Exercises both twins at once: _serialize_value builds the ciphertext,
-    # _value_to_bytes builds the MAC input. Disagreement => MAC failure.
-    my $encrypted = File::SOPS->encrypt(
-        data       => { flag => 'false' },
-        recipients => [$public],
-        format     => 'yaml',
+    my $key = "\x01" x 32;
+
+    # [ value, expected type, expected plaintext, label ]
+    my @cases = (
+        [ 'false', 'str',   'false', 'quoted false'         ],
+        [ 'true',  'str',   'true',  'quoted true'          ],
+        [ '1',     'str',   '1',     'quoted one'           ],
+        [ '0',     'str',   '0',     'quoted zero'          ],
+        [ '007',   'str',   '007',   'zero-padded string'   ],
+        [ '1.50',  'str',   '1.50',  'trailing-zero string' ],
+        [ '1e20',  'str',   '1e20',  'exponent string'      ],
+        [ 'yes',   'str',   'yes',   'YAML 1.1 truthy word' ],
+        [ JSON->false, 'bool',  'False', 'bare false'       ],
+        [ JSON->true,  'bool',  'True',  'bare true'        ],
+        [ 1,       'int',   '1',     'bare integer'         ],
+        [ 5432,    'int',   '5432',  'bare port number'     ],
+        [ 1.50,    'float', '1.5',   'bare 1.50'            ],
+        [ 1e20,    'float', '100000000000000000000', 'bare 1e20' ],
+        [ 3.14159, 'float', '3.14159', 'bare pi'            ],
     );
 
-    my $decrypted = eval {
+    for my $case (@cases) {
+        my ($value, $type, $plaintext, $label) = @$case;
+
+        is(File::SOPS::Encrypted->detect_type($value), $type,
+            "$label is type:$type");
+
+        # The plaintext is what the ciphertext holds AND what the MAC digests,
+        # so asserting it once covers both. Go re-derives exactly these bytes.
+        is(File::SOPS::Encrypted->value_to_bytes($value), $plaintext,
+            "$label serializes to '$plaintext'");
+
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $value, key => $key, aad => 'a:',
+        );
+        is($enc->type, $type, "$label reaches the wire as type:$type");
+        is($enc->decrypt_bytes(key => $key, aad => 'a:'), $plaintext,
+            "$label authenticates '$plaintext'");
+    }
+}
+
+# The round trip through the public API, which is what a caller sees change:
+# a string that reads like something else stays that string.
+for my $format (qw(yaml json)) {
+    my %data = (
+        s_true  => 'true',
+        s_false => 'false',
+        s_one   => '1',
+        s_zero  => '0',
+        s_pad   => '007',
+        s_float => '1.50',
+        n_int   => 5432,
+        n_float => 1.50,
+        b_true  => JSON->true,
+        b_false => JSON->false,
+    );
+
+    my $encrypted = File::SOPS->encrypt(
+        data => \%data, recipients => [$public], format => $format,
+    );
+
+    my $got = eval {
         File::SOPS->decrypt(
-            encrypted => $encrypted, identities => [$secret], format => 'yaml',
+            encrypted => $encrypted, identities => [$secret], format => $format,
         );
     };
-    is($@, '', "the string 'false' hashes and encrypts consistently (twins agree)");
-    ok(!$decrypted->{flag}, "the string 'false' does not become true");
+    is($@, '', "[$format] mixed string/number/boolean document passes its own MAC")
+        or diag("died: $@");
+    next unless $got;
+
+    # is() compares with eq, so this is a genuine string assertion: under the
+    # old ladder $got->{s_pad} was the integer 7 and would fail it.
+    is($got->{$_}, $data{$_}, "[$format] $_ round-trips as the string '$data{$_}'")
+        for qw(s_true s_false s_one s_zero s_pad s_float);
+
+    ok(!ref $got->{s_true},  "[$format] the string 'true' is not a boolean");
+    ok(!ref $got->{s_false}, "[$format] the string 'false' is not a boolean");
+    isa_ok($got->{b_true},  'JSON::PP::Boolean', "[$format] a real true");
+    isa_ok($got->{b_false}, 'JSON::PP::Boolean', "[$format] a real false");
+    cmp_ok($got->{n_int},   '==', 5432, "[$format] a real integer stays numeric");
+    cmp_ok($got->{n_float}, '==', 1.5,  "[$format] a real float stays numeric");
+}
+
+# Reading the type off the scalar only works if nothing on the way to the
+# cipher changes it. Perl marks a string as numeric IN PLACE the moment it is
+# used in numeric context, and encrypt walks the caller's structure twice --
+# once for the MAC and once to encrypt -- so a numification anywhere in the
+# first walk would silently retype the document during the second, and the
+# caller's own data with it.
+{
+    my %data = (s => '5432', n => 5432, s_float => '1.50');
+
+    my @wire;
+    for my $pass (1, 2) {
+        my $encrypted = File::SOPS->encrypt(
+            data => \%data, recipients => [$public], format => 'yaml',
+        );
+        push @wire, [ $encrypted =~ /^(\w+): ENC\[[^\]]*(type:\w+)\]$/mg ];
+    }
+
+    is_deeply($wire[1], $wire[0], 'encrypting the same structure twice gives the same types');
+    is_deeply(
+        { @{ $wire[0] } },
+        { s => 'type:str', n => 'type:int', s_float => 'type:str' },
+        'and they are the types the scalars started with',
+    );
+
+    is(File::SOPS::Encrypted->detect_type($data{s}), 'str',
+        "encrypt leaves the caller's string a string");
+    is($data{s}, '5432', "and does not change the caller's value");
 }
 
 done_testing;

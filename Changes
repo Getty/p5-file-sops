@@ -37,6 +37,31 @@ Revision history for File-SOPS
     failed their own MAC verification on read-back.
   - Fix the string 'false' being encrypted as True, caused by a bare
     Perl truthiness fallback in both boolean serializers.
+  - BEHAVIOUR CHANGE - a value's type now comes from the value, not from
+    a pattern match on its text. sops types a value by what the YAML or
+    JSON parser returned, so a quoted "false", "true", "1", "0", "007"
+    or "1.50" is type:str while a bare false is type:bool; File::SOPS
+    matched the text instead, so it returned the string "true" as a
+    boolean and "007" as the integer 7, silently changing values it
+    exists to preserve. In the other direction it wrote "007" as
+    type:int and "1.50" as type:float with the source spelling as the
+    plaintext, and since Go recomputes the MAC from the canonical form
+    (7 and 1.5) the sops CLI refused such files outright. What changes
+    for callers: a Perl string that reads like a number or a boolean is
+    now written as type:str and comes back as that string, and a Perl
+    number is written in Go's canonical form (1.50 as 1.5, 1e20 as
+    100000000000000000000). type:bool now requires JSON->true /
+    JSON->false or a true/false loaded from YAML or JSON, because Perl
+    has no native boolean. Existing encrypted documents are unaffected;
+    only what this release writes, and what it gives back, moves. The
+    reasoning, the measurements behind it and the one case where Perl
+    can be misled are recorded in docs/adr/0002.
+  - New File::SOPS::Encrypted class methods detect_type and
+    value_to_bytes, the single source of truth for the value-to-wire
+    mapping. The type ladder and the value conversion previously existed
+    twice, once for the ciphertext and once for the MAC digest, and had
+    to be kept byte-identical by hand - when they drifted both were
+    consistently wrong and only the sops binary noticed.
   - Fix compilation when JSON::PP has not been loaded by something else
     first: _deserialize_value used JSON::PP::true/false as barewords
     behind a runtime require, so File::SOPS failed to compile on its own

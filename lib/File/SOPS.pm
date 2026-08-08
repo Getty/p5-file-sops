@@ -177,6 +177,37 @@ passed through untouched, which is what makes the rule safe to apply to
 existing callers. What you get back from C<decrypt> is characters either way,
 so do not decode it yourself.
 
+=head2 Value types
+
+B<A value's C<type:> on the wire is decided by what the value is, never by
+what its text looks like.> A Perl string encrypts as C<type:str> however
+numeric or boolean it reads:
+
+    File::SOPS->encrypt(data => { v => 'true' })  # type:str,   plaintext true
+    File::SOPS->encrypt(data => { v => '007'  })  # type:str,   plaintext 007
+    File::SOPS->encrypt(data => { v => '1.50' })  # type:str,   plaintext 1.50
+    File::SOPS->encrypt(data => { v => 5432   })  # type:int,   plaintext 5432
+    File::SOPS->encrypt(data => { v => 1.50   })  # type:float, plaintext 1.5
+    File::SOPS->encrypt(data => { v => JSON->true })  # type:bool, plaintext True
+
+This is the rule the reference implementation follows -- it types a value by
+what the YAML/JSON parser returned, so a quoted scalar is a string -- and
+L<YAML::XS> and L<JSON::MaybeXS> preserve the same distinction, so a document
+loaded from a file keeps the types the file gave it. Perl has no native
+boolean, so C<type:bool> requires C<JSON-E<gt>true>/C<JSON-E<gt>false> or a
+C<true>/C<false> loaded from YAML or JSON.
+
+Prior to 0.003 the type was guessed by pattern-matching the value's text. That
+turned C<'true'> into a boolean and C<'007'> into the integer 7 on the way
+back out, and -- because the reference implementation renormalises a numeric
+plaintext when it recomputes the MAC, C<007> to C<7> and C<1.50> to C<1.5> --
+made C<sops -d> reject any document containing such a value outright.
+
+The full rule, the caller-visible round trips it changes, and the one case
+where Perl's flags can be contaminated by the caller are in
+L<File::SOPS::Encrypted/detect_type> and
+L<File::SOPS::Encrypted/value_to_bytes>.
+
 =cut
 
 my %FORMATS = (
@@ -921,46 +952,16 @@ sub _parse_in_document_order {
     return $doc;
 }
 
+# The MAC digest input for a value, which is by definition the same bytes the
+# cipher gets. This used to be a second implementation of the type ladder and
+# the value->bytes conversion, kept byte-identical to
+# File::SOPS::Encrypted's by hand. It never was: when the two drifted the
+# ciphertext and the digest were consistently wrong TOGETHER, so every
+# self-produced file verified and only the Go binary disagreed. There is now
+# one implementation, and this is a call to it.
 sub _value_to_bytes {
     my ($value) = @_;
-    return '' unless defined $value;
-
-    my $str;
-
-    # Handle JSON::PP::Boolean (the class every JSON::MaybeXS backend blesses
-    # into). blessed() guard: ->isa dies on an unblessed ref, and a plain
-    # SCALAR/CODE ref reaches here through _hash_values_for_mac's leaf branch.
-    if (blessed($value) && $value->isa('JSON::PP::Boolean')) {
-        $str = $value ? 'True' : 'False';
-    }
-    else {
-        # Detect type same as encryption
-        my $type = _detect_type_for_mac($value);
-
-        if ($type eq 'bool') {
-            # Must stay byte-identical to Encrypted::_serialize_value or the
-            # MAC disagrees with the ciphertext. See the note there.
-            $str = (lc("$value") eq 'true' || "$value" eq '1') ? 'True' : 'False';
-        } else {
-            $str = "$value";
-        }
-    }
-
-    # Encode to UTF-8 bytes for hashing (Digest::SHA requires bytes)
-    utf8::encode($str) if utf8::is_utf8($str);
-    return $str;
-}
-
-sub _detect_type_for_mac {
-    my ($value) = @_;
-    return 'str' unless defined $value;
-    # JSON::PP::Boolean (see _value_to_bytes for the blessed() guard)
-    return 'bool' if blessed($value) && $value->isa('JSON::PP::Boolean');
-    # Only string literals 'true'/'false' are bool, not '1'/'0' (those are ints)
-    return 'bool' if $value eq 'true' || $value eq 'false';
-    return 'int' if $value =~ /^-?\d+$/;
-    return 'float' if $value =~ /^-?\d+\.\d+$/;
-    return 'str';
+    return File::SOPS::Encrypted->value_to_bytes($value);
 }
 
 sub _extract_path {

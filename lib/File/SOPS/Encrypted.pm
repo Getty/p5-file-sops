@@ -2,6 +2,7 @@ package File::SOPS::Encrypted;
 # ABSTRACT: Parse and generate SOPS encrypted values
 our $VERSION = '0.003';
 use Moo;
+use B ();
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use MIME::Base64 qw(encode_base64 decode_base64);
@@ -187,10 +188,10 @@ sub encrypt_value {
     my $value    = $args{value};
     my $key      = $args{key}      // croak "key required";
     my $aad      = _aad_bytes($args{aad});
-    my $type     = $args{type}     // _detect_type($value);
+    my $type     = $args{type}     // $class->detect_type($value);
 
     $value //= '';
-    my $plaintext = _serialize_value($value, $type);
+    my $plaintext = $class->value_to_bytes($value, $type);
     my $iv = _random_bytes(32);  # SOPS uses 32-byte nonce
 
     my ($ciphertext, $tag) = gcm_encrypt_authenticate('AES', $key, $iv, $aad, $plaintext);
@@ -241,8 +242,14 @@ ciphertext and the MAC are both taken over exactly these bytes.
 
 =back
 
-Type is auto-detected from the value if not specified: C<int>, C<float>, C<bool>,
-or C<str>.
+Type is auto-detected from the value if not specified, by L</detect_type>.
+
+Passing C<type> explicitly overrides the B<label> only, never the bytes: those
+always come from what the value is. C<encrypt_value(value =E<gt> '007', type
+=E<gt> 'int')> writes the label C<int> and the plaintext C<007>, because a
+Perl string is written verbatim. That is how you reproduce a document some
+other producer wrote; it is not how you write C<007> as an integer, which no
+SOPS implementation does (see L</value_to_bytes>).
 
 =cut
 
@@ -317,43 +324,187 @@ Dies if authentication fails (wrong key, corrupted data, or mismatched AAD).
 
 =cut
 
-sub _detect_type {
-    my ($value) = @_;
+sub detect_type {
+    my ($class, $value) = @_;
     return 'str' unless defined $value;
     # JSON::PP::Boolean is the class every JSON::MaybeXS backend blesses into
-    # (Cpanel::JSON::XS and JSON::XS included), so this test is backend-agnostic.
-    # blessed() guard: ->isa dies on an unblessed ref, and a plain SCALAR/CODE
-    # ref can reach here from encrypt_value or the _encrypt_tree leaf branch.
+    # (Cpanel::JSON::XS and JSON::XS included), and the class YAML::XS blesses
+    # into under $YAML::XS::Boolean = 'JSON::PP', so this test is
+    # backend-agnostic. blessed() guard: ->isa dies on an unblessed ref, and a
+    # plain SCALAR/CODE ref can reach here from encrypt_value or the
+    # _encrypt_tree leaf branch.
     return 'bool' if blessed($value) && $value->isa('JSON::PP::Boolean');
-    # Only string literals 'true'/'false' are bool, not '1'/'0' (those are ints)
-    return 'bool' if $value eq 'true' || $value eq 'false';
-    return 'int' if $value =~ /^-?\d+$/;
-    return 'float' if $value =~ /^-?\d+\.\d+$/;
+    return 'str'  if ref $value;
+    return _sv_kind($value);
+}
+
+=method detect_type
+
+    my $type = File::SOPS::Encrypted->detect_type($value);
+    # => 'str' | 'int' | 'float' | 'bool'
+
+Class method. Returns the SOPS type of a Perl scalar, B<from the scalar
+itself> rather than from a pattern match on its text.
+
+=over 4
+
+=item * a L<JSON::PP::Boolean> (C<JSON-E<gt>true>, C<JSON-E<gt>false>, or a
+C<true>/C<false> loaded by L<YAML::XS> or L<JSON::MaybeXS>) is C<bool>
+
+=item * a scalar Perl holds as an integer is C<int>
+
+=item * a scalar Perl holds as a floating point number is C<float>
+
+=item * everything else, including every string, is C<str>
+
+=back
+
+This is the rule the Go implementation uses -- it takes the type from what the
+YAML/JSON parser returned -- and both parsers this distribution uses preserve
+the distinction, so a quoted scalar is a string end to end. Measured against
+sops 3.13.3: bare C<false> is C<type:bool>, but C<"false">, C<"true">, C<"1">,
+C<"0">, C<"007"> and C<"1.50"> are B<all> C<type:str>.
+
+The corollary is that Perl's own literals decide the type for a structure
+passed straight to L<File::SOPS/encrypt>: C<5432> is C<int> and C<'5432'> is
+C<str>. Perl has no native boolean, so C<type:bool> needs a
+L<JSON::PP::Boolean> or an explicit C<type>; the string C<'true'> is a string.
+
+Note that Perl marks a scalar as numeric B<in place> the first time it is used
+in numeric context, so C<if ($cfg-E<gt>{port} E<gt> 1024)> before encrypting
+turns C<'8080'> into an C<int>. See
+L<docs/adr/0002|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0002-value-type-comes-from-the-scalar-not-from-a-pattern.md>.
+
+=cut
+
+sub value_to_bytes {
+    my ($class, $value, $type) = @_;
+    return '' unless defined $value;
+    $type //= $class->detect_type($value);
+
+    # SOPS uses Titlecase for bools: "True" / "False"
+    if (blessed($value) && $value->isa('JSON::PP::Boolean')) {
+        return $value ? 'True' : 'False';
+    }
+    if ($type eq 'bool') {
+        # Explicit rule, symmetric with _deserialize_value, for a caller who
+        # forced type => 'bool' on a plain scalar. The old test ended in
+        # "|| $value", a bare Perl truthiness fallback, so the non-empty
+        # string 'false' came out as 'True'.
+        return (lc("$value") eq 'true' || "$value" eq '1') ? 'True' : 'False';
+    }
+
+    # Everything else is decided by what the scalar IS, not by the label:
+    # a number is written in the canonical form Go would re-derive from it,
+    # a string is written verbatim.
+    my $kind = ref($value) ? 'str' : _sv_kind($value);
+    my $str
+        = $kind eq 'int'   ? '' . (0 + $value)
+        : $kind eq 'float' ? _float_bytes($value)
+        :                    "$value";
+
+    return _utf8_bytes($str);
+}
+
+=method value_to_bytes
+
+    my $bytes = File::SOPS::Encrypted->value_to_bytes($value);
+    my $bytes = File::SOPS::Encrypted->value_to_bytes($value, $type);
+
+Class method. Returns the wire plaintext for a value: the bytes that get
+encrypted, and the bytes the MAC digest is taken over. Those are the same
+bytes by definition, which is why there is one method and not two -- the
+ciphertext and the digest disagreeing is this distribution's signature defect,
+and it is invisible from inside Perl because both sides are then consistently
+wrong.
+
+C<$type> defaults to L</detect_type>. It selects the boolean spelling and
+nothing else; the bytes always come from the value:
+
+=over 4
+
+=item * a boolean is C<True> or C<False> (SOPS titlecases them)
+
+=item * an integer is its canonical decimal form -- Perl's C<0 + $value>,
+which is what Go's C<strconv.Itoa> writes
+
+=item * a float is C<strconv.FormatFloat($v, 'f', -1, 64)>: the shortest
+decimal that round-trips, in positional notation and never in exponent
+notation. Measured against sops 3.13.3, which stores C<1.0> as C<1>, C<1.50>
+as C<1.5>, C<.5> as C<0.5> and C<1e20> as C<100000000000000000000>
+
+=item * anything else, including every string, is written verbatim
+
+=back
+
+So a Perl string is never renormalised -- C<'007'> stays C<007> and C<'1.50'>
+stays C<1.50> -- while a Perl number always is. A document that gets this
+wrong is not merely odd-looking: Go recomputes the MAC by re-serializing the
+value it parsed out of the plaintext, so C<007> stored under C<type:int>
+digests as C<7> on the reading side and C<sops -d> rejects the whole file.
+
+Character strings are UTF-8 encoded on the way out, by the same flag-guarded
+rule L</encrypt_value> documents.
+
+=cut
+
+# Which of Perl's three scalar shapes this is, read off the SV rather than off
+# its text. The PUBLIC IOK/NOK flags deliberately, not the private pIOK/pNOK
+# that JSON::PP's number heuristic uses: the private ones are set by merely
+# READING a string numerically, which would make a caller's `$h{port} > 1024`
+# rewrite the document's type fields. The public ones are set less often, but
+# not never -- see the contamination note in detect_type's POD.
+#
+# Nothing on the encrypt path numifies a leaf before this runs. The one thing
+# that touches it is _encrypt_tree's `$node eq ''`, which is a string
+# comparison: it can set pPOK on a number, never IOK or NOK on a string.
+#
+# \$_[0] aliases the caller's scalar instead of copying it. Copying preserves
+# the flags too, but the alias makes that independent of how Perl chooses to
+# implement assignment.
+sub _sv_kind {
+    my $flags = B::svref_2object(\$_[0])->FLAGS;
+    return 'int'   if $flags & B::SVf_IOK();
+    return 'float' if $flags & B::SVf_NOK();
     return 'str';
 }
 
-sub _serialize_value {
-    my ($value, $type) = @_;
-    return '' unless defined $value;
+# strconv.FormatFloat(v, 'f', -1, 64).
+#
+# 'f' means positional notation, never an exponent. -1 means the shortest
+# digit string that parses back to the same float64. Perl's own
+# stringification is neither: it is roughly %.15g, so it exponentiates 1e20
+# and truncates 0.1+0.2 to 0.3, and both of those disagree with what the Go
+# side re-derives when it recomputes the MAC.
+sub _float_bytes {
+    my ($n) = @_;
 
-    my $str;
+    my $inf = 9**9**9;
+    return 'NaN' if $n != $n;                       # only NaN is unequal to itself
+    return $n > 0 ? '+Inf' : '-Inf' if $n == $inf || $n == -$inf;
 
-    # SOPS uses Titlecase for bools: "True" / "False"
-    if ($type eq 'bool') {
-        # Handle JSON::PP::Boolean (see _detect_type for the blessed() guard)
-        if (blessed($value) && $value->isa('JSON::PP::Boolean')) {
-            $str = $value ? 'True' : 'False';
-        } else {
-            # Explicit rule, symmetric with _deserialize_value. The old test
-            # ended in "|| $value", a bare Perl truthiness fallback, so the
-            # non-empty string 'false' came out as 'True'.
-            $str = (lc("$value") eq 'true' || "$value" eq '1') ? 'True' : 'False';
-        }
-    } else {
-        $str = "$value";
+    my $g;
+    for my $precision (1 .. 17) {                   # 17 always round-trips a double
+        $g = sprintf('%.*g', $precision, $n);
+        last if $g + 0 == $n;
     }
 
-    return _utf8_bytes($str);
+    return _expand_exponent($g);
+}
+
+# "1.5e-07" -> "0.00000015", "1e+20" -> "100000000000000000000".
+sub _expand_exponent {
+    my ($s) = @_;
+    return $s unless $s =~ /\A([+-]?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)\z/;
+
+    my ($sign, $int, $frac, $exp) = ($1, $2, $3 // '', $4 + 0);
+    my $digits = $int . $frac;
+    my $point  = length($int) + $exp;   # where the decimal point lands in $digits
+
+    return $sign . '0.' . ('0' x -$point) . $digits         if $point <= 0;
+    return $sign . $digits . ('0' x ($point - length $digits))
+        if $point >= length $digits;
+    return $sign . substr($digits, 0, $point) . '.' . substr($digits, $point);
 }
 
 # The plaintext's crossing from characters into bytes. CryptX takes bytes, so a
