@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:37:55Z
+id: 9
+priority: critical
+status: done
+tags:
+- bug
+- mac
+title: Unencrypted values are hashed on encrypt but skipped on decrypt
+updated: 2026-08-08T22:13:02Z
+---
+
+The encrypt side walks the whole tree, the decrypt side only sees ENC values, so any value excluded from encryption is hashed by one side and not the other. The Go reference includes unencrypted values in the MAC on both sides unless mac_only_encrypted is set. Our encrypt side is right and our decrypt side is wrong. With zero configuration, because the default suffix is _unencrypted: a structure with a cfg_unencrypted key decrypts fine with sops -d but dies with MAC verification failed in File::SOPS decrypt of our own output. Any sops-produced file containing such a key is undecryptable by this library. Both directions reproduced.
+FIXED as part of one coherent MAC rewrite: both directions now funnel through a shared digest helper, differing only in how leaves are collected and what a leaf contributes. Verified against sops 3.13.3 in both directions. Suite went from 82/95 to 96/113 tests (without/with binary); each fix was confirmed by reverting it and watching the named subtest fail. Regression tests in t/07-mac.t.
