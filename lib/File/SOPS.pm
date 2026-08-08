@@ -208,6 +208,18 @@ where Perl's flags can be contaminated by the caller are in
 L<File::SOPS::Encrypted/detect_type> and
 L<File::SOPS::Encrypted/value_to_bytes>.
 
+=head2 Multi-document YAML
+
+B<Not supported, and refused rather than truncated.> A YAML file holding more
+than one document (separated by C<--->) makes L</encrypt_file>, L</decrypt>,
+L</extract> and L</rotate> die.
+
+Until 0.003 such a file was accepted and silently reduced to its B<last>
+document, so encrypting a two-document file wrote one document back and
+discarded the other without an error. sops does support multi-document YAML;
+what its model is, and why matching it is more than a parser change, is in
+L<File::SOPS::Format::YAML/Multi-document YAML>.
+
 =cut
 
 my %FORMATS = (
@@ -940,8 +952,17 @@ sub _parse_in_document_order {
     my $text = $content;
     utf8::decode($text) unless utf8::is_utf8($text);
 
-    my $doc = eval { $ORDERED_LOADER->load_string($text) };
-    return unless ref $doc eq 'HASH';
+    # LIST context, and exactly one document -- the same one-document rule the
+    # format handlers enforce, held here independently rather than assumed.
+    # The two parsers disagree in scalar context on a multi-document stream:
+    # YAML::PP->load_string returns the FIRST document, YAML::XS::Load the
+    # LAST. This walk takes its order from one and its values from the other,
+    # so on such a stream it would pair up two different documents. Refusing
+    # it means falling back to sorted order, which can only make verification
+    # fail, never wrongly succeed.
+    my @docs = eval { $ORDERED_LOADER->load_string($text) };
+    return unless @docs == 1 && ref $docs[0] eq 'HASH';
+    my $doc = $docs[0];
 
     # The metadata MAC lives here and must not hash itself. It is dropped the
     # same way the format handlers drop it -- by removing the whole sops
