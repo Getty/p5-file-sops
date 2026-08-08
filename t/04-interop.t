@@ -869,4 +869,54 @@ JSON
     }
 };
 
+###############################################################################
+# Test 20: A document written under a rule other than the default
+#
+# Until karr #17 the rules could not be set through the public API at all, so
+# the only document shape this suite ever produced was the default one. The
+# assertion that cannot be satisfied by File::SOPS agreeing with itself is the
+# metadata shape: sops refuses a file carrying two rule fields, so writing the
+# _unencrypted default next to a chosen encrypted_suffix would be rejected
+# before anything is decrypted.
+###############################################################################
+subtest 'Non-default encryption rule' => sub {
+    my $data = { password_enc => 'hidden', host => 'db.example.com' };
+
+    my $encrypted = File::SOPS->encrypt(
+        data             => $data,
+        recipients       => [$public],
+        format           => 'yaml',
+        encrypted_suffix => '_enc',
+    );
+
+    like($encrypted, qr/^\s+encrypted_suffix: _enc$/m, 'the rule is recorded');
+    unlike($encrypted, qr/^\s+unencrypted_suffix:/m,
+        'and the default rule is not written alongside it');
+
+    my $enc_file = "$tempdir/encrypted_suffix.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a document written under encrypted_suffix')
+        or diag("sops output: $output");
+    is_deeply(Load($output), $data, 'and every value survives') if $? >> 8 == 0;
+
+    # The other direction: sops chose the rule, we must read the file back.
+    my $plain_file = "$tempdir/encrypted_suffix_plain.yaml";
+    write_file($plain_file, "password_enc: hidden\nhost: db.example.com\n");
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+    like($sops_enc, qr/^host: db\.example\.com$/m, 'sops left the non-matching key readable');
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops file written under encrypted_suffix')
+        or diag("died: $@");
+    is_deeply($decrypted, $data, 'and returns it intact') if $decrypted;
+};
+
 done_testing;

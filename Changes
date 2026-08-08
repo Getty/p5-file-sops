@@ -120,6 +120,28 @@ Revision history for File-SOPS
     came back as mojibake. decrypt, decrypt_file and extract now return
     characters. The bytes written to the file are unchanged. See the new
     "Character encoding" section in File::SOPS for the boundary rule.
+  - The encryption rules are reachable at last. unencrypted_suffix,
+    encrypted_suffix, unencrypted_regex and encrypted_regex have been
+    documented since 0.001 and could not be set through the public API:
+    encrypt always built its metadata with the defaults, so the only
+    rule that could ever be in effect was the _unencrypted default.
+    All four are now arguments to encrypt and encrypt_file, and a whole
+    policy can be carried over from an existing document with
+    metadata => $meta. Pass unencrypted_suffix => undef for a document
+    with no rule at all.
+  - The four rules are mutually exclusive, and setting two now dies
+    here instead of producing a file sops refuses to open ("Cannot use
+    more than one of encrypted_suffix, unencrypted_suffix, ..."). The
+    _unencrypted default stands down as soon as another rule is set,
+    which is what sops does when creating a document.
+  - Metadata no longer drops the fields of the sops section it does not
+    model. shamir_threshold, key_groups and anything a later sops adds
+    are preserved verbatim across a rewrite, in the new extra
+    attribute. sops preserves the fields it knows and drops the rest;
+    preserving everything is a superset of that and a safe one, since
+    it ignores what it does not recognise.
+  - New File::SOPS::Metadata attribute extra and methods policy_args
+    and rule_value.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without

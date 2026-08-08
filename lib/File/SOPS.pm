@@ -128,7 +128,10 @@ Each encrypted value is stored as:
 
 =over 4
 
-=item * B<unencrypted_suffix> - Keys ending with C<_unencrypted> are not encrypted but included in MAC
+=item * B<Encryption rules> - C<unencrypted_suffix> (C<_unencrypted> by
+default), C<encrypted_suffix>, C<unencrypted_regex> and C<encrypted_regex>
+choose which values get encrypted; the rest stay readable but are still
+covered by the MAC. See L</Choosing what gets encrypted>
 
 =item * B<Key rotation> - Re-encrypt all values with a new data key via L</rotate>
 
@@ -216,6 +219,15 @@ my %FORMATS = (
     json => 'File::SOPS::Format::JSON',
 );
 
+# Everything that describes HOW a document gets encrypted, as opposed to what
+# gets encrypted or for whom. encrypt and encrypt_file must accept exactly the
+# same set or the file API silently offers less than the string API does.
+my @ENCRYPTION_OPTIONS = (
+    @File::SOPS::Metadata::ENCRYPTION_RULES,
+    'mac_only_encrypted',
+    'metadata',
+);
+
 sub encrypt {
     my ($class, %args) = @_;
     my $data       = $args{data}       // croak "data required";
@@ -229,10 +241,7 @@ sub encrypt {
     my $data_key = _random_bytes(32);
 
     # Create metadata
-    my $metadata = File::SOPS::Metadata->new(
-        defined $args{mac_only_encrypted}
-            ? (mac_only_encrypted => $args{mac_only_encrypted}) : ()
-    );
+    my $metadata = _metadata_for_encrypt(\%args);
     $metadata->update_lastmodified;
 
     # Encrypt data key for each recipient
@@ -264,6 +273,15 @@ sub encrypt {
         recipients         => \@age_public_keys,
         format             => 'yaml',  # or 'json', defaults to 'yaml'
         mac_only_encrypted => 0,       # optional
+
+        # optional, at most ONE of these four
+        unencrypted_suffix => '_unencrypted',
+        encrypted_suffix   => '_enc',
+        unencrypted_regex  => '^public_',
+        encrypted_regex    => '^secret_',
+
+        # optional, carry another document's rules forward
+        metadata           => $metadata,
     );
 
 Encrypts a data structure for specified recipients.
@@ -287,6 +305,44 @@ encrypted, and records that choice in the C<sops> section so a reader knows
 which rule to verify under. See
 L<File::SOPS::Metadata/mac_only_encrypted>. Off by default, which is what sops
 defaults to as well.
+
+=head3 Choosing what gets encrypted
+
+C<unencrypted_suffix>, C<encrypted_suffix>, C<unencrypted_regex> and
+C<encrypted_regex> are the equivalents of the sops command line options of the
+same names, and B<at most one of them may be given> -- passing two dies, as
+does a document carrying two, because sops refuses such a file outright. Each
+is matched against B<every component> of a value's key path, so
+C<< encrypted_suffix => '_enc' >> encrypts everything under a C<database_enc:>
+block as well as a C<password_enc:> anywhere in the document; the exact rule
+is in L<File::SOPS::Metadata/should_encrypt_path>.
+
+With none of them given, C<unencrypted_suffix> defaults to C<_unencrypted>,
+which is what sops does when it creates a document. Pass
+C<< unencrypted_suffix => undef >> for a document with B<no> rule, where every
+value is encrypted whatever its key.
+
+Values excluded from encryption are still covered by the MAC, so they are
+authenticated even though they are readable -- unless C<mac_only_encrypted> is
+on.
+
+=head3 Reusing another document's rules
+
+C<metadata> takes a L<File::SOPS::Metadata> object -- typically one just
+parsed out of an existing file -- and starts from its encryption policy
+instead of from the defaults. Only the policy is taken: the rules and
+C<mac_only_encrypted>. The key material, the MAC and C<lastmodified> are
+always regenerated, because a new data key is generated here and none of them
+would survive it. See L<File::SOPS::Metadata/policy_args>.
+
+Any rule passed explicitly alongside C<metadata> replaces the template's rule
+rather than adding to it. This is how L</rotate> keeps a file's rules across a
+key rotation.
+
+Dies if C<metadata> carries a rule this distribution cannot apply
+(C<unencrypted_comment_regex> or C<encrypted_comment_regex>, which select
+values by their comment -- neither parser here keeps comments, so every value
+would be classified wrongly).
 
 =cut
 
@@ -390,10 +446,10 @@ sub encrypt_file {
 
     # Encrypt
     my $encrypted = $class->encrypt(
-        data               => $data,
-        recipients         => $recipients,
-        format             => $format,
-        mac_only_encrypted => $args{mac_only_encrypted},
+        data       => $data,
+        recipients => $recipients,
+        format     => $format,
+        _encryption_options(\%args),
     );
 
     # Write output
@@ -425,7 +481,8 @@ The input is read as UTF-8; see L</Character encoding>.
 Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>)
 unless explicitly specified.
 
-C<mac_only_encrypted> is passed through to L</encrypt>.
+C<mac_only_encrypted>, the four encryption rules and C<metadata> are all
+passed through to L</encrypt>; see L</Choosing what gets encrypted>.
 
 Returns true on success.
 
@@ -657,6 +714,66 @@ Returns true on success.
 =cut
 
 # Internal helpers
+
+# The metadata a fresh encryption starts from. Only the encryption POLICY can
+# be carried in from a caller: a new data key is about to be generated, so
+# every wrapped copy of the old one, the MAC over the old values and the
+# lastmodified that authenticates it are all regenerated regardless of what
+# was handed over.
+sub _metadata_for_encrypt {
+    my ($args) = @_;
+
+    my @given = grep { exists $args->{$_} } @File::SOPS::Metadata::ENCRYPTION_RULES;
+
+    my %attr;
+    if (defined(my $template = $args->{metadata})) {
+        croak "metadata must be a File::SOPS::Metadata object"
+            unless blessed($template)
+                && $template->isa('File::SOPS::Metadata');
+
+        %attr = $template->policy_args;
+
+        # An explicit rule REPLACES the template's rather than joining it: the
+        # rules are mutually exclusive, so merging the two could only ever
+        # build a document sops refuses.
+        delete @attr{@File::SOPS::Metadata::ENCRYPTION_RULES} if @given;
+    }
+
+    $attr{$_} = $args->{$_} for @given;
+    $attr{mac_only_encrypted} = $args->{mac_only_encrypted}
+        if defined $args->{mac_only_encrypted};
+
+    my $metadata = File::SOPS::Metadata->new(%attr);
+    _assert_rules_supported($metadata);
+
+    return $metadata;
+}
+
+# Refuse to WRITE a document under a rule we cannot apply. Reading one is fine
+# -- decryption is driven by which values look encrypted, not by the rule --
+# but writing under a rule we ignore would leave values in plaintext that the
+# rule says to encrypt, or the reverse, in a file that looks perfectly
+# well-formed.
+sub _assert_rules_supported {
+    my ($metadata) = @_;
+
+    for my $rule (@File::SOPS::Metadata::UNSUPPORTED_ENCRYPTION_RULES) {
+        my $value = $metadata->rule_value($rule);
+        next unless defined $value && length $value;
+        croak "Refusing to encrypt under '$rule': it selects values by their "
+            . "comment, and neither of this distribution's parsers keeps "
+            . "comments, so every value would be classified wrongly. Use the "
+            . "sops CLI for documents that use it.";
+    }
+
+    return 1;
+}
+
+sub _encryption_options {
+    my ($args) = @_;
+    return map { $_ => $args->{$_} }
+        grep { exists $args->{$_} } @ENCRYPTION_OPTIONS;
+}
 
 sub _encrypt_tree {
     my ($node, $key, $metadata, $path) = @_;
