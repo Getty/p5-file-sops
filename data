@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:38:06Z
+id: 11
+priority: high
+status: done
+tags:
+- security
+- mac
+title: A missing or unparsable MAC silently disables verification
+updated: 2026-08-08T22:13:24Z
+---
+
+Decrypt only verifies when the MAC field is defined AND parses as an ENC value. Delete the mac line, or corrupt it into anything the ENC regex rejects, and decrypt returns the data as though it had been verified. Both cases reproduced. The Go reference refuses in both cases (Cannot decrypt MAC, MAC mismatch File has no MAC) unless --ignore-mac is passed. The POD for decrypt promises it verifies the MAC and dies if verification fails. For a library whose purpose is tamper detection this is the wrong default; consider an explicit opt-out flag mirroring --ignore-mac.
+FIXED as part of one coherent MAC rewrite: both directions now funnel through a shared digest helper, differing only in how leaves are collected and what a leaf contributes. Verified against sops 3.13.3 in both directions. Suite went from 82/95 to 96/113 tests (without/with binary); each fix was confirmed by reverting it and watching the named subtest fail. Regression tests in t/07-mac.t.
