@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:10:14Z
+id: 3
+priority: high
+status: done
+tags:
+- testing
+- mac
+title: Regression test for the MAC key-ordering dependency
+updated: 2026-08-08T22:38:32Z
+---
+
+The MAC is computed over sorted keys on the encrypt side and in document order on the decrypt side. These agree only because YAML::XS::Dump sorts hash keys and Format::JSON sets canonical to 1. Nothing currently fails if a serializer stops sorting: self-produced files would fail MAC verification, and the error points nowhere near the cause. Add a test that pins the ordering guarantee at the serializer level so the dependency breaks loudly at its source.
+FIXED. t/05-format-key-order.t pins sorted key emission for both serializers, with a fixture sanity check so a randomly-sorted hash iteration cannot produce a false pass. Verified by stripping canonical from a copy of the JSON handler: the test fails locally and specifically rather than as a distant MAC error. The end-to-end variant was deliberately skipped - the encrypt path does not reorder after the serializer, so it would restate the same property with more noise.
