@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T22:14:04Z
+id: 26
+priority: critical
+status: done
+tags:
+- bug
+- interop
+- crypto
+title: AAD is not UTF-8 encoded before it reaches the GCM primitives
+updated: 2026-08-08T22:37:04Z
+---
+
+Found while fixing the MAC family, pre-existing and untouched by that work. encrypt_value and decrypt_bytes hand the AAD straight to the GCM functions without encoding it, while the AAD is built by joining key names from the parsed document. A key above U+00FF therefore dies with Wide character in subroutine entry, and a key in the Latin-1 range silently encodes as Latin-1 where Go used UTF-8, producing an authentication failure against sops for a document that looks fine. Isolated to the untouched tree walk by reaching it with ignore_mac, which bypasses all the new MAC code. Every value under such a key is affected, in both directions. Note the briefing lists AAD derivation as ADR-worthy, so weigh whether the encoding fix alone needs one: it arguably just completes the existing rule that everything hashed or encrypted is UTF-8 bytes, rather than changing it.
+FIXED. The AAD is now encoded unconditionally, not guarded on the Perl UTF-8 flag - the decisive reason being that the emitters encode a key to UTF-8 regardless of that flag, so a flag-guarded AAD authenticated against different bytes than the emitter wrote, and our own file then failed its own MAC. The agent implemented the flag-guarded version first and its own test caught it. Verified against sops in both directions for YAML and JSON with non-ASCII keys, values and unencrypted values. Breaking for stored documents: a file written by 0.002 or earlier with a Latin-1-range key was authenticated with a Latin-1 AAD and can no longer be decrypted; recorded in the Changes IMPORTANT block.
