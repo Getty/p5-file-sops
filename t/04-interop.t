@@ -869,4 +869,96 @@ JSON
     }
 };
 
+###############################################################################
+# Test 20: Latin-1-range VALUES, both directions (karr #27, ADR 0003)
+#
+# Below U+0100 Perl's UTF-8 flag is a storage detail, not meaning: "caf\x{e9}"
+# may be held as one byte or as two and Perl considers both the same string.
+# The value conversion used to consult that flag, so an unflagged café reached
+# the wire as the single byte \xe9 -- which is not UTF-8, and sops therefore
+# could not read it as text at all. Measured before the fix:
+#
+#     secret: !!binary Y2Fm6Q==      (base64 of caf\xe9)
+#
+# instead of `secret: café`. The encrypted case was self-consistent, so only
+# the real binary could see it; the unencrypted case failed our own MAC and is
+# pinned without a binary in t/08-encoding.t.
+#
+# \x{} escapes rather than literal UTF-8 so the test states the codepoints
+# exactly and does not depend on how this file is itself decoded.
+###############################################################################
+subtest 'Latin-1-range values survive in both directions' => sub {
+    my $cafe_up   = do { my $s = "caf\x{e9}";       utf8::upgrade($s);   $s };
+    my $cafe_down = do { my $s = "caf\x{e9}";       utf8::downgrade($s); $s };
+    my $offen     = do { my $s = "\x{f6}ffentlich"; utf8::downgrade($s); $s };
+
+    for my $format (qw(yaml json)) {
+        # --- we write, sops reads ------------------------------------------
+        my $encrypted = File::SOPS->encrypt(
+            data       => {
+                flagged          => $cafe_up,
+                unflagged        => $cafe_down,
+                note_unencrypted => $offen,
+            },
+            recipients => [$public],
+            format     => $format,
+        );
+
+        my $enc_file = "$tempdir/latin1.$format";
+        write_file($enc_file, $encrypted);
+
+        my $output = `$sops_bin -d $enc_file 2>&1`;
+        my $exit_code = $? >> 8;
+        is($exit_code, 0, "[$format] sops decrypts a Latin-1-range document")
+            or diag("sops output: $output");
+        next unless $exit_code == 0;
+
+        # The assertion that actually failed before the fix. sops emits a
+        # scalar it cannot read as UTF-8 as `!!binary <base64>`, so the tag is
+        # the signature of the bug -- and it appeared for the unflagged copy
+        # only, which is what made this invisible from inside Perl.
+        unlike($output, qr/!!binary/,
+            "[$format] sops reads every value as text, none as binary");
+        like($output, qr/caf\xc3\xa9/,
+            "[$format] and the encrypted value arrives as UTF-8 café");
+        like($output, qr/\xc3\xb6ffentlich/,
+            "[$format] and so does the unencrypted one");
+
+        my $back = $format eq 'json' ? decode_json($output) : Load($output);
+        is($back->{flagged},   $cafe_up, "[$format] flagged value survives sops");
+        is($back->{unflagged}, $cafe_up, "[$format] unflagged value survives sops too");
+        is($back->{note_unencrypted}, "\x{f6}ffentlich",
+            "[$format] unencrypted Latin-1-range value survives sops");
+
+        # --- sops writes, we read ------------------------------------------
+        my $plain = $format eq 'json'
+            ? qq({"pass":"passw\x{f6}rd","note_unencrypted":"\x{f6}ffentlich"}\n)
+            : qq(pass: "passw\x{f6}rd"\nnote_unencrypted: "\x{f6}ffentlich"\n);
+        utf8::encode($plain);   # the FILE is UTF-8; that is what sops reads
+
+        my $plain_file = "$tempdir/latin1_src.$format";
+        write_file($plain_file, $plain);
+
+        my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops encrypts a Latin-1-range document")
+            or diag($sops_enc);
+
+        my $got = eval {
+            File::SOPS->decrypt(
+                encrypted => $sops_enc, identities => [$secret], format => $format,
+            );
+        };
+        is($@, '', "[$format] Perl verifies the MAC of a sops Latin-1-range document")
+            or diag("died: $@");
+        next unless $got;
+
+        is($got->{pass}, "passw\x{f6}rd",
+            "[$format] the encrypted value comes back as characters");
+        is($got->{note_unencrypted}, "\x{f6}ffentlich",
+            "[$format] and so does the unencrypted one");
+        ok(utf8::is_utf8($got->{pass}),
+            "[$format] and it really is a character string, not UTF-8 bytes");
+    }
+};
+
 done_testing;

@@ -346,21 +346,41 @@ subtest 'extract returns characters and takes a character path (#12)' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# 4. The two guarantees that keep the #12 fix from being a break in the other
-#    direction: the wire bytes do not move, and a caller who hands us UTF-8
-#    bytes instead of characters still writes the same file.
+# 4. The value conversion is UNCONDITIONAL, exactly like the AAD (karr #27,
+#    ADR 0003).
+#
+# The value used to be encoded only when the scalar carried Perl's UTF-8 flag.
+# Below U+0100 that flag is storage, not meaning: "caf\x{e9}" may be held as
+# one byte or as two and Perl considers both the same string. The emitters do
+# not consult it -- YAML::XS::Dump and JSON::MaybeXS(utf8 => 1) write café as
+# caf\xc3\xa9 either way -- so a flag-guarded value conversion disagreed with
+# the bytes our own emitter wrote, which is the same defect the AAD had.
+#
+# Two measured consequences, both reproduced below:
+#
+#   * An UNENCRYPTED value (unencrypted_suffix, on by default) went into the
+#     document as UTF-8 and into the digest as Latin-1, so the document failed
+#     its OWN MAC. No configuration needed.
+#   * An ENCRYPTED value was self-consistent but reached the wire as Latin-1.
+#     sops cannot read that as text: it hands back `!!binary Y2Fm6Q==` instead
+#     of café. t/04-interop.t pins that half against the real binary.
 # ----------------------------------------------------------------------------
 
-subtest 'wire bytes are unchanged: characters and UTF-8 bytes encrypt alike' => sub {
+# The same string in both of Perl's storage forms. These are EQUAL as far as
+# Perl is concerned, so anything that writes different bytes for them is
+# letting an implementation detail reach the wire format.
+my $V_CAFE_UP   = do { my $s = "caf\x{e9}"; utf8::upgrade($s);   $s };
+my $V_CAFE_DOWN = do { my $s = "caf\x{e9}"; utf8::downgrade($s); $s };
+
+subtest 'the value on the wire does not depend on Perl\'s string storage (#27)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
-    my $chars = chars("gr\x{fc}\x{df}e");
-    my $bytes = $chars;
-    utf8::encode($bytes);
-    ok(!utf8::is_utf8($bytes), 'the byte-string input really is bytes');
+    ok(utf8::is_utf8($V_CAFE_UP),   'one copy carries the UTF-8 flag');
+    ok(!utf8::is_utf8($V_CAFE_DOWN), 'the other does not');
+    is($V_CAFE_UP, $V_CAFE_DOWN,    'and Perl considers them the same string');
 
     my %plaintext;
-    for my $case (['chars', $chars], ['bytes', $bytes]) {
+    for my $case (['flagged', $V_CAFE_UP], ['unflagged', $V_CAFE_DOWN]) {
         my ($name, $value) = @$case;
 
         my $doc = File::SOPS->encrypt(
@@ -377,18 +397,85 @@ subtest 'wire bytes are unchanged: characters and UTF-8 bytes encrypt alike' => 
             ->decrypt_bytes(key => $data_key, aad => 'greeting:');
     }
 
-    is($plaintext{chars}, "gr\xc3\xbc\xc3\x9fe",
-        'a character string is written to the wire as UTF-8');
-    is($plaintext{bytes}, $plaintext{chars},
-        'and a caller passing UTF-8 bytes produces identical wire bytes');
+    # This is the assertion the old flag-guarded rule failed: it wrote
+    # "caf\xe9" for the unflagged copy, which is not what any emitter, any
+    # AAD, or sops understands café to be.
+    is($plaintext{flagged}, "caf\xc3\xa9",
+        'a flagged Latin-1-range value is written to the wire as UTF-8');
+    is($plaintext{unflagged}, $plaintext{flagged},
+        'and an unflagged one produces the SAME wire bytes');
 };
 
-subtest 'type:bytes is not decoded' => sub {
+subtest 'an unencrypted Latin-1-range value passes its own MAC (#27)' => sub {
+    # The zero-configuration case. unencrypted_suffix defaults to
+    # _unencrypted, so this value is written into the document by the emitter
+    # AND hashed into the digest -- the two have to agree on its bytes.
+    my ($public, $secret) = Crypt::Age->generate_keypair();
+
+    for my $case (['flagged', $V_CAFE_UP], ['unflagged', $V_CAFE_DOWN]) {
+        my ($name, $value) = @$case;
+
+        my $doc = File::SOPS->encrypt(
+            data       => { note_unencrypted => $value, s => 'x' },
+            recipients => [$public],
+            format     => 'yaml',
+        );
+
+        # What the emitter actually wrote, stated as bytes rather than as a
+        # string, because the whole bug lives in the difference.
+        like($doc, qr/^note_unencrypted: caf\xc3\xa9$/m,
+            "$name: the emitter writes the unencrypted value as UTF-8");
+
+        my $got = eval {
+            File::SOPS->decrypt(encrypted => $doc, identities => [$secret]);
+        };
+        is($@, '', "$name: our own document passes its own MAC")
+            or diag("died: $@");
+        is($got->{note_unencrypted}, $V_CAFE_UP,
+            "$name: and the value comes back") if $got;
+    }
+};
+
+subtest 'the same holds for JSON, and for a whole-document round trip (#27)' => sub {
+    my ($public, $secret) = Crypt::Age->generate_keypair();
+
+    my $data = {
+        enc_unflagged   => $V_CAFE_DOWN,
+        note_unencrypted => $V_CAFE_DOWN,
+        wide            => $K_WIDE,
+    };
+
+    for my $format (qw(yaml json)) {
+        my $doc = File::SOPS->encrypt(
+            data => $data, recipients => [$public], format => $format,
+        );
+        my $got = eval {
+            File::SOPS->decrypt(encrypted => $doc, identities => [$secret]);
+        };
+        is($@, '', "[$format] document of unflagged Latin-1-range values verifies")
+            or diag("died: $@");
+        is_deeply($got, { %$data, enc_unflagged => $V_CAFE_UP,
+                          note_unencrypted => $V_CAFE_UP },
+            "[$format] and round-trips to the same characters") if $got;
+    }
+};
+
+subtest 'type:bytes is neither encoded nor decoded (#27 escape hatch)' => sub {
     my $key = "\x00" x 32;
 
     # 0x80 alone is not valid UTF-8, so a decode attempt would either mangle it
     # or leave it -- either way the point is that nothing tries.
     my $binary = "\x89PNG\x0d\x0a\x1a\x0a\x80\xff";
+
+    # The ENCODE side, which is what makes this an escape hatch rather than an
+    # accident. Everything else is UTF-8 encoded unconditionally now, so
+    # asserting the round trip alone would pass under either rule -- the claim
+    # is about the bytes that reach the cipher.
+    is(File::SOPS::Encrypted->value_to_bytes($binary, 'bytes'), $binary,
+        'type:bytes reaches the cipher byte-for-byte');
+    isnt(File::SOPS::Encrypted->value_to_bytes($binary, 'str'), $binary,
+        'while the same scalar as type:str is encoded (the contrast that '
+            . 'proves the exemption is real)');
 
     my $enc = File::SOPS::Encrypted->encrypt_value(
         value => $binary,
@@ -396,6 +483,9 @@ subtest 'type:bytes is not decoded' => sub {
         aad   => 'blob:',
         type  => 'bytes',
     );
+
+    is($enc->decrypt_bytes(key => $key, aad => 'blob:'), $binary,
+        'and the authenticated plaintext is the input, unencoded');
 
     my $got = $enc->decrypt_value(key => $key, aad => 'blob:');
     is($got, $binary, 'binary type comes back byte-for-byte');

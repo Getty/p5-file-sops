@@ -168,14 +168,34 @@ rule holds across the file API too.
 =back
 
 The one place bytes surface deliberately is C<type:bytes>, SOPS's binary type,
-which is returned as raw bytes because it is not text. See
-L<File::SOPS::Encrypted/decrypt_value>.
+which is neither encoded on the way in nor decoded on the way out, because it
+is not text. See L<File::SOPS::Encrypted/value_to_bytes>.
 
-If you hand C<encrypt> UTF-8 B<bytes> rather than characters, the wire output
-is still correct -- a scalar without Perl's UTF-8 flag is treated as bytes and
-passed through untouched, which is what makes the rule safe to apply to
-existing callers. What you get back from C<decrypt> is characters either way,
-so do not decode it yourself.
+=head3 The boundary is characters, and it does not read Perl's UTF-8 flag
+
+B<Do not hand C<encrypt> UTF-8 bytes.> Decode them first:
+
+    utf8::decode($value);              # or read the file with an :encoding layer
+
+Everything that crosses to the wire -- the value, and the key path that forms
+its AAD -- is UTF-8 encoded B<unconditionally>. Perl's UTF-8 flag is not
+consulted, because below U+0100 it is a storage detail and not a statement
+about meaning: C<"caf\x{e9}"> may be held as one byte or as two, Perl considers
+both the same string, and both serializers write it to the file as
+C<caf\xc3\xa9> either way. A rule that read the flag would disagree with the
+bytes our own emitter wrote, and a document that disagrees with itself fails
+its own MAC.
+
+Prior to 0.003 the value was encoded only when the flag was set, so an
+unflagged C<"caf\x{e9}"> reached the wire as the single byte C<\xe9>. With
+C<unencrypted_suffix> -- on by default -- such a document failed its own MAC
+and C<sops -d> reported C<MAC mismatch>; when the value was encrypted the
+document was self-consistent but C<sops -d> handed the value back as
+C<!!binary Y2Fm6Q==> rather than as C<café>. Passing UTF-8 bytes appeared to
+work in those releases, and for encrypted values it did; for unencrypted ones
+the emitter double-encoded them and the document already failed verification.
+See
+L<docs/adr/0003|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0003-value-encoding-is-unconditional-like-the-aad.md>.
 
 =head2 Value types
 

@@ -2,7 +2,7 @@ Revision history for File-SOPS
 
 {{$NEXT}}
   IMPORTANT - if you encrypted data with 0.001 or 0.002, read this.
-  Three defects below could corrupt or misrepresent stored values, and
+  The defects below could corrupt or misrepresent stored values, and
   two of them are not repairable from the existing ciphertext:
     * A false boolean was written as an unencrypted empty value. Such a
       document also fails its own MAC check, so this release may refuse
@@ -19,6 +19,16 @@ Revision history for File-SOPS
       ciphertext is intact but recovering it needs the old AAD. Keys
       above U+00FF could not be written at all - they died. Values
       under ASCII keys are unaffected.
+    * A VALUE in the Latin-1 range that was passed as an unflagged Perl
+      string was written to the wire as Latin-1 where sops uses UTF-8.
+      Such documents still decrypt and still verify under this release -
+      the ciphertext is intact and the MAC covers those same bytes - but
+      the value comes back as bytes rather than characters, and sops
+      reads it as a binary scalar rather than as the text you stored.
+      Re-encrypting with this release writes it correctly. The same
+      value under unencrypted_suffix produced a document that failed
+      verification when it was written; there is nothing to recover
+      there, and it must be rewritten from the plaintext.
   Re-encrypt affected documents from their ORIGINAL PLAINTEXT, not from
   the stored ciphertext. Where a value gated access or behaviour, verify
   it by hand: a wrong value may have been in effect since it was written.
@@ -56,6 +66,23 @@ Revision history for File-SOPS
     only what this release writes, and what it gives back, moves. The
     reasoning, the measurements behind it and the one case where Perl
     can be misled are recorded in docs/adr/0002.
+  - BEHAVIOUR CHANGE - values are UTF-8 encoded unconditionally, like
+    the AAD, instead of only when the scalar carries Perl's UTF-8 flag.
+    Below U+0100 that flag is storage and not meaning - "caf\x{e9}" may
+    be held as one byte or as two and Perl considers both the same
+    string - but both serializers write it to the file as UTF-8 either
+    way. So a value that reached the wire as Latin-1 disagreed with our
+    own emitter: with unencrypted_suffix, on by default, the document
+    failed its own MAC and sops reported "MAC mismatch"; when the value
+    was encrypted the document was self-consistent but sops -d handed
+    the value back as "!!binary Y2Fm6Q==" instead of "café". What
+    changes for callers: passing UTF-8 BYTES to encrypt now
+    double-encodes them, so decode at your own boundary first. That
+    appeared to work before only for encrypted values - the emitter was
+    already double-encoding such a caller's unencrypted ones, and those
+    documents already failed verification. type:bytes is exempt on both
+    sides and is how a caller says a scalar really is bytes. Recorded in
+    docs/adr/0003.
   - New File::SOPS::Encrypted class methods detect_type and
     value_to_bytes, the single source of truth for the value-to-wire
     mapping. The type ladder and the value conversion previously existed

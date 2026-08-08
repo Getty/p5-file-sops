@@ -223,24 +223,20 @@ The C<aad> (Additional Authenticated Data) is typically the path to the value
 in the data structure (e.g., C<database:password:>), used to prevent value
 substitution attacks.
 
-Both C<value> and C<aad> are encoded to UTF-8 before they reach the cipher,
-which is what the Go implementation authenticates against, but by two
-deliberately different rules:
+Both C<value> and C<aad> are B<always> encoded to UTF-8 before they reach the
+cipher, which is what the Go implementation authenticates against, and
+B<neither consults Perl's UTF-8 flag>. For a string whose characters are all
+below U+0100 that flag is an internal storage detail rather than a statement
+about meaning: C<"caf\x{e9}"> may be held as one byte or as two, Perl considers
+both the same string, and C<YAML::XS::Dump> and C<JSON::MaybeXS(utf8 =E<gt> 1)>
+write both to the file as C<caf\xc3\xa9>. Anything that reads the flag
+therefore disagrees with the bytes our own emitter wrote, which is a document
+that fails its own MAC.
 
-=over 4
-
-=item * C<aad> is B<always> encoded. It names a key that the format handler
-writes to the file with C<YAML::XS::Dump> or C<JSON::MaybeXS(utf8 =E<gt> 1)>,
-and both of those encode a key to UTF-8 regardless of Perl's UTF-8 flag. The
-AAD has to say what the emitter wrote, or a document fails its own MAC on the
-next read.
-
-=item * C<value> is encoded only if it carries the UTF-8 flag, so a caller
-handing over UTF-8 bytes rather than characters still writes the bytes it
-meant. Nothing outside this call has to agree on the plaintext -- the
-ciphertext and the MAC are both taken over exactly these bytes.
-
-=back
+The exception is C<type =E<gt> 'bytes'>, SOPS's binary type, which is passed
+through untouched -- and which is how a caller says that a scalar really is
+bytes rather than characters. See L</value_to_bytes> and
+L<docs/adr/0003|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0003-value-encoding-is-unconditional-like-the-aad.md>.
 
 Type is auto-detected from the value if not specified, by L</detect_type>.
 
@@ -394,6 +390,12 @@ sub value_to_bytes {
         return (lc("$value") eq 'true' || "$value" eq '1') ? 'True' : 'False';
     }
 
+    # SOPS's binary type is not text, so there is nothing to encode. Mirrors
+    # _deserialize_value, which does not decode it either. This is also the
+    # only way a caller can say "these really are bytes" -- see the encoding
+    # note on _utf8_bytes.
+    return "$value" if $type eq 'bytes';
+
     # Everything else is decided by what the scalar IS, not by the label:
     # a number is written in the canonical form Go would re-derive from it,
     # a string is written verbatim.
@@ -436,6 +438,13 @@ as C<1.5>, C<.5> as C<0.5> and C<1e20> as C<100000000000000000000>
 =item * anything else, including every string, is written verbatim
 
 =back
+
+C<type =E<gt> 'bytes'> is the one type that is B<not> UTF-8 encoded on its way
+out, mirroring L</decrypt_value>, which does not decode it either. It is
+SOPS's binary type, so it is not text, and it is the only way to tell this
+module that an unflagged scalar really is a byte string rather than a Perl
+string that happens to be stored as bytes -- a distinction Perl itself does not
+make. Everything else is encoded unconditionally; see L</encrypt_value>.
 
 So a Perl string is never renormalised -- C<'007'> stays C<007> and C<'1.50'>
 stays C<1.50> -- while a Perl number always is. A document that gets this
@@ -512,20 +521,33 @@ sub _expand_exponent {
 # (U+0080..U+00FF) or dies outright with "Wide character in subroutine entry"
 # (above U+00FF).
 #
-# Only a flagged scalar is encoded here. An unflagged one is taken to be a byte
-# string already, so encoding it would double-encode a caller who handed us
-# UTF-8 bytes rather than characters -- and unlike the AAD below, nothing else
-# in the document has to agree with this decision: the plaintext is what the
-# ciphertext and the MAC are both taken over, and both derive it from here.
+# UNCONDITIONAL, by the same argument as _aad_bytes below: for a string whose
+# characters are all under U+0100 Perl's UTF-8 flag is storage, not meaning,
+# and neither emitter consults it -- YAML::XS::Dump and JSON::MaybeXS(utf8=>1)
+# write "caf\x{e9}" as caf\xc3\xa9 whichever way Perl is holding it. Under the
+# old flag-guarded rule an unflagged "caf\x{e9}" reached the wire as caf\xe9,
+# which is not UTF-8 at all, with two measured consequences: an UNENCRYPTED
+# value went into the document as UTF-8 and into the digest as Latin-1, so the
+# file failed its own MAC and sops reported "MAC mismatch"; and an encrypted
+# one was self-consistent but came back out of `sops -d` as
+# `!!binary Y2Fm6Q==` rather than as café. See ADR 0003.
+#
+# The cost is a caller who passes UTF-8 BYTES rather than characters: their
+# plaintext is now double-encoded, because Perl cannot tell that scalar apart
+# from an unflagged Latin-1 string and the ambiguity has to be resolved the
+# same way everywhere. Note the emitters were already double-encoding such a
+# caller's unencrypted values, so this was never a whole guarantee. A caller
+# who really means bytes says so with type => 'bytes', which skips this
+# entirely (see value_to_bytes).
 sub _utf8_bytes {
     my ($str) = @_;
     return $str unless defined $str;
-    utf8::encode($str) if utf8::is_utf8($str);
+    utf8::encode($str);   # no-op for ASCII, correct for the rest
     return $str;
 }
 
-# The AAD's crossing, and it is UNCONDITIONAL -- deliberately not the rule
-# above.
+# The AAD's crossing, which has always been unconditional and is where the rule
+# above came from.
 #
 # The AAD is derived from the document's key path, and the key it names is
 # written to the file by YAML::XS::Dump / JSON::MaybeXS(utf8 => 1). Both of
@@ -540,7 +562,8 @@ sub _utf8_bytes {
 # our own file re-derived the UTF-8 form and the document failed its own MAC.
 # Matching the emitter is what makes the AAD single-valued for a given
 # document, and it is also what Go does, where a map key is UTF-8 by
-# construction.
+# construction. The value conversion above now says the same thing about the
+# same scalar; a document cannot hold two answers to that question.
 sub _aad_bytes {
     my ($aad) = @_;
     return '' unless defined $aad;

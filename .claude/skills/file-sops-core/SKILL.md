@@ -78,23 +78,28 @@ library's own tests, and fails against the real `sops` binary.
    emit real `true`/`false` on re-serialization. A plain `1` here silently degrades
    every bool in the file to an int on the next write.
 7. **Empty and undefined leaf values are not encrypted** — they serialize as `''`.
-8. **Everything hashed or encrypted is UTF-8 bytes** — `Digest::SHA` and the GCM
-   primitives reject wide characters. But the encode rule is **not the same in both
-   places**, and the difference is load-bearing:
+8. **Everything hashed or encrypted is UTF-8 bytes, encoded UNCONDITIONALLY** —
+   `_aad_bytes` for the AAD, `_utf8_bytes` for the value. Neither reads Perl's UTF-8
+   flag, and **nothing here may start reading it**. Below U+0100 that flag is storage,
+   not meaning: `"caf\x{e9}"` may be held as one byte or as two, Perl considers both
+   the same string, and `YAML::XS::Dump` / `JSON::MaybeXS(utf8 => 1)` write both to
+   the file as `caf\xc3\xa9`. Anything that consults the flag disagrees with the bytes
+   our own emitter wrote, and the document fails *its own* MAC on the next read.
 
-   - **The AAD is encoded unconditionally** (`_aad_bytes`). `YAML::XS::Dump` and
-     `JSON::MaybeXS(utf8 => 1)` encode a key to UTF-8 **regardless of Perl's UTF-8
-     flag** — below U+0100 that flag is storage, not meaning. A flag-guarded AAD
-     therefore authenticates against different bytes than the emitter wrote, and the
-     document fails *its own* MAC on the next read. The AAD must say what the emitter
-     wrote.
-   - **Plaintext is encoded only when the flag is set** (`_utf8_bytes`). Nothing
-     outside `encrypt_value` has to agree on it — ciphertext and MAC both derive from
-     exactly those bytes — so a caller deliberately passing byte strings keeps
-     writing the bytes it meant.
+   Both halves were flag-guarded once and both were bugs (**ADR 0003**, karr #27; the
+   AAD half landed a release earlier). Measured with an unflagged `"caf\x{e9}"`:
+   an **unencrypted** value went into the document as UTF-8 and into the digest as
+   Latin-1, so `sops -d` reported `MAC mismatch`; an **encrypted** one was
+   self-consistent — invisible from inside Perl — but came back out of `sops -d` as
+   `!!binary Y2Fm6Q==` instead of `café`.
 
-   The same emitter-disagreement still exists on the **value** path (karr #27) and is
-   not fixed: fixing it moves wire bytes for byte-string callers.
+   - **The one exemption is `type:bytes`**, which is not text: no encode on the way
+     in, no decode on the way out. It is also the *only* way a caller can say that an
+     unflagged scalar really is bytes, since Perl does not make that distinction.
+   - **The cost, accepted deliberately:** a caller passing UTF-8 *bytes* is now
+     double-encoded. The emitters were already doing that to such a caller's
+     unencrypted values, so it was never a whole guarantee — see ADR 0003 for why the
+     ambiguity can only be resolved once, and the same way, everywhere.
 
 9. **The API boundary is characters, the wire is UTF-8 bytes, and the library encodes
    exactly once.** Keys, values, `extract` paths and everything `decrypt` returns are
