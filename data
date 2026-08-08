@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:29:19Z
+id: 7
+priority: high
+status: done
+tags:
+- bug
+- bool
+title: The literal string false encrypts as True
+updated: 2026-08-08T21:41:44Z
+---
+
+Encrypted line 287 and File::SOPS line 744 both carry the expression value eq true or value eq 1 or value, choosing True or False. The trailing bare truthiness fallback makes the non-empty string false truthy, so a value of false is encrypted as True. Both twins are identically wrong, which is exactly why the MAC agrees with the ciphertext and the suite stays green. Fix both together per the house rule that a changed rule lands in all twins or none.
+FIXED in both twins together. The bare truthiness fallback is gone; the rule is now explicitly symmetric with the deserializer. Regression tests included, each verified to fail when the fix is reverted.
