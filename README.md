@@ -83,10 +83,13 @@ sops:
 
 Files encrypted with File::SOPS can be decrypted with the [reference Go implementation](https://github.com/getsops/sops), and vice versa, for YAML and JSON.
 
-Verified against **sops v3.13.3** by `t/04-interop.t`, which drives the real binary in both directions. That test skips unless a binary is present, so a plain `prove -lr t/` does **not** prove compatibility — run it explicitly:
+Verified against **sops v3.13.3** by `t/04-interop.t`, which drives the real binary in both directions. It finds sops via `$SOPS_BIN`, then your `PATH`, then `/tmp/sops`.
+
+With a binary present the suite runs 122 tests; without one it runs 105 and says so. A green suite at 105 has **not** checked compatibility. To install the pinned version:
 
 ```bash
-SOPS_BIN=/path/to/sops prove -lv t/04-interop.t
+maint/fetch-sops           # needs a Go toolchain; installs to ~/bin by default
+prove -lr t/               # 122 tests once sops is on PATH
 ```
 
 Known limitations:

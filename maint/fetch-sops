@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Fetch a pinned sops binary for the interop suite (t/04-interop.t).
+#
+# t/04-interop.t is the only test that proves this distribution's wire
+# format is compatible with the real sops CLI. It needs a sops binary on
+# PATH (or $SOPS_BIN) to run at all -- without one it silently skips.
+#
+# Usage: maint/fetch-sops [install-dir]
+#   install-dir defaults to $HOME/bin. Make sure it ends up on PATH, or
+#   run tests with SOPS_BIN=<install-dir>/sops.
+
+set -euo pipefail
+
+SOPS_VERSION=v3.13.3
+DEST=${1:-$HOME/bin}
+
+if ! command -v go >/dev/null 2>&1; then
+    cat >&2 <<EOF
+No Go toolchain found on PATH.
+
+This script builds sops from source with 'go install', which needs Go.
+Install Go (https://go.dev/dl/) and re-run, or skip building and instead
+download a prebuilt binary for sops $SOPS_VERSION from
+  https://github.com/getsops/sops/releases/tag/$SOPS_VERSION
+and place it somewhere on PATH (or point SOPS_BIN at it).
+EOF
+    exit 1
+fi
+
+mkdir -p "$DEST"
+echo "Installing sops $SOPS_VERSION to $DEST ..."
+GOBIN="$DEST" go install "github.com/getsops/sops/v3/cmd/sops@${SOPS_VERSION}"
+
+echo "Done: $DEST/sops"
+"$DEST/sops" --version
+
+echo
+echo "Make sure $DEST is on PATH, or run tests with SOPS_BIN=$DEST/sops."

@@ -152,22 +152,21 @@ prove -lr t/          # recursive; -r matters if subdirs ever appear
 dzil test             # recursive by construction
 ```
 
-**`t/04-interop.t` is the only test that proves compatibility with SOPS**, and it
-`skip_all`s unless a `sops` binary exists at `/tmp/sops` or `$SOPS_BIN`. It is 500 of
-the suite's ~900 test lines: round-trips in both directions (Perl→sops, sops→Perl),
-YAML and JSON, types, unicode, nested structures.
+**`t/04-interop.t` is the only test that proves compatibility with SOPS** — round-trips
+in both directions (Perl→sops, sops→Perl), YAML and JSON, types, unicode, nested
+structures. It finds a binary via `$SOPS_BIN`, then `PATH`, then `/tmp/sops`, and only
+skips when none of the three yields one. A `$SOPS_BIN` that is set but not executable
+is a hard failure, not a fall-through to something nobody chose.
 
-Without the binary the suite reports `All tests successful` while every interop
-assertion silently did not run. **Any change touching the invariants above is unverified
-until the interop test actually executes.** Say so explicitly rather than reporting a
-green suite:
+**Check the run, not the summary.** With sops on `PATH` the suite is 122 tests; without
+it, 105 and a skip notice. `All tests successful` at 105 means the compatibility
+assertions did not execute — that is exactly how two releases shipped a library whose
+every YAML file sops rejected. When the test runs it prints the binary and version it
+used; quote that when you claim compatibility.
 
-```bash
-SOPS_BIN=/path/to/sops prove -lv t/04-interop.t
-```
-
-A release of this distribution without a real interop run is a release of untested
-compatibility claims.
+If a binary is missing, `maint/fetch-sops` installs the pinned version (needs a Go
+toolchain). A release without a real interop run is a release of untested compatibility
+claims.
 
 ## Deliberate gaps
 
