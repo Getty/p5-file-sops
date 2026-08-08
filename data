@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:51:37Z
+id: 25
+priority: critical
+status: done
+tags:
+- release
+- docs
+- security
+title: Changes {{$NEXT}} gives no remediation path for boolean-bug-affected 0.001/0.002
+  files
+updated: 2026-08-08T21:54:37Z
+---
+
+The {{$NEXT}} Changes section fixes three distinct bugs. The lastmodified/YAML-rejection entry tells the user what to do ("such files are readable again after re-encrypting with this version"). The two boolean entries do not, and the omission matters more there, not less:
+
+1. "Fix false booleans being written as unencrypted empty values ... Affected documents also failed their own MAC verification on read-back." decrypt() croaks unconditionally on MAC mismatch (lib/File/SOPS.pm:243, no bypass option). A document containing a false boolean, encrypted by 0.001/0.002, will very likely fail MAC verification against the fixed decrypt code -- meaning the fix does not just leave old files unreadable by sops, it can leave them unreadable by File::SOPS itself, with no code path to recover them from the ciphertext. The original false value was overwritten with an empty plaintext placeholder that is indistinguishable from a genuinely empty value, so there is nothing to recover even if MAC verification were bypassed.
+
+2. "Fix the string 'false' being encrypted as True, caused by a bare Perl truthiness fallback in both boolean serializers." This is a silent value inversion, not a formatting defect: a value meant to read false was written to disk as the literal string 'True'. Depending on what the field gated (feature flags, access flags, etc.) this is a security-relevant regression, and the Changes entry describes the mechanism but never tells an existing user to go check.
+
+Neither entry tells someone upgrading from 0.001/0.002 what to actually do. Recommend the Changes (or a separate top-of-file notice) state explicitly: anyone who encrypted data containing a false boolean, or a quoted 'true'/'false' string, with 0.001 or 0.002 should re-encrypt from the *original plaintext* -- not from the existing ciphertext, which may no longer decrypt at all, and even where it does, cannot be trusted for that field.
+
+This is a documentation/communication gap, not a code defect -- the underlying bugs are already fixed in the working tree per lib/File/SOPS.pm and lib/File/SOPS/Encrypted.pm diffs reviewed 2026-08-08.
+Fixed: Changes now opens with an IMPORTANT block naming all three defects, stating that two are not repairable from existing ciphertext, and instructing re-encryption from original plaintext plus manual verification of any value that gated access or behaviour.
