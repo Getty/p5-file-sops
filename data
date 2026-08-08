@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:37:49Z
+id: 8
+priority: critical
+status: done
+tags:
+- bug
+- mac
+- interop
+title: MAC decrypt side hashes a re-normalized value, not the authenticated plaintext
+updated: 2026-08-08T22:12:51Z
+---
+
+The encrypt side hashes the live scalar; the decrypt side hashes the value after it has been round-tripped through Perl numeric conversion (int and plus 0.0 in Encrypted deserialize). Wherever that conversion is not the identity the two disagree and the file becomes undecryptable. Verified: a value of 007 hashes as 007 on encrypt and 7 on decrypt, giving MAC verification failed, and sops -d on the same file reports MAC mismatch. Same for 1.50 and -0. Other direction: a sops file with 1e20 or 0.00000015 is stored by Go as the expanded form, Perl restringifies to exponent notation, MAC fails. Go is safe here only because its parse and format functions are exact inverses on canonical input. Fix: hash the raw decrypted bytes with the bool titlecase rule applied, not a re-serialization.
+FIXED as part of one coherent MAC rewrite: both directions now funnel through a shared digest helper, differing only in how leaves are collected and what a leaf contributes. Verified against sops 3.13.3 in both directions. Suite went from 82/95 to 96/113 tests (without/with binary); each fix was confirmed by reverting it and watching the named subtest fail. Regression tests in t/07-mac.t.
