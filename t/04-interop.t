@@ -971,4 +971,89 @@ subtest 'Rotate a sops-written document with a non-default rule' => sub {
     ) if $? >> 8 == 0;
 };
 
+###############################################################################
+# Test 22: A rule applies to the whole path, not one level at a time
+#
+# karr #16. The tree walk asked should_encrypt_key about each key as it
+# descended, which is right for the unencrypted rules -- an excluded branch
+# stays excluded anyway -- and wrong for the encrypted ones, where the
+# reference encrypts a leaf as soon as SOME component of its path matches.
+#
+# The assertion that matters is the one on sops' OWN output: this test says
+# which values sops chooses to encrypt in a nested document, and then requires
+# File::SOPS to make the same choices for the same document. Self-consistency
+# cannot satisfy it.
+###############################################################################
+subtest 'Encryption rules apply to the whole path' => sub {
+    my $source = <<'YAML';
+top_enc:
+    inner: v1
+    other: v2
+plain:
+    nested_enc: v3
+    nested: v4
+deep:
+    branch:
+        leaf_enc: v5
+        leaf: v6
+list_enc:
+    - e1
+    - e2
+YAML
+
+    my $plain_file = "$tempdir/path_rule_plain.yaml";
+    write_file($plain_file, $source);
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+
+    # What sops decided -- the specification the walk is written against.
+    like($sops_enc, qr/^    inner: ENC\[/m,
+        'sops encrypts a leaf under a matching parent');
+    like($sops_enc, qr/^    other: ENC\[/m, 'and its sibling');
+    like($sops_enc, qr/^    nested_enc: ENC\[/m,
+        'sops encrypts a matching leaf under a non-matching parent');
+    like($sops_enc, qr/^    nested: v4$/m, 'and leaves its sibling readable');
+    like($sops_enc, qr/^        leaf_enc: ENC\[/m, 'the same two levels down');
+    like($sops_enc, qr/^        leaf: v6$/m,       'and its sibling');
+    like($sops_enc, qr/^    - ENC\[/m,
+        'sops encrypts array elements whose parent key matches');
+
+    # sops -> us
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a nested sops document written under encrypted_suffix')
+        or diag("died: $@");
+    is_deeply($decrypted, Load($source), 'and returns it intact') if $decrypted;
+
+    # us -> sops, the same document under the same rule
+    my $encrypted = File::SOPS->encrypt(
+        data             => Load($source),
+        recipients       => [$public],
+        format           => 'yaml',
+        encrypted_suffix => '_enc',
+    );
+
+    for my $readable (qw(nested leaf)) {
+        like($encrypted, qr/^\s+\Q$readable\E: v\d$/m,
+            "we leave $readable readable, as sops does");
+    }
+    for my $secret_key (qw(inner other nested_enc leaf_enc)) {
+        like($encrypted, qr/^\s+\Q$secret_key\E: ENC\[/m,
+            "we encrypt $secret_key, as sops does");
+    }
+
+    my $enc_file = "$tempdir/path_rule.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts our nested document')
+        or diag("sops output: $output");
+    is_deeply(Load($output), Load($source), 'and every value survives')
+        if $? >> 8 == 0;
+};
+
 done_testing;

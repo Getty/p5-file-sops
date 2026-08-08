@@ -120,6 +120,16 @@ Revision history for File-SOPS
     came back as mojibake. decrypt, decrypt_file and extract now return
     characters. The bytes written to the file are unchanged. See the new
     "Character encoding" section in File::SOPS for the boundary rule.
+  - Fix the encryption rules being applied one level at a time instead
+    of to a value's whole key path. sops encrypts a leaf as soon as
+    SOME component of its path matches, and the tree walk asked about
+    each key as it descended - right for unencrypted_suffix and
+    unencrypted_regex, where an excluded branch stays excluded anyway,
+    and wrong for encrypted_suffix and encrypted_regex: everything
+    under an `api_enc:` block was left readable, and a `token_enc:`
+    under an ordinary parent was never reached because the walk stopped
+    descending there. The resulting file was one sops refused. Latent
+    until now only because no rule could be configured at all.
   - SECURITY: rotate no longer silently discards the parts of the sops
     section it did not create. It re-encrypted through encrypt, which
     built fresh metadata with the defaults, so a rotated file lost its

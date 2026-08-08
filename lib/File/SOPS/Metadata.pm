@@ -621,7 +621,18 @@ sub should_encrypt_key {
         # Encrypt this key
     }
 
-Determines if a hash key should be encrypted based on suffix/regex rules.
+Determines if a single hash key, considered on its own, should be encrypted
+based on suffix/regex rules.
+
+B<This is not the rule a document is encrypted under> -- that is
+L</should_encrypt_path>, which applies the same tests to every component of a
+value's key path, and it is what L<File::SOPS> walks the tree with. The two
+agree whenever a rule can only exclude (C<unencrypted_suffix>,
+C<unencrypted_regex>), because an excluded branch stays excluded all the way
+down. They disagree on C<encrypted_suffix> and C<encrypted_regex>: a leaf
+whose own key does not match is still encrypted when a key above it does.
+
+This method remains for callers asking about one key in isolation.
 
 Rules are applied in this order:
 
@@ -682,9 +693,13 @@ A leaf is unencrypted if any component carries C<unencrypted_suffix> or matches
 C<unencrypted_regex>, and (when those are configured) encrypted only if some
 component carries C<encrypted_suffix> or matches C<encrypted_regex>.
 
-This is the predicate L<File::SOPS> uses to decide which values the MAC covers
-when L</mac_only_encrypted> is set. It is deliberately separate from
-L</should_encrypt_key>, which the tree walk applies one level at a time.
+This is the predicate L<File::SOPS> encrypts a document with, and the one it
+uses to decide which values the MAC covers when L</mac_only_encrypted> is set.
+Measured against sops 3.13.3 with C<--encrypted-suffix _enc>: every value
+under a C<top_enc:> block is encrypted, a C<nested_enc:> under an ordinary
+parent is encrypted, and the elements of a C<list_enc:> array are encrypted
+because an array contributes no path component of its own and its elements
+carry the parent's path.
 
 Returns true if the value at that path should be encrypted.
 

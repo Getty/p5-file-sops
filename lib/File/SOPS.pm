@@ -826,12 +826,16 @@ sub _encrypt_tree {
     if (ref $node eq 'HASH') {
         my %result;
         for my $k (keys %$node) {
-            my $new_path = [@$path, $k];
-            if ($metadata->should_encrypt_key($k)) {
-                $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, $new_path);
-            } else {
-                $result{$k} = $node->{$k};
-            }
+            # The walk descends unconditionally and the rules are applied at
+            # the leaf, against the WHOLE path. Deciding per level and
+            # skipping the subtree is the same answer for the unencrypted
+            # rules -- an excluded branch stays excluded all the way down --
+            # but not for the encrypted ones, where the reference
+            # implementation encrypts a leaf as soon as SOME component of its
+            # path matches. Measured against sops 3.13.3 with
+            # --encrypted-suffix _enc: everything under a `top_enc:` block is
+            # encrypted, and a `nested_enc:` under a plain parent is too.
+            $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, [@$path, $k]);
         }
         return \%result;
     }
@@ -844,6 +848,10 @@ sub _encrypt_tree {
         return \@result;
     }
     else {
+        # A leaf the rules exclude is written as it stands. It is still
+        # covered by the MAC, so it is readable but authenticated.
+        return $node unless $metadata->should_encrypt_path($path);
+
         # Leaf value - encrypt it
         # SOPS doesn't encrypt empty values, returns empty string.
         # The !blessed() guard is load-bearing: JSON::PP::Boolean overloads eq,

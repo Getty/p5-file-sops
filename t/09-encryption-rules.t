@@ -252,6 +252,85 @@ subtest 'a rule we cannot apply is refused on the write side' => sub {
 };
 
 ###############################################################################
+# The rules apply to the whole path, not to one level at a time (karr #16)
+#
+# The document below is the one measured against sops 3.13.3 with
+# --encrypted-suffix _enc; the expectations are that binary's output, not this
+# library's. The tree walk used to ask should_encrypt_key about each key as it
+# descended, which gets the unencrypted rules right by accident -- an excluded
+# branch stays excluded anyway -- and the encrypted ones wrong twice over: it
+# left everything under top_enc: readable, and never reached plain:nested_enc
+# at all because it stopped descending at `plain`.
+###############################################################################
+subtest 'encrypted_suffix matches any path component' => sub {
+    my $data = {
+        top_enc => { inner => 'v1', other => 'v2' },
+        plain   => { nested_enc => 'v3', nested => 'v4' },
+        deep    => { branch => { leaf_enc => 'v5', leaf => 'v6' } },
+        list_enc => [ 'e1', 'e2' ],
+    };
+
+    my $yaml = encrypt_ok(data => $data, encrypted_suffix => '_enc');
+
+    like($yaml, qr/^  inner: ENC\[/m,
+        'a leaf under a matching parent is encrypted');
+    like($yaml, qr/^  other: ENC\[/m,
+        'and so is its sibling -- the parent decides for the whole branch');
+    like($yaml, qr/^  nested_enc: ENC\[/m,
+        'a matching leaf under a non-matching parent is reached and encrypted')
+        or diag('the walk used to stop descending at the non-matching parent');
+    like($yaml, qr/^  nested: v4$/m, 'while its sibling stays readable');
+    like($yaml, qr/^    leaf_enc: ENC\[/m, 'the same two levels down');
+    like($yaml, qr/^    leaf: v6$/m,       'and its sibling too');
+    # YAML::XS emits a block sequence at its parent's indentation.
+    like($yaml, qr/^- ENC\[/m,
+        'array elements match on the parent key, having no path component of their own');
+
+    is_deeply(
+        File::SOPS->decrypt(encrypted => $yaml, identities => [$secret]),
+        $data,
+        'and the document verifies and round-trips',
+    );
+};
+
+subtest 'encrypted_regex matches any path component' => sub {
+    my $data = { secret_block => { a => 'x' }, public => { b => 'y' } };
+
+    my $yaml = encrypt_ok(data => $data, encrypted_regex => '^secret_');
+
+    like($yaml, qr/^  a: ENC\[/m, 'a leaf under a matching parent is encrypted');
+    like($yaml, qr/^  b: y$/m,    'and one under a non-matching parent is not');
+
+    is_deeply(
+        File::SOPS->decrypt(encrypted => $yaml, identities => [$secret]),
+        $data,
+        'and the document verifies and round-trips',
+    );
+};
+
+subtest 'the unencrypted rules still exclude a whole branch' => sub {
+    # Behaviour that must NOT change: the per-level walk and the per-path walk
+    # give the same answer here, and this is the shape the default rule makes
+    # every caller depend on.
+    my $data = {
+        blk_unencrypted => { host => 'db.example.com', deeper => { leaf => 'v' } },
+        secret          => 'shh',
+    };
+
+    my $yaml = encrypt_ok(data => $data);
+
+    like($yaml, qr/^  host: db\.example\.com$/m, 'a leaf under the excluded branch');
+    like($yaml, qr/^    leaf: v$/m,              'at any depth');
+    like($yaml, qr/^secret: ENC\[/m,             'and the rest is still encrypted');
+
+    is_deeply(
+        File::SOPS->decrypt(encrypted => $yaml, identities => [$secret]),
+        $data,
+        'and the document verifies and round-trips',
+    );
+};
+
+###############################################################################
 # encrypt_file offers the same switches as encrypt
 ###############################################################################
 subtest 'encrypt_file passes the rules through' => sub {
