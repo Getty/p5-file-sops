@@ -3,7 +3,12 @@ package File::SOPS;
 
 use Moo;
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use Digest::SHA qw(sha512);
+use JSON::MaybeXS;
+use YAML::XS ();
+use YAML::PP;
+use YAML::PP::Common qw(PRESERVE_ORDER);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
 use File::SOPS::Backend::Age;
@@ -131,6 +136,47 @@ Each encrypted value is stored as:
 
 =back
 
+=head2 Character encoding
+
+B<The API boundary is characters. The wire is UTF-8 bytes. Encoding happens
+exactly once, and this module owns it.>
+
+Everything File::SOPS hands you and everything it takes from you is a Perl
+B<character string>: the keys and values you pass to L</encrypt>, the tree
+L</decrypt> returns, the value L</extract> returns, and the path you look it up
+by. Encoding to UTF-8 happens at the edge where data becomes ciphertext, digest
+input or file content -- never in your code:
+
+=over 4
+
+=item * Values, and the key path that forms each value's B<AAD>, are UTF-8
+encoded on the way into AES-GCM, and the MAC digest is taken over those same
+UTF-8 bytes. This is what the Go implementation authenticates against; a
+document whose keys or values leave the ASCII range is not interoperable
+otherwise.
+
+=item * L</decrypt> reverses it, so a structure survives
+C<encrypt>/C<decrypt> unchanged and C<is_deeply> against the original holds for
+any input. Prior to 0.003 decrypted values came back as UTF-8 B<bytes>, which
+compared unequal to the characters that went in and turned into mojibake when
+L</decrypt_file> encoded them a second time.
+
+=item * L</encrypt_file> and L</decrypt_file> read and write UTF-8 encoded
+files. They decode on the way in and encode on the way out, so the characters
+rule holds across the file API too.
+
+=back
+
+The one place bytes surface deliberately is C<type:bytes>, SOPS's binary type,
+which is returned as raw bytes because it is not text. See
+L<File::SOPS::Encrypted/decrypt_value>.
+
+If you hand C<encrypt> UTF-8 B<bytes> rather than characters, the wire output
+is still correct -- a scalar without Perl's UTF-8 flag is treated as bytes and
+passed through untouched, which is what makes the rule safe to apply to
+existing callers. What you get back from C<decrypt> is characters either way,
+so do not decode it yourself.
+
 =cut
 
 my %FORMATS = (
@@ -152,7 +198,10 @@ sub encrypt {
     my $data_key = _random_bytes(32);
 
     # Create metadata
-    my $metadata = File::SOPS::Metadata->new;
+    my $metadata = File::SOPS::Metadata->new(
+        defined $args{mac_only_encrypted}
+            ? (mac_only_encrypted => $args{mac_only_encrypted}) : ()
+    );
     $metadata->update_lastmodified;
 
     # Encrypt data key for each recipient
@@ -163,7 +212,7 @@ sub encrypt {
     $metadata->age($encrypted_keys);
 
     # Compute MAC over plaintext values BEFORE encryption (SOPS behavior)
-    my $mac = _compute_mac($data, $data_key, $metadata->lastmodified);
+    my $mac = _compute_mac($data, $data_key, $metadata);
     $metadata->mac($mac);
 
     # Encrypt all values in the data structure
@@ -180,9 +229,10 @@ sub encrypt {
 =method encrypt
 
     my $encrypted = File::SOPS->encrypt(
-        data       => \%data,
-        recipients => \@age_public_keys,
-        format     => 'yaml',  # or 'json', defaults to 'yaml'
+        data               => \%data,
+        recipients         => \@age_public_keys,
+        format             => 'yaml',  # or 'json', defaults to 'yaml'
+        mac_only_encrypted => 0,       # optional
     );
 
 Encrypts a data structure for specified recipients.
@@ -191,10 +241,21 @@ Takes a HashRef in C<data>, encrypts all values (not keys) using AES-256-GCM,
 and encrypts the data key for each age recipient. Returns serialized encrypted
 content as a string.
 
+Keys and values are character strings and are UTF-8 encoded on their way to the
+cipher and the digest; the returned document is UTF-8 encoded bytes, ready to
+write to a C<:raw> handle. See L</Character encoding>.
+
 The C<recipients> parameter must be an ArrayRef of age public keys (starting
 with C<age1...>).
 
 Supported formats: C<yaml>, C<yml>, C<json>.
+
+C<mac_only_encrypted> is the equivalent of the reference implementation's
+C<--mac-only-encrypted>: it restricts the MAC to the values that are actually
+encrypted, and records that choice in the C<sops> section so a reader knows
+which rule to verify under. See
+L<File::SOPS::Metadata/mac_only_encrypted>. Off by default, which is what sops
+defaults to as well.
 
 =cut
 
@@ -224,22 +285,12 @@ sub decrypt {
     # Decrypt all values first
     my $decrypted_data = _decrypt_tree($data, $data_key, $metadata, []);
 
-    # Verify MAC (AAD is lastmodified timestamp in RFC3339 format)
-    # MAC is computed over decrypted (plaintext) values IN DOCUMENT ORDER
-    # Perl hashes are randomized, so we must extract values from original string
-    my $expected_mac = $metadata->mac;
-    my $lastmodified = $metadata->lastmodified;
-    if (defined $expected_mac) {
-        my $expected_enc = File::SOPS::Encrypted->parse($expected_mac);
-        if ($expected_enc) {
-            my $expected_hash = $expected_enc->decrypt_value(key => $data_key, aad => $lastmodified);
-
-            # Extract and decrypt values in document order from original string
-            my $computed_hash = _compute_mac_from_encrypted_string($encrypted, $data_key, $data);
-
-            croak "MAC verification failed" unless $expected_hash eq $computed_hash;
-        }
-    }
+    _verify_mac(
+        document => $encrypted,
+        data     => $data,
+        data_key => $data_key,
+        metadata => $metadata,
+    ) unless $args{ignore_mac};
 
     return $decrypted_data;
 }
@@ -250,6 +301,7 @@ sub decrypt {
         encrypted  => $encrypted_content,
         identities => \@age_secret_keys,
         format     => 'yaml',  # optional, auto-detected
+        ignore_mac => 0,       # optional, see below
     );
 
 Decrypts SOPS-encrypted content.
@@ -258,13 +310,30 @@ Takes encrypted content as a string, decrypts the data key using provided age
 identities, verifies the MAC, and returns the decrypted data structure as a
 HashRef.
 
+The returned structure holds B<character strings>, so it compares equal to the
+structure L</encrypt> was given. Do not decode it again. See
+L</Character encoding>.
+
 The C<identities> parameter must be an ArrayRef of age secret keys (starting
 with C<AGE-SECRET-KEY-1...>).
 
 If C<format> is not specified, it will be auto-detected from the content.
 
-Dies if MAC verification fails or if none of the provided identities can
-decrypt the data key.
+Dies if none of the provided identities can decrypt the data key, or if MAC
+verification does not succeed. B<Verification failing to run counts as not
+succeeding>: a document whose C<sops> section has no C<mac>, or a C<mac> that
+is not a well-formed C<ENC[...]> value, or one that will not decrypt under the
+data key and this document's C<lastmodified>, is refused rather than returned
+unverified. This mirrors the Go implementation, which reports C<File has no
+MAC> / C<Cannot decrypt MAC> and stops.
+
+C<ignore_mac> is the equivalent of the reference implementation's
+C<--ignore-mac>, and the only way to read such a document. It skips
+verification entirely, so what it returns is decrypted but B<not
+authenticated> -- the AAD binding on each individual value still holds, but
+nothing detects a value that was deleted, duplicated, moved to another key, or
+replaced with one taken from elsewhere in the same document. Use it to recover
+data, not to consume it.
 
 =cut
 
@@ -290,9 +359,10 @@ sub encrypt_file {
 
     # Encrypt
     my $encrypted = $class->encrypt(
-        data       => $data,
-        recipients => $recipients,
-        format     => $format,
+        data               => $data,
+        recipients         => $recipients,
+        format             => $format,
+        mac_only_encrypted => $args{mac_only_encrypted},
     );
 
     # Write output
@@ -319,8 +389,12 @@ Reads the input file, encrypts it for the specified recipients, and writes the
 encrypted content to the output file. If C<output> is not specified, encrypts
 in-place (overwrites the input file).
 
+The input is read as UTF-8; see L</Character encoding>.
+
 Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>)
 unless explicitly specified.
+
+C<mac_only_encrypted> is passed through to L</encrypt>.
 
 Returns true on success.
 
@@ -346,6 +420,7 @@ sub decrypt_file {
         encrypted  => $content,
         identities => $identities,
         format     => $format,
+        ignore_mac => $args{ignore_mac},
     );
 
     # Serialize decrypted data
@@ -353,11 +428,10 @@ sub decrypt_file {
 
     my $decrypted;
     if ($format eq 'json') {
-        require JSON::MaybeXS;
+        # canonical => 1 keeps key order sorted; the MAC depends on it
         $decrypted = JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1)
             ->encode($data);
     } else {
-        require YAML::XS;
         $decrypted = YAML::XS::Dump($data);
     }
 
@@ -384,7 +458,14 @@ Decrypts a SOPS-encrypted file.
 Reads the encrypted input file, decrypts it using the provided identities,
 and writes the decrypted content to the output file.
 
+The output is UTF-8 encoded, so a file round-tripped through L</encrypt_file>
+and back is byte-identical in its non-ASCII content rather than double-encoded.
+See L</Character encoding>.
+
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
+
+C<ignore_mac> is passed through to L</decrypt>; read the warning there before
+using it.
 
 Returns true on success.
 
@@ -409,6 +490,7 @@ sub extract {
         encrypted  => $content,
         identities => $identities,
         format     => $format,
+        ignore_mac => $args{ignore_mac},
     );
 
     # Navigate to path
@@ -440,6 +522,14 @@ Path can be specified in two formats:
 =back
 
 For array indices, use numeric keys: C<["items"][0]> or C<items.0>
+
+The whole file is still decrypted and MAC-verified; C<extract> saves you the
+navigation, not the work. C<ignore_mac> is passed through to L</decrypt>.
+
+C<path> is a character string and is matched against the document's keys as
+characters, so a non-ASCII key is written in C<path> exactly as you would write
+it in C<data>. The returned value is a character string. See
+L</Character encoding>.
 
 Returns the decrypted value (scalar, not reference).
 
@@ -473,13 +563,15 @@ sub rotate {
         encrypted  => $content,
         identities => $identities,
         format     => $format,
+        ignore_mac => $args{ignore_mac},
     );
 
     # Re-encrypt with new data key
     my $encrypted = $class->encrypt(
-        data       => $data,
-        recipients => $recipients,
-        format     => $format,
+        data               => $data,
+        recipients         => $recipients,
+        format             => $format,
+        mac_only_encrypted => $metadata->mac_only_encrypted,
     );
 
     # Write back
@@ -521,6 +613,14 @@ This operation:
 Key rotation is recommended periodically for security, or when removing
 a recipient's access.
 
+C<mac_only_encrypted> is carried over from the existing file. The other
+encryption rules (C<unencrypted_suffix> and friends) are B<not> yet -- L</encrypt>
+builds fresh metadata with the defaults, so rotating a file that customised
+them rewrites it under the default rules.
+
+C<ignore_mac> is passed through to L</decrypt>; rotating a file you could not
+verify re-signs whatever it contained, so prefer to fail.
+
 Returns true on success.
 
 =cut
@@ -552,8 +652,14 @@ sub _encrypt_tree {
     }
     else {
         # Leaf value - encrypt it
-        # SOPS doesn't encrypt empty values, returns empty string
-        return '' if !defined $node || $node eq '';
+        # SOPS doesn't encrypt empty values, returns empty string.
+        # The !blessed() guard is load-bearing: JSON::PP::Boolean overloads eq,
+        # and JSON->false eq '' is TRUE (while it stringifies to '0'). Without
+        # the guard every false boolean was skipped here and written to the file
+        # as a plaintext '', after _compute_mac had already hashed 'False' --
+        # so the document failed its own MAC check on the next read. sops
+        # encrypts false as type:bool with plaintext 'False'.
+        return '' if !defined $node || (!blessed($node) && $node eq '');
 
         my $aad = _path_to_aad($path);
         my $enc = File::SOPS::Encrypted->encrypt_value(
@@ -598,128 +704,221 @@ sub _path_to_aad {
     my ($path) = @_;
     return '' unless $path && @$path;
     # SOPS format: path components joined with ":" plus trailing ":"
+    #
+    # This is a CHARACTER string -- the components are keys straight out of the
+    # parser. UTF-8 encoding it is File::SOPS::Encrypted's job, done once at the
+    # cipher boundary (_utf8_bytes) so that encrypt_value, decrypt_bytes and the
+    # MAC's decrypt_bytes call cannot drift apart on it. Do not encode here as
+    # well; that would double-encode every non-ASCII key.
     return join(':', @$path) . ':';
 }
 
+# --- MAC ----------------------------------------------------------------
+#
+# The MAC is a SHA-512 over the plaintext of EVERY leaf in the document -- no
+# keys, no paths -- uppercase hex, itself AES-GCM encrypted with lastmodified
+# as AAD. Two things about it are easy to get wrong and impossible to notice
+# from inside this library, because both sides of a self-produced file agree
+# with each other while disagreeing with sops:
+#
+#   1. It covers unencrypted values too. Values excluded from encryption by
+#      unencrypted_suffix (or any of the other rules) are hashed exactly like
+#      encrypted ones. Only mac_only_encrypted changes that, and then the
+#      digest additionally starts from a fixed 32-byte block so the two
+#      settings can never collide.
+#
+#   2. It is order dependent, and the order is DOCUMENT order. The encrypt
+#      side has only a Perl hash to walk, whose iteration order is randomized,
+#      so it walks sorted -- which is correct precisely because both
+#      serializers emit sorted keys (see t/05-format-key-order.t). The decrypt
+#      side must reproduce whatever order the producer used, and for a file
+#      written by sops that is the order of the original document, not sorted
+#      order. Hence _document_leaves, which recovers key order from an
+#      order-preserving reparse of the raw text.
+#
+# Both directions funnel into _mac_digest so the two rules above are stated
+# once. What differs is only how the leaves are collected and what a leaf's
+# bytes are.
+
+# MACOnlyEncryptedInitialization, verbatim from sops.go.
+our $MAC_ONLY_ENCRYPTED_INIT = pack 'C*',
+    0x8a, 0x3f, 0xd2, 0xad, 0x54, 0xce, 0x66, 0x52,
+    0x7b, 0x10, 0x34, 0xf3, 0xd1, 0x47, 0xbe, 0x0b,
+    0x0b, 0x97, 0x5b, 0x3b, 0xf4, 0x4f, 0x72, 0xc6,
+    0xfd, 0xad, 0xec, 0x81, 0x76, 0xf2, 0x7d, 0x69;
+
+my $ORDERED_LOADER = YAML::PP->new(
+    boolean  => 'JSON::PP',
+    preserve => PRESERVE_ORDER,
+);
+
 sub _compute_mac {
-    my ($data, $key, $lastmodified) = @_;
+    my ($data, $key, $metadata) = @_;
 
-    # SOPS computes SHA-512 hash over all values (not paths)
-    my $ctx = Digest::SHA->new(512);
-    _hash_values_for_mac($data, $ctx);
-
-    # Get uppercase hex digest (SOPS format)
-    my $mac_value = uc($ctx->hexdigest);
-
-    # AAD is the lastmodified timestamp in RFC3339 format
-    my $aad = $lastmodified // '';
+    my $mac_value = _mac_digest(
+        leaves   => _sorted_leaves($data, [], []),
+        metadata => $metadata,
+    );
 
     my $enc = File::SOPS::Encrypted->encrypt_value(
         value => $mac_value,
         key   => $key,
-        aad   => $aad,
+        # AAD is the lastmodified timestamp in RFC3339 format
+        aad   => $metadata->lastmodified // '',
         type  => 'str',
     );
 
     return $enc->to_string;
 }
 
-sub _compute_mac_from_encrypted_string {
-    my ($encrypted_string, $data_key, $parsed_data) = @_;
+sub _verify_mac {
+    my (%args) = @_;
+    my $metadata = $args{metadata};
+    my $data_key = $args{data_key};
 
-    # Build a mapping of ENC-String -> Path from the parsed tree
-    # This lets us find the correct AAD for each encrypted value
-    my %enc_to_path;
-    _build_enc_path_mapping($parsed_data, [], \%enc_to_path);
+    my $stored = $metadata->mac;
+    croak "File has no MAC - refusing to return unverified data "
+        . "(pass ignore_mac => 1 to override)"
+        unless defined $stored && length $stored;
 
-    # Extract all ENC[...] values from the original string in DOCUMENT ORDER
-    # Perl hashes are randomized, so we must use the original string order!
-    my @ordered_enc;
-    while ($encrypted_string =~ /(ENC\[AES256_GCM,data:[^,]+,iv:[^,]+,tag:[^,]+,type:[^\]]+\])/g) {
-        my $enc_str = $1;
-        # Skip the MAC value (appears after "mac": or mac: )
-        my $pos = pos($encrypted_string) - length($enc_str);
-        my $before = substr($encrypted_string, 0, $pos);
-        next if $before =~ /["']?mac["']?\s*:\s*["']?\s*$/;
-        push @ordered_enc, $enc_str;
-    }
+    my $mac_enc = File::SOPS::Encrypted->parse($stored)
+        or croak "Cannot parse MAC - refusing to return unverified data "
+        . "(pass ignore_mac => 1 to override)";
 
-    # Hash values in document order
+    my $expected = eval {
+        $mac_enc->decrypt_bytes(key => $data_key, aad => $metadata->lastmodified // '')
+    };
+    croak "Cannot decrypt MAC - refusing to return unverified data "
+        . "(pass ignore_mac => 1 to override)"
+        unless defined $expected;
+
+    # Document order where we can recover it, sorted order otherwise -- which
+    # is the same thing for every file this library writes. Getting the order
+    # wrong can only make verification fail, never wrongly succeed.
+    my $ordered = _parse_in_document_order($args{document});
+    my $leaves  = $ordered
+        ? _document_leaves($ordered, $args{data}, [], [])
+        : _sorted_leaves($args{data}, [], []);
+
+    my $computed = _mac_digest(
+        leaves   => $leaves,
+        metadata => $metadata,
+        data_key => $data_key,
+    );
+
+    croak "MAC verification failed" unless $expected eq $computed;
+
+    return 1;
+}
+
+sub _mac_digest {
+    my (%args) = @_;
+    my $leaves   = $args{leaves};
+    my $metadata = $args{metadata};
+    my $data_key = $args{data_key};   # decrypt side only
+
+    my $only_encrypted = $metadata && $metadata->mac_only_encrypted;
+
     my $ctx = Digest::SHA->new(512);
-    for my $enc_str (@ordered_enc) {
-        my $path = $enc_to_path{$enc_str};
-        next unless $path;  # Skip if not found (shouldn't happen)
+    $ctx->add($MAC_ONLY_ENCRYPTED_INIT) if $only_encrypted;
 
-        my $aad = join(':', @$path) . ':';
-        my $enc = File::SOPS::Encrypted->parse($enc_str);
-        next unless $enc;
-
-        my $plaintext = eval { $enc->decrypt_value(key => $data_key, aad => $aad) };
-        next unless defined $plaintext;
-
-        # Convert to bytes same as SOPS ToBytes()
-        my $bytes = _value_to_bytes_for_type($plaintext, $enc->type);
-        $ctx->add($bytes);
+    for my $leaf (@$leaves) {
+        my ($path, $value) = @$leaf;
+        next if $only_encrypted && !$metadata->should_encrypt_path($path);
+        $ctx->add(_mac_bytes($value, $path, $data_key));
     }
 
+    # Uppercase hex digest (SOPS format)
     return uc($ctx->hexdigest);
 }
 
-sub _build_enc_path_mapping {
-    my ($node, $path, $mapping) = @_;
+sub _mac_bytes {
+    my ($value, $path, $data_key) = @_;
 
-    if (ref $node eq 'HASH') {
-        for my $k (keys %$node) {
-            _build_enc_path_mapping($node->{$k}, [@$path, $k], $mapping);
-        }
+    # Decrypt side. Hash the authenticated plaintext exactly as it came off
+    # the cipher: running it back through decrypt_value's type conversion
+    # would hash '007' as 7 and Go's 100000000000000000000 as 1e+20, and the
+    # document would fail its own MAC. type:bool is the one case that needs
+    # normalising, because SOPS's ToBytes titlecases the boolean it parsed
+    # rather than echoing the spelling it was given.
+    if (defined $data_key && File::SOPS::Encrypted->is_encrypted($value)) {
+        my $enc   = File::SOPS::Encrypted->parse($value);
+        my $bytes = $enc->decrypt_bytes(key => $data_key, aad => _path_to_aad($path));
+        return $bytes unless $enc->type eq 'bool';
+        return (lc($bytes) eq 'true' || $bytes eq '1') ? 'True' : 'False';
     }
-    elsif (ref $node eq 'ARRAY') {
-        for my $item (@$node) {
-            # SOPS arrays don't add index to path
-            _build_enc_path_mapping($item, $path, $mapping);
-        }
-    }
-    elsif (File::SOPS::Encrypted->is_encrypted($node)) {
-        $mapping->{$node} = [@$path];
-    }
+
+    # Encrypt side, and unencrypted leaves on the decrypt side.
+    return _value_to_bytes($value);
 }
 
-sub _value_to_bytes_for_type {
-    my ($value, $type) = @_;
-    return '' unless defined $value;
-
-    my $str;
-    if ($type eq 'bool') {
-        # Deserialized to JSON::PP::Boolean by decrypt_value
-        $str = $value ? 'True' : 'False';
-    } else {
-        $str = "$value";
-    }
-
-    # Encode to UTF-8 bytes for hashing (Digest::SHA requires bytes)
-    utf8::encode($str) if utf8::is_utf8($str);
-    return $str;
-}
-
-sub _hash_values_for_mac {
-    my ($node, $ctx) = @_;
+# Leaves in sorted-key order: [ [ \@path, $value ], ... ]
+sub _sorted_leaves {
+    my ($node, $path, $out) = @_;
 
     if (ref $node eq 'HASH') {
-        # SOPS iterates over keys in order they appear (we use sorted for consistency)
-        for my $k (sort keys %$node) {
-            _hash_values_for_mac($node->{$k}, $ctx);
-        }
+        _sorted_leaves($node->{$_}, [@$path, $_], $out) for sort keys %$node;
     }
     elsif (ref $node eq 'ARRAY') {
-        for my $item (@$node) {
-            _hash_values_for_mac($item, $ctx);
-        }
+        # SOPS does NOT add array index to path - all elements share parent's
+        _sorted_leaves($_, $path, $out) for @$node;
     }
     else {
-        # Hash the value with same conversion as SOPS ToBytes()
-        my $value = _value_to_bytes($node);
-        $ctx->add($value);
+        push @$out, [ $path, $node ];
     }
+
+    return $out;
+}
+
+# Leaves in document order. $ordered is the same document reparsed with key
+# order preserved and supplies the order; $node is the tree the rest of the
+# library is working with and supplies the values, so the digest never sees a
+# value the second parser resolved differently. A structural disagreement
+# between the two makes verification fail, which is the safe direction.
+sub _document_leaves {
+    my ($ordered, $node, $path, $out) = @_;
+
+    if (ref $ordered eq 'HASH') {
+        return $out unless ref $node eq 'HASH';
+        _document_leaves($ordered->{$_}, $node->{$_}, [@$path, $_], $out)
+            for keys %$ordered;
+    }
+    elsif (ref $ordered eq 'ARRAY') {
+        return $out unless ref $node eq 'ARRAY';
+        _document_leaves($ordered->[$_], $node->[$_], $path, $out)
+            for 0 .. $#$ordered;
+    }
+    else {
+        push @$out, [ $path, $node ];
+    }
+
+    return $out;
+}
+
+# Reparse the raw document with hash key order preserved, purely to recover
+# document order. YAML::PP is used for both formats: JSON is a subset of YAML
+# 1.2, and it agrees with YAML::XS and JSON::MaybeXS on everything sops emits.
+# Returns undef if the text will not parse that way, leaving the caller on
+# sorted order.
+sub _parse_in_document_order {
+    my ($content) = @_;
+    return unless defined $content;
+
+    # YAML::XS::Load hands back decoded characters, so the reparse has to
+    # decode too or a non-ASCII key would not match its twin in the tree.
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    my $doc = eval { $ORDERED_LOADER->load_string($text) };
+    return unless ref $doc eq 'HASH';
+
+    # The metadata MAC lives here and must not hash itself. It is dropped the
+    # same way the format handlers drop it -- by removing the whole sops
+    # branch -- rather than by pattern-matching "mac:" in the raw text, which
+    # is what used to swallow any user key ending in "mac" (hmac, webmac).
+    delete $doc->{sops};
+
+    return $doc;
 }
 
 sub _value_to_bytes {
@@ -728,8 +927,10 @@ sub _value_to_bytes {
 
     my $str;
 
-    # Handle JSON::PP::Boolean (from JSON::MaybeXS)
-    if (ref $value && $value->isa('JSON::PP::Boolean')) {
+    # Handle JSON::PP::Boolean (the class every JSON::MaybeXS backend blesses
+    # into). blessed() guard: ->isa dies on an unblessed ref, and a plain
+    # SCALAR/CODE ref reaches here through _hash_values_for_mac's leaf branch.
+    if (blessed($value) && $value->isa('JSON::PP::Boolean')) {
         $str = $value ? 'True' : 'False';
     }
     else {
@@ -737,7 +938,9 @@ sub _value_to_bytes {
         my $type = _detect_type_for_mac($value);
 
         if ($type eq 'bool') {
-            $str = ($value eq 'true' || $value eq '1' || $value) ? 'True' : 'False';
+            # Must stay byte-identical to Encrypted::_serialize_value or the
+            # MAC disagrees with the ciphertext. See the note there.
+            $str = (lc("$value") eq 'true' || "$value" eq '1') ? 'True' : 'False';
         } else {
             $str = "$value";
         }
@@ -751,8 +954,8 @@ sub _value_to_bytes {
 sub _detect_type_for_mac {
     my ($value) = @_;
     return 'str' unless defined $value;
-    # JSON::PP::Boolean
-    return 'bool' if ref $value && $value->isa('JSON::PP::Boolean');
+    # JSON::PP::Boolean (see _value_to_bytes for the blessed() guard)
+    return 'bool' if blessed($value) && $value->isa('JSON::PP::Boolean');
     # Only string literals 'true'/'false' are bool, not '1'/'0' (those are ints)
     return 'bool' if $value eq 'true' || $value eq 'false';
     return 'int' if $value =~ /^-?\d+$/;

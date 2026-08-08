@@ -1,6 +1,108 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  IMPORTANT - if you encrypted data with 0.001 or 0.002, read this.
+  Three defects below could corrupt or misrepresent stored values, and
+  two of them are not repairable from the existing ciphertext:
+    * A false boolean was written as an unencrypted empty value. Such a
+      document also fails its own MAC check, so this release may refuse
+      to decrypt it at all - and the original value is gone, replaced by
+      a placeholder indistinguishable from an empty string.
+    * The string 'false' was encrypted as True - a silent value
+      inversion. It decrypts without error and returns the wrong value.
+    * No YAML file written by 0.001 or 0.002 could be read by the sops
+      CLI. Those files are intact and are readable again once
+      re-encrypted with this version.
+    * A document with a key in the Latin-1 range (a key containing e.g.
+      é or ö) was written with a Latin-1 AAD where sops uses UTF-8.
+      Neither sops nor this release can decrypt such a value; the
+      ciphertext is intact but recovering it needs the old AAD. Keys
+      above U+00FF could not be written at all - they died. Values
+      under ASCII keys are unaffected.
+  Re-encrypt affected documents from their ORIGINAL PLAINTEXT, not from
+  the stored ciphertext. Where a value gated access or behaviour, verify
+  it by hand: a wrong value may have been in effect since it was written.
+
+  - Fix Perl-encrypted YAML being rejected outright by the sops CLI:
+    lastmodified was emitted as a bare RFC3339 scalar, which Go's YAML
+    parser types as time.Time where sops expects a string, so sops
+    refused the file before decrypting anything. It is now emitted
+    quoted, as sops itself writes it. JSON was never affected. This
+    means no YAML file written by 0.001 or 0.002 could be read by the
+    sops CLI; such files are readable again after re-encrypting with
+    this version.
+  - Fix false booleans being written as unencrypted empty values:
+    JSON::PP::Boolean overloads eq, so JSON->false eq '' is true and
+    the empty-value check swallowed them. Affected documents also
+    failed their own MAC verification on read-back.
+  - Fix the string 'false' being encrypted as True, caused by a bare
+    Perl truthiness fallback in both boolean serializers.
+  - Fix compilation when JSON::PP has not been loaded by something else
+    first: _deserialize_value used JSON::PP::true/false as barewords
+    behind a runtime require, so File::SOPS failed to compile on its own
+    (JSON::MaybeXS does not pull in JSON::PP when Cpanel::JSON::XS is
+    installed). Now uses JSON->true/JSON->false via JSON::MaybeXS.
+  - Guard against dying on unblessed references reaching the value
+    serializers, and route all boolean handling through JSON::MaybeXS.
+  - SECURITY: decrypt no longer returns data it could not verify. A
+    missing mac, a mac that is not a well-formed ENC value, and a mac
+    that will not decrypt under the data key and the document's
+    lastmodified all silently disabled verification and returned the
+    document as though it had been checked. All three now die, matching
+    sops, which reports "File has no MAC" / "Cannot decrypt MAC" and
+    stops. Pass ignore_mac => 1 to decrypt, decrypt_file, extract or
+    rotate for the old behaviour; what it returns is decrypted but not
+    authenticated.
+  - Fix MAC verification of any document containing a value excluded
+    from encryption. sops covers unencrypted values in the MAC on both
+    sides; File::SOPS hashed them when encrypting and skipped them when
+    decrypting, so with the default unencrypted_suffix of _unencrypted
+    it rejected its own output and could not read any sops file with
+    such a key. No configuration was needed to hit it.
+  - Fix MAC verification of values Perl's numeric conversion does not
+    round-trip. The decrypt side hashed the value after int() / + 0.0,
+    so '007' was hashed as 007 when written and 7 when read, and the
+    expanded 100000000000000000000 that sops writes for 1e20 came back
+    as 1e+20. It now hashes the authenticated plaintext.
+  - Fix MAC verification of documents with a key ending in "mac". The
+    skip that kept the metadata MAC out of its own digest matched any
+    key containing "mac:", so hmac and webmac values were dropped from
+    the digest. The metadata MAC is now excluded structurally, by
+    dropping the sops branch, and the pattern match is gone.
+  - Honour mac_only_encrypted, including the fixed initialization block
+    sops uses to keep the two settings' digests apart, and accept it as
+    an option to encrypt / encrypt_file. rotate carries it over.
+  - New File::SOPS::Encrypted method decrypt_bytes, returning the
+    authenticated plaintext without type conversion, and new
+    File::SOPS::Metadata method should_encrypt_path.
+  - MAC verification now recovers document key order from an
+    order-preserving reparse (YAML::PP, new prerequisite) instead of
+    scraping ENC values out of the raw text, which is what makes
+    unencrypted values placeable at all. YAML::XS and JSON::MaybeXS
+    remain the parsers and emitters.
+  - Fix any document with a non-ASCII key. The AAD is built from the key
+    path and was handed to AES-GCM as a character string, so a key above
+    U+00FF died with "Wide character in subroutine entry" and a key in
+    the Latin-1 range was quietly authenticated as Latin-1 where sops
+    used UTF-8 - a file that looks correct and that neither sops nor
+    this library can read back. The AAD is now always UTF-8, matching
+    both sops and the bytes our own emitters write the key as. Affects
+    reading and writing, and the MAC, which derives the same AAD.
+  - Fix decrypted values coming back as UTF-8 bytes where encrypt took
+    characters. A decrypted structure compared unequal to the one that
+    was encrypted, and decrypt_file encoded those bytes a second time,
+    so a non-ASCII file round-tripped through encrypt_file/decrypt_file
+    came back as mojibake. decrypt, decrypt_file and extract now return
+    characters. The bytes written to the file are unchanged. See the new
+    "Character encoding" section in File::SOPS for the boundary rule.
+  - Tests: the interop suite is no longer the only compatibility
+    coverage. New regression tests pin the wire format, the serializers'
+    key ordering, every MAC rule above and the encoding boundary without
+    requiring a sops binary, which is what let the above ship unnoticed.
+    The encoding tests include a document written by the real sops
+    3.13.3, checked in with its throwaway age identity, so the read side
+    is pinned against the reference implementation even when the binary
+    is absent.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

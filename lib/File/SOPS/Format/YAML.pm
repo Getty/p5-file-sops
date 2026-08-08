@@ -7,6 +7,11 @@ use YAML::XS qw(Load Dump);
 use File::SOPS::Metadata;
 use namespace::clean;
 
+# 'JSON::PP' here is one of YAML::XS's own two mode names (the other is
+# 'boolean'), not a module this distribution loads or talks to. It makes
+# Load/Dump round-trip YAML true/false as JSON::PP::Boolean objects -- the same
+# class JSON::MaybeXS blesses into on every backend. Do not "modernise" this
+# string to 'JSON::MaybeXS'; YAML::XS would reject it.
 $YAML::XS::Boolean = 'JSON::PP';
 
 =head1 SYNOPSIS
@@ -32,8 +37,14 @@ $YAML::XS::Boolean = 'JSON::PP';
 YAML format handler for File::SOPS. Handles parsing and serialization of
 SOPS-encrypted YAML files.
 
-Uses L<YAML::XS> for fast, spec-compliant YAML processing. Boolean values
-are represented using L<JSON::PP> for consistency.
+Uses L<YAML::XS> for fast, spec-compliant YAML processing.
+
+Booleans are round-tripped as C<JSON::PP::Boolean> objects, by setting
+YAML::XS's C<$YAML::XS::Boolean> mode to C<'JSON::PP'>. That is the class
+L<JSON::MaybeXS> blesses booleans into on every one of its backends, so a
+C<true> loaded from YAML and a C<true> decoded from JSON are the same kind of
+object throughout this distribution, and both are emitted as bare C<true> /
+C<false> rather than degrading to C<1> / C<0> on the next write.
 
 =cut
 
@@ -80,7 +91,51 @@ sub serialize {
     my %output = %$data;
     $output{sops} = $metadata->to_hash;
 
-    return Dump(\%output);
+    return _quote_sops_timestamp(Dump(\%output));
+}
+
+# YAML::XS emits plain (unquoted) scalars for anything its resolver does not
+# recognise as a YAML core-schema type. $YAML::XS::QuoteNumericStrings (on by
+# default) already covers numbers, booleans and nulls -- '3.8', '123', 'true'
+# and 'null' all come out quoted -- but the resolver has no notion of
+# timestamps, so an RFC3339 lastmodified is emitted bare.
+#
+# Go's yaml.v3 DOES resolve a bare RFC3339 scalar, to time.Time, and sops then
+# refuses the whole file before it decrypts anything:
+#
+#   decoding failed due to the following error(s):
+#   'lastmodified' expected type 'string', got unconvertible type 'time.Time'
+#
+# sops itself writes lastmodified: "2026-08-08T21:28:58Z" -- quoted. YAML::XS
+# exposes no per-scalar style control (no tag, no forced-quote hook), so the
+# only way to get a quoted scalar out of this emitter is to quote it after the
+# dump. Kept deliberately narrow: it rewrites one key, only inside the
+# top-level `sops:` block, so a user's own `lastmodified:` in the data section
+# is never touched. JSON needs none of this -- JSON has no timestamp type and
+# its strings are always quoted.
+sub _quote_sops_timestamp {
+    my ($yaml) = @_;
+
+    my @lines = split /\n/, $yaml, -1;
+    my $in_sops = 0;
+
+    for my $line (@lines) {
+        if ($line =~ /\A sops : \s* \z/x) {
+            $in_sops = 1;
+            next;
+        }
+        # any other column-0 line ends the sops block (Dump sorts keys, so a
+        # data key sorting after "sops" can follow it)
+        $in_sops = 0 if $in_sops && $line =~ /\A\S/;
+        next unless $in_sops;
+
+        # already-quoted values are left alone
+        $line =~ s{
+            \A (\s+ lastmodified: [ \t]+) (?!['"]) (\S.*?) [ \t]* \z
+        }{$1"$2"}x;
+    }
+
+    return join "\n", @lines;
 }
 
 =method serialize

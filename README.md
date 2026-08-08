@@ -76,14 +76,25 @@ sops:
             -----END AGE ENCRYPTED FILE-----
     lastmodified: "2025-01-10T12:00:00Z"
     mac: ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]
-    version: 3.9.4
+    version: 3.7.3
 ```
 
 ## Interoperability
 
-This module is fully compatible with the [reference Go implementation](https://github.com/getsops/sops). Files encrypted with File::SOPS can be decrypted with the `sops` CLI and vice versa.
+Files encrypted with File::SOPS can be decrypted with the [reference Go implementation](https://github.com/getsops/sops), and vice versa, for YAML and JSON.
 
-Tested with sops v3.9.4.
+Verified against **sops v3.13.3** by `t/04-interop.t`, which drives the real binary in both directions. That test skips unless a binary is present, so a plain `prove -lr t/` does **not** prove compatibility — run it explicitly:
+
+```bash
+SOPS_BIN=/path/to/sops prove -lv t/04-interop.t
+```
+
+Known limitations:
+
+- **Quoted scalars change type on a round trip.** sops types a value by what the parser produced; File::SOPS infers the type from the scalar's text. A quoted `"true"`, `"false"`, `"1"` or `"0"` therefore comes back as a boolean or an integer rather than the string it went in as. Unquoted values are unaffected.
+- **Comments are not preserved.** `YAML::XS` discards them on parse, so they are absent from the output; `sops -d` keeps them.
+- **Multi-document YAML is not supported** — only the last document survives.
+- Backends other than age (PGP, KMS, GCP KMS, Azure Key Vault, Vault) are parsed and round-tripped in the metadata but cannot be used for encryption.
 
 ## Installation
 

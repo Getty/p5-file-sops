@@ -7,7 +7,6 @@ use File::Temp qw(tempfile tempdir);
 use File::Slurp qw(read_file write_file);
 use JSON::MaybeXS qw(decode_json encode_json);
 use YAML::XS qw(Load Dump);
-use Encode qw(decode_utf8);
 
 use File::SOPS;
 use Crypt::Age;
@@ -497,6 +496,157 @@ subtest 'Rotate key' => sub {
     # sops should also be able to decrypt
     my $output = `$sops_bin -d $enc_file 2>&1`;
     is($? >> 8, 0, 'sops decrypts after rotation');
+};
+
+###############################################################################
+# Test 14: Values excluded from encryption
+#
+# unencrypted_suffix is on by default, so this needs no configuration at all
+# to trigger, and it is a MAC question rather than an encryption one: sops
+# hashes those values on both sides. t/07-mac.t pins the rule without a
+# binary; this is the half that proves the rule is the one Go implements.
+###############################################################################
+subtest 'Unencrypted suffix values' => sub {
+    my $data = {
+        cfg_unencrypted => 'plaintext-but-authenticated',
+        secret          => 'encrypted',
+        blk_unencrypted => { host => 'db.example.com', port => 5432 },
+    };
+
+    # Perl -> sops
+    my $encrypted = File::SOPS->encrypt(
+        data       => $data,
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    like($encrypted, qr/^cfg_unencrypted: plaintext-but-authenticated$/m,
+        'value is written in plaintext');
+
+    my $enc_file = "$tempdir/unencrypted_suffix.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a file with unencrypted values')
+        or diag("sops output: $output");
+    is_deeply(Load($output), $data, 'sops round-trips the whole document')
+        if $? >> 8 == 0;
+
+    # sops -> Perl, in an order that is NOT sorted, so the decrypt side has
+    # to place the unencrypted values by document order and not by key.
+    my $plain_file = "$tempdir/unencrypted_suffix_plain.yaml";
+    write_file($plain_file, "zz: last\nblk_unencrypted:\n  b: 1\n  a: two\naa: first\n");
+
+    my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts it') or diag($sops_enc);
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops file whose unencrypted values are not in sorted order')
+        or diag("died: $@");
+    is_deeply(
+        $decrypted,
+        { zz => 'last', blk_unencrypted => { b => 1, a => 'two' }, aa => 'first' },
+        'and returns it intact'
+    ) if $decrypted;
+};
+
+###############################################################################
+# Test 15: mac_only_encrypted
+###############################################################################
+subtest 'mac_only_encrypted' => sub {
+    my $data = { cfg_unencrypted => 'plain', secret => 'shh', n => 42 };
+
+    my $encrypted = File::SOPS->encrypt(
+        data               => $data,
+        recipients         => [$public],
+        format             => 'yaml',
+        mac_only_encrypted => 1,
+    );
+    like($encrypted, qr/^\s+mac_only_encrypted: true$/m,
+        'the flag is recorded in the sops section');
+
+    my $enc_file = "$tempdir/mac_only.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a mac_only_encrypted file we wrote')
+        or diag("sops output: $output");
+    is_deeply(Load($output), $data, 'values survive') if $? >> 8 == 0;
+
+    # And the other way round.
+    my $plain_file = "$tempdir/mac_only_plain.yaml";
+    write_file($plain_file, "zz: last\ncfg_unencrypted: plain\nsecret: shh\n");
+
+    my $sops_enc = `$sops_bin -e --age $public --mac-only-encrypted $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --mac-only-encrypted') or diag($sops_enc);
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops --mac-only-encrypted file') or diag("died: $@");
+};
+
+###############################################################################
+# Test 16: Keys that used to collide with the metadata MAC
+###############################################################################
+subtest 'Keys ending in mac' => sub {
+    my $data = { hmac => 'h', webmac => 'w', mac => 'm', other => 'o' };
+
+    my $encrypted = File::SOPS->encrypt(
+        data => $data, recipients => [$public], format => 'yaml',
+    );
+    my $enc_file = "$tempdir/hmac.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a file with hmac/webmac/mac keys')
+        or diag("sops output: $output");
+    is_deeply(Load($output), $data, 'all of them survive') if $? >> 8 == 0;
+
+    my $plain_file = "$tempdir/hmac_plain.yaml";
+    write_file($plain_file, "hmac: h\nwebmac: w\nmac: m\nother: o\n");
+    my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts them') or diag($sops_enc);
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops file with hmac/webmac/mac keys') or diag("died: $@");
+    is_deeply($decrypted, $data, 'and returns them intact') if $decrypted;
+};
+
+###############################################################################
+# Test 17: Values Perl's numeric conversion would mangle
+#
+# These are written by sops, not by us: the point is that verification hashes
+# the plaintext sops authenticated, rather than a value round-tripped through
+# int() / + 0.0 and stringified again.
+###############################################################################
+subtest 'Values that do not survive Perl numeric conversion' => sub {
+    my $plain_file = "$tempdir/lossy.yaml";
+    write_file($plain_file, "big: 1e20\ntiny: 0.00000015\nf: 1.50\npadded: \"007\"\nneg: -0.0\n");
+
+    my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts them') or diag($sops_enc);
+
+    # sops stores 1e20 as its expanded form; Perl restringifies that as 1e+20.
+    like($sops_enc, qr/^big: ENC\[[^\]]*type:float\]$/m, 'sops typed 1e20 as float');
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops file holding values Perl would renormalise')
+        or diag("died: $@");
+    cmp_ok($decrypted->{big}, '==', 1e20, 'and gets the value back') if $decrypted;
 };
 
 done_testing;

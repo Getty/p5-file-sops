@@ -4,6 +4,7 @@ our $VERSION = '0.003';
 use Moo;
 use Carp qw(croak);
 use POSIX qw(strftime);
+use JSON::MaybeXS;
 use namespace::clean;
 
 our $SOPS_VERSION = '3.7.3';
@@ -179,6 +180,23 @@ Defaults to C<undef>.
 
 =cut
 
+has mac_only_encrypted => (is => 'rw');
+
+=attr mac_only_encrypted
+
+When true, the MAC covers only the values that are actually encrypted; when
+false (the default) it covers every value in the document, encrypted or not.
+
+Both MAC implementations honour this, and a MAC computed with it on additionally
+starts from a fixed 32-byte initialization block (C<MACOnlyEncryptedInitialization>
+in the Go source), so the two settings can never produce the same digest for the
+same document.
+
+C<undef> or false is emitted as no key at all in the C<sops> section, which is
+what the Go implementation writes.
+
+=cut
+
 sub from_hash {
     my ($class, $hash) = @_;
     return unless ref $hash eq 'HASH';
@@ -197,6 +215,7 @@ sub from_hash {
         encrypted_suffix   => $hash->{encrypted_suffix},
         unencrypted_regex  => $hash->{unencrypted_regex},
         encrypted_regex    => $hash->{encrypted_regex},
+        mac_only_encrypted => $hash->{mac_only_encrypted},
     );
 }
 
@@ -236,6 +255,9 @@ sub to_hash {
         if defined $self->unencrypted_regex;
     $hash->{encrypted_regex} = $self->encrypted_regex
         if defined $self->encrypted_regex;
+    # sops omits the key entirely when the option is off, so a false must not
+    # be written back as `mac_only_encrypted: false`.
+    $hash->{mac_only_encrypted} = JSON->true if $self->mac_only_encrypted;
 
     return $hash;
 }
@@ -358,6 +380,53 @@ Rules are applied in this order:
 =back
 
 Returns true if the key should be encrypted, false otherwise.
+
+=cut
+
+sub should_encrypt_path {
+    my ($self, $path) = @_;
+    $path //= [];
+
+    my $encrypted = 1;
+
+    if (defined $self->unencrypted_suffix && length $self->unencrypted_suffix) {
+        $encrypted = 0 if grep { /\Q$self->{unencrypted_suffix}\E$/ } @$path;
+    }
+
+    if (defined $self->encrypted_suffix && length $self->encrypted_suffix) {
+        $encrypted = (grep { /\Q$self->{encrypted_suffix}\E$/ } @$path) ? 1 : 0;
+    }
+
+    if (defined $self->unencrypted_regex && length $self->unencrypted_regex) {
+        $encrypted = 0 if grep { /$self->{unencrypted_regex}/ } @$path;
+    }
+
+    if (defined $self->encrypted_regex && length $self->encrypted_regex) {
+        $encrypted = (grep { /$self->{encrypted_regex}/ } @$path) ? 1 : 0;
+    }
+
+    return $encrypted;
+}
+
+=method should_encrypt_path
+
+    if ($meta->should_encrypt_path(['database', 'password'])) {
+        # This leaf is one of the encrypted ones
+    }
+
+Whole-path counterpart of L</should_encrypt_key>, mirroring C<shouldBeEncrypted>
+in the Go implementation: each rule is evaluated against B<every> component of
+the path, in the same order, with later rules overriding earlier ones.
+
+A leaf is unencrypted if any component carries C<unencrypted_suffix> or matches
+C<unencrypted_regex>, and (when those are configured) encrypted only if some
+component carries C<encrypted_suffix> or matches C<encrypted_regex>.
+
+This is the predicate L<File::SOPS> uses to decide which values the MAC covers
+when L</mac_only_encrypted> is set. It is deliberately separate from
+L</should_encrypt_key>, which the tree walk applies one level at a time.
+
+Returns true if the value at that path should be encrypted.
 
 =cut
 
