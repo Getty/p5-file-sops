@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:39:05Z
+id: 22
+priority: medium
+status: done
+tags:
+- release
+- cpanfile
+title: cpanfile gaps and an unpinned Getty-authored dependency
+updated: 2026-08-08T22:38:54Z
+---
+
+The last build META shows the cpanfile is the sole prereq source, so gaps ship as-is. Used by lib but undeclared: Digest::SHA, MIME::Base64, POSIX, Carp, Scalar::Util (the last newly used). All core, all undeclared. Nothing declared is unused. Crypt::Age is Getty-authored and unpinned; the house rule wants it pinned to its latest release, 0.001. No minimum perl version is declared. The interop test imports decode_utf8 from Encode and never uses it: drop the import or declare Encode.
+Verified independently 2026-08-08 during release audit: Crypt::Age required unpinned in META.json ("Crypt::Age":"0"); cpanm --info Crypt::Age confirms latest CPAN release is GETTY/Crypt-Age-0.001.tar.gz. Note the local p5-crypt-age repo's working $VERSION is 0.002 (next-unreleased) -- pin to 0.001, not that. Also confirmed independently: t/04-interop.t imports Encode::decode_utf8 (line 10) and never calls it. Ticket is accurate. One addendum: Carp and Scalar::Util (newly used) are undeclared like the other three, but both are as universally-core as Digest::SHA/MIME::Base64/POSIX -- doesn't change the pin/import findings, just flagging I don't think those need adding.
+Fixed: cpanfile now pins Crypt::Age to 0.001 (verified via cpanm --info; the local p5-crypt-age repo carries the unreleased 0.002, deliberately not used), declares the five core modules used by lib (Carp, Digest::SHA, MIME::Base64, POSIX, Scalar::Util), and sets perl 5.010 - the defined-or operator is used 46 times across lib and nothing requires anything newer. Still open: the unused Encode import in t/04-interop.t.
+FIXED completely: the unused Encode import is now removed from t/04-interop.t as well.
