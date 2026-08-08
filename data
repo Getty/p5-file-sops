@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:06:02Z
+id: 1
+priority: critical
+status: done
+tags:
+- interop
+- testing
+title: Provide a sops binary for the interop suite
+updated: 2026-08-08T23:03:29Z
+---
+
+The only compatibility proof, t/04-interop.t (~500 lines), skip_all-s unless a sops binary exists at /tmp/sops or $SOPS_BIN. Right now no binary is present, so "prove -lr t/" reports "All tests successful" with every interop assertion skipped.
+
+Provide a pinned sops binary (or a documented fetch step in maint/), and record which sops version the distribution is verified against.
+
+Until this is done, every claim about Go compatibility in README/POD is unverified.
+Binary now built from source with go install (sops 3.13.3), living in the session scratchpad. First real run of the suite: 9 of 13 interop subtests FAIL - see tickets for the root causes. Still open: a permanent, pinned location plus a documented fetch step, and recording which sops version the dist is verified against (Changes 0.001 claims v3.9.4).
+FIXED. sops 3.13.3 installed permanently at ~/bin/sops, and maint/fetch-sops makes that reproducible elsewhere (go install with the version pinned; a plain-English message when no Go toolchain exists). The important half was the test: t/04-interop.t only ever looked at $SOPS_BIN and /tmp/sops, so it still skipped on a machine with sops properly installed. It now resolves $SOPS_BIN, then PATH, then /tmp/sops, dies loudly if $SOPS_BIN is set but not executable rather than falling through to a binary nobody chose, prints the binary and version it used, and its skip message states plainly that the only compatibility proof did not run. Consequence: prove -lr t/ is now 122 tests here, not 105 with a silent skip. Verified all four paths including PATH stripped and SOPS_BIN pointing at nothing.
