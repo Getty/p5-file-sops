@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:29:08Z
+id: 6
+priority: critical
+status: done
+tags:
+- bug
+- mac
+- bool
+title: False booleans are written as plaintext and break the file MAC
+updated: 2026-08-08T21:41:33Z
+---
+
+File::SOPS encrypt with a false boolean emits flag: empty string, never encrypted, and the file then fails its own decrypt with MAC verification failed. Root cause in File::SOPS line 558: the empty-value guard tests node eq empty string, and JSON::PP::Boolean overloads eq, so JSON false eq empty string is true even though the same object stringifies to 0. The MAC is computed before encryption and has already hashed False, so on decrypt there is no ENC value to contribute and the digests differ. No test covers a false boolean today. Found by file-sops-worker during the JSON::MaybeXS sweep.
+FIXED. The empty-value guard now excludes blessed objects, so an overloaded eq can no longer misfire. Confirmed against the binary that sops encrypts false as type:bool with plaintext False, and that our output now matches and reads back correctly through sops -d. Regression tests included.
