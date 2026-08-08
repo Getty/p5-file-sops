@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T21:38:59Z
+id: 21
+priority: medium
+status: done
+tags:
+- docs
+title: 'Docs vs behaviour: four stale claims across README, POD and Changes'
+updated: 2026-08-08T22:38:42Z
+---
+
+README claims files encrypted with File::SOPS can be decrypted with the sops CLI, which is false for YAML. README shows version 3.9.4 in a sample while the code writes 3.7.3. README and the 0.001 Changes entry claim full interoperability tested with v3.9.4; against 3.13.3, 9 of 13 interop subtests fail. And the Encrypted DESCRIPTION still says the IV is 12 bytes, a separate location from the =attr that was already fixed. Also worth documenting rather than fixing: comments are dropped from the output because YAML::XS discards them, a real limitation versus sops -d.
+The second 12-byte IV claim, in the Encrypted DESCRIPTION list, is now fixed too. The README claims were rewritten: the interoperability section names the tested sops version, gives the explicit SOPS_BIN command, and lists four honest limitations instead of claiming full compatibility. The stale sample version 3.9.4 was corrected to the 3.7.3 the code writes.
+FIXED. README interoperability section rewritten: names the tested sops version, gives the explicit SOPS_BIN command, and lists four honest limitations (quoted scalars change type, comments not preserved, no multi-document YAML, age-only backends) instead of claiming full compatibility. Sample version corrected. Both 12-byte IV claims fixed. Changes now opens with an IMPORTANT remediation block.
