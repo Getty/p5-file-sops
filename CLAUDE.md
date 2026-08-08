@@ -2,6 +2,29 @@
 
 Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
+> **Status of this file:** it is the original *design document*. Parts of it describe
+> intent that is not implemented (ENV/INI formats, `.sops.yaml` creation rules,
+> `encrypt_in_place`, `edit`, every backend beyond age). Read it as the roadmap; the
+> description of what exists lives in skill `file-sops-core`.
+
+## Delegation
+
+Delegate behavior-relevant code to the right agent instead of touching it yourself —
+principle and lane are in `.claude/rules/file-sops-rules.md`.
+
+| Task | Agent |
+|---|---|
+| Implement / refactor / debug behavior-relevant code | `file-sops-worker` (default) |
+| Write/extend tests, reproduce interop bugs | `file-sops-test-writer` |
+| Pre-release audit (Changes, cpanfile, dist.ini, interop proof) | `file-sops-release-checker` |
+
+The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the main
+agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
+`file-sops-core` is project-owned, the `perl-*` and `karr` ones are hardlinked from
+their shared sources.
+
+Work coordination runs on the local `karr` board (`karr board`).
+
 ## Project Goal
 
 Pure Perl implementation of SOPS file handling, compatible with the reference Go implementation (github.com/getsops/sops).
