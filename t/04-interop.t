@@ -1162,4 +1162,191 @@ YAML
     is($got->{key}, 'value', 'and the ordinary value is untouched');
 };
 
+###############################################################################
+# Test 25: A document written under a rule other than the default
+#
+# Until karr #17 the rules could not be set through the public API at all, so
+# the only document shape this suite ever produced was the default one. The
+# assertion that cannot be satisfied by File::SOPS agreeing with itself is the
+# metadata shape: sops refuses a file carrying two rule fields, so writing the
+# _unencrypted default next to a chosen encrypted_suffix would be rejected
+# before anything is decrypted.
+###############################################################################
+subtest 'Non-default encryption rule' => sub {
+    my $data = { password_enc => 'hidden', host => 'db.example.com' };
+
+    my $encrypted = File::SOPS->encrypt(
+        data             => $data,
+        recipients       => [$public],
+        format           => 'yaml',
+        encrypted_suffix => '_enc',
+    );
+
+    like($encrypted, qr/^\s+encrypted_suffix: _enc$/m, 'the rule is recorded');
+    unlike($encrypted, qr/^\s+unencrypted_suffix:/m,
+        'and the default rule is not written alongside it');
+
+    my $enc_file = "$tempdir/encrypted_suffix.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a document written under encrypted_suffix')
+        or diag("sops output: $output");
+    is_deeply(Load($output), $data, 'and every value survives') if $? >> 8 == 0;
+
+    # The other direction: sops chose the rule, we must read the file back.
+    my $plain_file = "$tempdir/encrypted_suffix_plain.yaml";
+    write_file($plain_file, "password_enc: hidden\nhost: db.example.com\n");
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+    like($sops_enc, qr/^host: db\.example\.com$/m, 'sops left the non-matching key readable');
+
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a sops file written under encrypted_suffix')
+        or diag("died: $@");
+    is_deeply($decrypted, $data, 'and returns it intact') if $decrypted;
+};
+
+###############################################################################
+# Test 26: Rotating a document sops wrote, and handing it back
+#
+# The rotate in test 13 uses a document this library wrote under the defaults,
+# so it could not see karr #13: rotate re-encrypted through encrypt, which
+# built fresh metadata, and everything the document had configured was reset.
+# Here sops chooses the rule, and sops has to accept the result -- which it
+# will not do if the rotated file carries two rule fields, or if its values no
+# longer match the rule it declares.
+###############################################################################
+subtest 'Rotate a sops-written document with a non-default rule' => sub {
+    my $plain_file = "$tempdir/rotate_rules_plain.yaml";
+    write_file($plain_file, "password_enc: hidden\nhost: db.example.com\n");
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+
+    # A field sops models and this distribution does not. sops carries it
+    # across its own rotate; dropping it here would change what sops does
+    # with the file afterwards. Injected into the text rather than through a
+    # parse and re-dump, because a re-dump sorts the keys and the MAC is
+    # order-dependent -- reordering a document invalidates it, by design.
+    my $with_extra = $sops_enc;
+    $with_extra =~ s/^sops:\n/sops:\n    shamir_threshold: 2\n/m
+        or die "could not find the sops section to inject into";
+
+    my $enc_file = "$tempdir/rotate_rules.yaml";
+    write_file($enc_file, $with_extra);
+
+    my $ok = eval {
+        File::SOPS->rotate(file => $enc_file, identities => [$secret]);
+        1;
+    };
+    is($ok, 1, 'File::SOPS rotates it') or diag("died: $@");
+
+    my $rotated = read_file($enc_file);
+    my $sops_meta = Load($rotated)->{sops};
+    is($sops_meta->{encrypted_suffix}, '_enc', 'the rule sops chose survived');
+    ok(!exists $sops_meta->{unencrypted_suffix},
+        'and no second rule was written next to it');
+    is($sops_meta->{shamir_threshold}, 2, 'so did the field we do not model');
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts the rotated document')
+        or diag("sops output: $output");
+    is_deeply(
+        Load($output),
+        { password_enc => 'hidden', host => 'db.example.com' },
+        'and every value survived the rotation',
+    ) if $? >> 8 == 0;
+};
+
+###############################################################################
+# Test 27: A rule applies to the whole path, not one level at a time
+#
+# karr #16. The tree walk asked should_encrypt_key about each key as it
+# descended, which is right for the unencrypted rules -- an excluded branch
+# stays excluded anyway -- and wrong for the encrypted ones, where the
+# reference encrypts a leaf as soon as SOME component of its path matches.
+#
+# The assertion that matters is the one on sops' OWN output: this test says
+# which values sops chooses to encrypt in a nested document, and then requires
+# File::SOPS to make the same choices for the same document. Self-consistency
+# cannot satisfy it.
+###############################################################################
+subtest 'Encryption rules apply to the whole path' => sub {
+    my $source = <<'YAML';
+top_enc:
+    inner: v1
+    other: v2
+plain:
+    nested_enc: v3
+    nested: v4
+deep:
+    branch:
+        leaf_enc: v5
+        leaf: v6
+list_enc:
+    - e1
+    - e2
+YAML
+
+    my $plain_file = "$tempdir/path_rule_plain.yaml";
+    write_file($plain_file, $source);
+
+    my $sops_enc = `$sops_bin -e --age $public --encrypted-suffix _enc $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts with --encrypted-suffix') or diag($sops_enc);
+
+    # What sops decided -- the specification the walk is written against.
+    like($sops_enc, qr/^    inner: ENC\[/m,
+        'sops encrypts a leaf under a matching parent');
+    like($sops_enc, qr/^    other: ENC\[/m, 'and its sibling');
+    like($sops_enc, qr/^    nested_enc: ENC\[/m,
+        'sops encrypts a matching leaf under a non-matching parent');
+    like($sops_enc, qr/^    nested: v4$/m, 'and leaves its sibling readable');
+    like($sops_enc, qr/^        leaf_enc: ENC\[/m, 'the same two levels down');
+    like($sops_enc, qr/^        leaf: v6$/m,       'and its sibling');
+    like($sops_enc, qr/^    - ENC\[/m,
+        'sops encrypts array elements whose parent key matches');
+
+    # sops -> us
+    my $decrypted = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies a nested sops document written under encrypted_suffix')
+        or diag("died: $@");
+    is_deeply($decrypted, Load($source), 'and returns it intact') if $decrypted;
+
+    # us -> sops, the same document under the same rule
+    my $encrypted = File::SOPS->encrypt(
+        data             => Load($source),
+        recipients       => [$public],
+        format           => 'yaml',
+        encrypted_suffix => '_enc',
+    );
+
+    for my $readable (qw(nested leaf)) {
+        like($encrypted, qr/^\s+\Q$readable\E: v\d$/m,
+            "we leave $readable readable, as sops does");
+    }
+    for my $secret_key (qw(inner other nested_enc leaf_enc)) {
+        like($encrypted, qr/^\s+\Q$secret_key\E: ENC\[/m,
+            "we encrypt $secret_key, as sops does");
+    }
+
+    my $enc_file = "$tempdir/path_rule.yaml";
+    write_file($enc_file, $encrypted);
+
+    my $output = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts our nested document')
+        or diag("sops output: $output");
+    is_deeply(Load($output), Load($source), 'and every value survives')
+        if $? >> 8 == 0;
+};
+
 done_testing;
