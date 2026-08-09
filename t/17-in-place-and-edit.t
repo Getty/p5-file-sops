@@ -419,6 +419,11 @@ PERL
     like($err, qr/does not parse/, 'the parse failure is reported as such');
     like($err, qr/no copy/,
         'and the message says the edited text is gone, because it is');
+    unlike($err, qr/remove it and edit again/,
+        'and NOT as a reserved-key collision, which is the other refusal')
+        or diag('the two cases have to stay apart in both directions -- '
+              . 'text that really does not parse must not be reported as a '
+              . 'document that does');
     is(read_file($file), $before, 'the encrypted file is untouched');
 };
 
@@ -441,24 +446,51 @@ PERL
     is(read_file($file), $before, 'the encrypted file is untouched');
 };
 
-subtest 'edit refuses a hand-written sops section' => sub {
-    my $file   = encrypted_file(data => { secret => 'shh' });
-    my $before = read_file($file);
+# Every shape of a hand-written `sops` entry, because the refusal for it used
+# to depend on the shape. A mapping came back from parse() as metadata and got
+# the dedicated message; every other shape is refused INSIDE parse() by
+# File::SOPS::Metadata::from_hash, and edit wrapped that parse in an eval, so
+# it was reported as "The edited document does not parse" -- of a document that
+# parses perfectly (karr #47).
+#
+# sops separates the same two cases in editor mode, and does not care about the
+# shape either (measured on 3.13.3): all four of these give "Tree not valid for
+# encryption" plus the reserved-key text, while broken YAML gives "Could not
+# load tree, probably due to invalid syntax".
+subtest 'edit refuses a hand-written sops entry, whatever shape it has' => sub {
+    my %shape = (
+        mapping => "secret: shh\\nsops:\\n  version: 9.9.9\\n",
+        scalar  => "secret: shh\\nsops: mine\\n",
+        list    => "secret: shh\\nsops:\\n  - one\\n  - two\\n",
+        null    => "secret: shh\\nsops:\\n",
+    );
 
-    my $ed = editor('sopskey', <<'PERL');
-open my $out, '>', $file or die $!;
-print $out "secret: shh\nsops:\n  version: 9.9.9\n";
-close $out;
+    for my $name (sort keys %shape) {
+        my $file   = encrypted_file(data => { secret => 'shh' });
+        my $before = read_file($file);
+
+        my $ed = editor("sopskey-$name", <<"PERL");
+open my \$out, '>', \$file or die \$!;
+print \$out "$shape{$name}";
+close \$out;
 PERL
 
-    my $err = error_from(sub {
-        File::SOPS->edit(file => $file, identities => [$secret], editor => $ed)
-    });
+        my $err = error_from(sub {
+            File::SOPS->edit(file => $file, identities => [$secret], editor => $ed)
+        });
 
-    like($err, qr/top-level 'sops' entry/,
-        'a sops section typed into the plaintext is refused')
-        or diag('parse() splits it off, so nothing downstream would ever see it');
-    is(read_file($file), $before, 'the encrypted file is untouched');
+        like($err, qr/top-level 'sops' entry/,
+            "a sops entry typed into the plaintext is refused ($name)")
+            or diag('parse() splits it off, so nothing downstream would ever see it');
+        like($err, qr/remove it and edit again/,
+            "and named as the reserved key it is ($name)");
+        unlike($err, qr/does not parse/,
+            "not as a document that does not parse, because it does ($name)")
+            or diag('the reserved-key refusal reaches edit as an exception out '
+                  . 'of parse(); reporting it as a parse failure sends the user '
+                  . 'looking for a syntax error that is not there');
+        is(read_file($file), $before, "the encrypted file is untouched ($name)");
+    }
 };
 
 subtest 'edit removes the plaintext even when the editor fails' => sub {

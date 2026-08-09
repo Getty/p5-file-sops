@@ -1010,20 +1010,39 @@ sub edit {
 
     my ($edited, $edited_metadata) = do {
         my @parsed = eval { _format_class($format)->parse($after) };
-        croak "The edited document does not parse (" . _reason($@) . "). "
+        my $err    = $@;
+
+        # A top-level `sops` entry of the user's own is NOT a parse failure and
+        # must not be reported as one -- `sops: mine` parses perfectly, it just
+        # cannot be encrypted over a metadata section that goes in the same
+        # place, and the remedy is to rename one key rather than to hunt for a
+        # syntax error that is not there.
+        #
+        # parse() reports the two shapes of that entry differently: a mapping
+        # comes back as metadata, and every other shape (a scalar, a list, an
+        # explicit null) is refused inside parse() by
+        # File::SOPS::Metadata::from_hash, so it arrives here as an exception
+        # and has to be sorted back out of the parse branch. Both shapes end at
+        # the same croak.
+        #
+        # sops draws the line in exactly this place, with two distinct messages
+        # (measured on 3.13.3 in editor mode): "Could not load tree, probably
+        # due to invalid syntax" for text that does not parse, and "Tree not
+        # valid for encryption" plus the reserved-key text for a top-level
+        # `sops` entry -- for a scalar, a list, a null and a mapping alike.
+        croak _edited_sops_key_reserved($file) if _is_sops_not_a_mapping($err);
+
+        croak "The edited document does not parse (" . _reason($err) . "). "
             . "'$file' is unchanged, and the edited text has been discarded "
             . "together with the temporary file it was in -- there is no copy "
             . "of it left. sops keeps the editor open until the document "
             . "parses; this method cannot, because it may have no terminal to "
             . "return to."
-            if $@;
+            if $err;
         @parsed;
     };
 
-    croak "The edited document has a top-level 'sops' entry. That name is "
-        . "reserved for the metadata section, which is written back "
-        . "automatically -- remove it and edit again. '$file' is unchanged."
-        if $edited_metadata;
+    croak _edited_sops_key_reserved($file) if $edited_metadata;
 
     my $encrypted = $class->encrypt(
         data       => $edited,
@@ -1104,6 +1123,13 @@ has not produced an edit worth encrypting. sops behaves the same way
 The edited text must parse, as one document, to a mapping, and must not carry
 a top-level C<sops> entry of its own. Any of those dies with the original file
 untouched.
+
+Those are two refusals, not one, and they say so: an entry of your own under
+that name is refused as a reserved key -- whatever shape it has, a mapping, a
+scalar, a list or an explicit C<null> -- and never as a parse failure, because
+such a document parses perfectly well. sops separates the same two cases in
+its editor mode, as C<Tree not valid for encryption> against C<Could not load
+tree, probably due to invalid syntax>.
 
 B<A document that does not parse is lost.> The temporary file is removed on the
 way out, so the only copy of what was typed is whatever the editor still has in
@@ -1392,6 +1418,39 @@ sub _sops_key_reserved {
       . "rotate to re-key it, or decrypt it first. If it really is plaintext, "
       . "rename the entry. (sops refuses such a file too, with exit code 203, "
       . "and points at its editor mode for the same reason.)";
+}
+
+# The same refusal for text that came back from an editor, which is a different
+# situation with a different remedy: the document was just typed, nothing has
+# been written yet, and pointing the user at edit -- which is where they
+# already are -- would be no help at all.
+#
+# Both ways an edited document can carry the entry end here. See edit.
+sub _edited_sops_key_reserved {
+    my ($file) = @_;
+    return
+        "The edited document has a top-level 'sops' entry. That name is "
+      . "reserved for the metadata section, which is written back "
+      . "automatically -- remove it and edit again. '$file' is unchanged.";
+}
+
+# Is this exception the "top-level 'sops' entry is not a mapping" refusal?
+#
+# That refusal lives in File::SOPS::Metadata::from_hash, which the format
+# handlers call from inside parse(), so a caller of parse() receives it as an
+# exception -- indistinguishable, without this, from the document not parsing.
+# edit is the only caller that has to tell the two apart.
+#
+# Keying on the message coupled this to another module's wording, deliberately
+# and in preference to the alternatives: a syntax-only parse in the format
+# handlers, or a typed exception, both reach well past the one call site that
+# needs the distinction. t/17-in-place-and-edit.t pins both branches, so a
+# rewording in Metadata.pm fails a test rather than quietly restoring the
+# regression this replaced (karr #47) -- edit reporting a document that parses
+# as one that does not.
+sub _is_sops_not_a_mapping {
+    my ($err) = @_;
+    return defined $err && $err =~ /\Athe top-level 'sops' entry is\b/;
 }
 
 # Say WHERE something went wrong. A generic failure in a document of a hundred

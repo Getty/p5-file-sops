@@ -408,6 +408,20 @@ Revision history for File-SOPS
     document is re-encrypted under a NEW data key rather than the
     existing one - so edit refuses the same files rotate refuses, and
     for the same reason.
+  - edit's two refusals for what comes back from the editor stay apart:
+    a top-level 'sops' entry of the caller's own is reported as the
+    reserved key it is, and text that will not parse as a parse failure.
+    The reserved-key message was reachable only for an entry that was a
+    MAPPING - every other shape is refused inside the format handler's
+    parse, and edit wraps that parse in an eval, so 'sops: mine' was
+    reported as "The edited document does not parse" for a document that
+    parses perfectly well. Never released: the parse-time refusal that
+    made it reachable is new in this same release, and the file was left
+    untouched either way. sops draws the line in the same place and does
+    not care about the shape either - "Tree not valid for encryption"
+    with the reserved-key text for a scalar, a list, a null and a
+    mapping alike, against "Could not load tree, probably due to invalid
+    syntax" for text that does not parse (measured on 3.13.3).
   - DATA LOSS - encrypt_file, decrypt_file and rotate now write their
     output atomically, as encrypt_in_place and edit already did. All
     three opened the target with '>', which truncates it before the
