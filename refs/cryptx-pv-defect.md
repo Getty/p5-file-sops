@@ -1,12 +1,51 @@
 # CryptX PV non-NUL-termination — upstream report draft
 
-Status: **draft, awaiting maintainer sign-off before sending to
-bug-CryptX@rt.cpan.org** (CPAN-RT; CryptX does not maintain a GitHub issues
-list, so this is the canonical issue channel for the distribution).
+Status: **FILED 2026-08-09 as https://github.com/DCIT/perl-CryptX/issues/125.**
+
+This file is the working draft that went into it, kept for the measurements.
+The issue text is the canonical version; it says less about File::SOPS and
+more about the defect.
+
+Channel: GitHub issues, which the release META.json names as the
+distribution's bugtracker. An earlier version of this draft wrongly said
+CryptX had no GitHub issue list and addressed it to bug-CryptX@rt.cpan.org.
+Searched before filing: no existing issue mentioned NUL, SvCUR or SvPVX.
 
 Target: maintainer of CryptX (Karel Miko, CPAN id MIK).
-Affected versions: at least 0.087; behaviour not yet verified on 0.090
-(released 2026-06-17).
+Affected versions: **0.087 and 0.090 (the current release), measured, identical
+behaviour.** 0.090 was installed into a throwaway lib directory and probed
+side by side with 0.087; the defect has not been fixed in the interim.
+
+---
+
+## Survey: which calls are affected
+
+Done for the filing, and it settles what the ticket left open. 100 iterations
+each on 0.090, peeking the returned SV **through a reference** — passing the
+value to a sub copies the SV and you measure perl's copy, which makes every
+call look clean. Identical numbers on 0.087.
+
+| call | not NUL-terminated at SvCUR |
+|---|---|
+| `gcm_decrypt_verify` → plaintext | 100/100 |
+| `gcm_encrypt_authenticate` → ciphertext | 100/100 |
+| `chacha20poly1305_decrypt_verify` → plaintext | 100/100 |
+| `chacha20poly1305_encrypt_authenticate` → ciphertext | 100/100 |
+| `gcm_encrypt_authenticate` → tag | 0/100 |
+| `chacha20poly1305_encrypt_authenticate` → tag | 0/100 |
+| `hmac('SHA256', …)` | 0/100 |
+| `sha256` | 0/100 |
+| (control) a perl-built string | 0/100 |
+
+The split is by return *shape*, not by function: variable-length results built
+into a preallocated SV are not terminated, fixed-size digests and tags are.
+
+`Crypt::PRNG::random_bytes` is the same defect and is **length-dependent**,
+which is a trap for anyone re-measuring: `(4)`, `(16)`, `(21)`, `(32)`, `(64)`
+come back non-terminated ~100/100, while `(11)` and `(12)` are terminated
+100/100. A survey that happens to probe one of the clean lengths concludes the
+call is fine. This is why docs/adr/0004's table and a first pass at this one
+disagreed — the ADR probed 32, the first pass probed 11. The ADR is right.
 
 ---
 
@@ -86,9 +125,10 @@ mechanism (`sv_setpvn` / `sv_setpvn_fresh` / similar).
 
 ## Environment
 
-- Perl 5.x (reproduced on the project's CI Perl; the bug is independent of
-  the perl version because the precondition — NUL at SvPVX + SvCUR — is
-  about the CryptX XS, not perl).
-- CryptX 0.087 (the version pinned by our cpanfile at the time of writing).
-  0.090 is the latest released version as of filing; we have not yet
-  verified whether the bug still reproduces there.
+- perl 5.36.0, x86_64 linux (glibc). The precondition — no NUL at
+  SvPVX + SvCUR — is a property of the CryptX XS rather than of perl, so we
+  do not expect the perl version to matter; we have only measured this one.
+- CryptX 0.087 (what was installed here; our cpanfile requires CryptX without
+  a version bound). 0.090 is the current release and we have NOT yet checked
+  whether it still reproduces — that check belongs in the issue, not in a
+  claim.
