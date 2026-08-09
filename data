@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-08T23:54:10Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:22Z
+id: 14
+priority: high
+started: 2026-08-08
+status: done
+tags:
+- bug
+- yaml
+- data-loss
+title: 'Multi-document YAML: every document but the last is silently dropped'
+updated: 2026-08-09T01:01:14Z
+---
+
+The YAML parser calls Load in scalar context, which returns only the last document. A two-document input is encrypted down to just the second document, silently. sops supports multi-document YAML. This is data loss on a write path with no error.
+Fixed on branch worktree-agent-a3d1b61d05275de53, commit abb38d4. Chose loud refusal over full support: measured sops 3.13.3 and its multi-document model is one tree of N branches with shared metadata and one MAC across all documents, which is a data-model change across File::SOPS.pm, not a format fix. Full support spec'd with all measurements in #31 (wants an ADR first for the public API shape). Data loss is gone: parse now loads in list context and refuses >1 document; the MAC reparse holds the same rule independently because YAML::PP and YAML::XS take opposite ends of a multi-document stream in scalar context. Regression test t/09-multidoc-yaml.t, verified red on relapse (6/7 subtests fail), interop subtest ran against the real binary.
+Multi-document YAML no longer silently truncates: refused loudly. Full support tracked in #31. Also filed #32 for a pre-existing flaky interop subtest found while testing (unrelated to this change).
