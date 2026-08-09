@@ -1,0 +1,35 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T05:54:47Z
+id: 55
+priority: high
+status: done
+tags:
+- api
+- interop
+- decision
+title: Confirm the .sops.yaml config-search divergence from sops, or revert it
+updated: 2026-08-09T21:58:56Z
+---
+
+Needs the maintainer, not an agent. Shipped in b8c8c50 (karr #38) as a deliberate divergence and documented as one, but it is the kind of call that should be confirmed rather than inherited.
+
+sops searches for .sops.yaml upward from the WORKING DIRECTORY. File::SOPS::creation_rules_for searches upward from the FILE.
+
+Measured independently by the orchestrating agent, sops 3.13.3, with a config at the tree root (encrypted_suffix _OUTER) and another at a/b/ (_INNER), file at a/b/c/s.yaml:
+
+  sops -e a/b/c/s.yaml   from the tree root  -> _OUTER
+  sops -e s.yaml         from a/b/c          -> _INNER
+  creation_rules_for     from either         -> _INNER
+
+So for the same file and the same intent, sops and this library can select DIFFERENT RULES, which means a different set of age recipients. That is not a formatting difference: it decides who can read the secret. A file encrypted through this library can end up readable by a different set of people than the same file encrypted with the sops CLI from the repository root.
+
+The case for what shipped: a library is handed a path, and the caller working directory has nothing to do with it. A daemon with cwd / would never find a config. Where a repository has a single .sops.yaml at its root -- the common case by a wide margin -- the two searches are identical and nothing is observable.
+
+The case against: "interop is the product" is the first house rule, and this is a divergence in the direction that decides recipients.
+
+Options: (a) confirm as-is; (b) match sops exactly and search from the cwd; (c) search from the file but croak when a cwd-based search would have found a DIFFERENT config, so the ambiguous case is loud instead of silently divergent.
+
+Pinned in t/04-interop.t, which asserts both behaviours side by side, so whichever way this goes the test has to be updated deliberately.
+Vom Maintainer als-ist bestaetigt (Option a). Recorded in ADR 0007 mit den Messungen und den beiden verworfenen Alternativen; POD verweist darauf, CLAUDE.md nennt es nicht mehr offen. Kein Code geaendert. Committet als d6ec7df.
