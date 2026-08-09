@@ -188,21 +188,15 @@ requires 'JSON::MaybeXS';     # JSON parsing
 
 ## Encryption Backends
 
-**age only** — that is still Phase 1, and everything below is roadmap (karr #39):
-- Uses `Crypt::Age` for data key encryption
-- Most common for local/team use
+**age only** — and `File::SOPS::Backend::Age` is the only backend module. HashiCorp Vault
+is the only other one on the roadmap (karr #39).
 
-Not implemented:
-- PGP (via Crypt::OpenPGP or gpg CLI)
-- AWS KMS
-- GCP KMS
-- Azure Key Vault
-- HashiCorp Vault
-
-Their `sops`-section fields are modelled and round-trip untouched, so a document shared
-with such a recipient can be *read* here through its age entry. Anything that generates
-a new data key — `rotate`, `edit` — refuses such a document rather than dropping the
-entries it cannot re-wrap.
+`File::SOPS::Metadata` models the `sops`-section fields for every backend sops supports
+(`pgp`, `kms`, `gcp_kms`, `azure_kv`, `hc_vault`) as first-class attributes, and round-trips
+unrecognised fields through `extra`. A document shared with such a recipient can therefore
+be *read* here through its age entry — MAC and all. Anything that generates a new data
+key — `rotate`, `edit` — refuses such a document rather than dropping the entries it
+cannot re-wrap.
 
 ## Cryptographic Operations
 
