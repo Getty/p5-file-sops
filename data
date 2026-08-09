@@ -1,0 +1,108 @@
+---
+claimed_at: 2026-08-09T00:58:42Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T23:53:34Z
+id: 32
+priority: medium
+status: done
+tags:
+- interop
+- flaky
+- test
+- float
+title: 'Flaky interop subtest 17: 1e20 comes back as 1e21 roughly 1 run in 30'
+updated: 2026-08-09T01:02:04Z
+---
+
+Observed twice while working #14, on COMMITTED main (5f7b502) and unrelated to that change.
+
+t/04-interop.t subtest 17 "Values that do not survive Perl numeric conversion" fails intermittently:
+
+    Failed test (and gets the value back) at t/04-interop.t line 683.
+             got: 1e+21
+        expected: 1e+20
+
+What is known:
+- Intermittent, low rate. Seen twice in ~90 observed runs, then 0/40 on a clean tree and 0/40 with the #14 change applied, so it is rare rather than correlated with any edit.
+- It is NOT a MAC failure. The preceding is($@, "") passes in the failing run, so the document verified and only the returned value is wrong.
+- Not reproducible in isolation: 30 runs of just "big: 1e20" and 30 runs of the full five-key fixture, each with a fresh keypair and tempdir, produced 0 mismatches. It seems to need the shared $tempdir / shared keypair / long-running process shape of the real test file.
+- Not stderr contamination of the captured YAML: the test does `sops -e ... 2>&1`, but sops -e wrote nothing to stderr in 25/25 runs.
+- The value is a factor of exactly 10 out, i.e. one extra digit. sops stores 1e20 as the expanded 21-digit form 100000000000000000000; the ciphertext data field is 28 base64 chars = 21 plaintext bytes, so a 1e21 result means 22 bytes were decrypted. Whatever goes wrong changes the plaintext length, it does not merely restringify.
+
+Next step for whoever picks this up: instrument a copy of the subtest to diag the raw ENC value, its decrypted bytes and the base64 data length on failure, and loop it inside one process with the shared tempdir until it trips. The interesting question is whether sops encrypted a different input or we decrypted the wrong bytes.
+
+Do not fix by loosening the assertion. The subtest exists because Go recomputes the MAC from the canonical numeric form, so a value this library restringifies differently is exactly the defect class it guards.
+Reproduced reliably and narrowed considerably while working #16/#17/#13. Superseding two conclusions above: it is NOT specific to the interop test, and it is NOT a decrypt-of-the-wrong-bytes.
+
+Reproduction that fails 10-30 times per 800 iterations, no sops binary, no shared tempdir, one key:
+
+  use YAML::XS (); use File::SOPS; use Crypt::Age;
+  my ($pub,$sec) = Crypt::Age->generate_keypair();
+  for (1..800) {
+    my $n = YAML::XS::Load("c: 1e20\n");
+    my $y = File::SOPS->encrypt(data => $n, recipients => [$pub], format => "yaml");
+    my $out = File::SOPS->decrypt(encrypted => $y, identities => [$sec]);
+    warn "corrupted: $out->{c}" unless $out->{c} == 1e20;
+  }
+
+Earlier "not reproducible in isolation" was a sample-size problem: the rate is roughly 1-4% per round trip, so 30 runs is far too few. The same loop is what makes t/07-mac.t subtest "lossy values survive a File::SOPS round trip" fail every 20-40 runs of that file, so this is not only an interop-test flake.
+
+The "22 bytes were decrypted" hypothesis above is wrong. Measured on a failing case:
+  * the ciphertext is 21 bytes (28 base64 chars, no padding) - the correct
+    canonical form 100000000000000000000
+  * a standalone decrypt_bytes on that same ENC value returns exactly those
+    21 bytes, with clean SV flags (POK only, no IOK/NOK), converting to 1e20
+  * decrypting the IDENTICAL document string a second time in the same
+    process returns the correct 1e20
+  * it happens with ignore_mac => 1 too, so MAC verification is not involved
+  * it happens with a single-leaf document, so hash iteration order over
+    sibling leaves is not involved
+  * the encrypt side is provably correct: value_to_bytes produces the right
+    21-byte form every time
+
+So the file is intact and the ciphertext is intact; File::SOPS->decrypt is simply non-deterministic on identical input. That puts the defect between gcm_decrypt_verify returning the plaintext and Encrypted::_deserialize_value returning $data + 0.0. Prime suspect: a numeric flag on the XS-returned scalar, which would make + 0.0 read a stale NV instead of the PV. If that is it, the fix is to force the string ("$data" + 0.0) and the int branch needs the same treatment. Worth checking the CryptX version before concluding the bug is ours.
+
+Present at the same rate on 8c336d7 and on a branch based on 5f7b502, so it predates both the encryption-rule work and the value-encoding work.
+
+Severity is higher than "flaky test": this is a wrong value handed to a caller, silently, by a library whose job is to return exactly what was stored.
+ROOT CAUSE FOUND, FIXED, not committed (working tree).
+
+It is an UPSTREAM CryptX defect, not a stale NV. The suspicion in the ticket was
+close but wrong about the mechanism: nothing caches a wrong NV. gcm_decrypt_verify
+returns an SV whose PV buffer is NOT NUL-terminated at SvCUR. Perl's sv_2nv only
+consults SvCUR through grok_number; for anything grok_number cannot settle as an
+integer inside a UV -- every float, and every integer wider than 64 bits -- it
+falls through to Atof(SvPVX), a C string read with NO length. So $data + 0.0 in
+_deserialize_value ran past the 21-byte plaintext into the next heap byte, and
+when that byte was an ASCII digit it joined the number.
+
+Proof (no File::SOPS involved, byte past SvCUR read via unpack P after poisoning
+the allocator):
+  CUR=21 LEN=23 byte[CUR]=0  -> direct=1e+20 copy=1e+20  ok
+  CUR=21 LEN=23 byte[CUR]=51 -> direct=1e+21 copy=1e+20  MISMATCH   ('3')
+Devel::Peek on a failing leaf vs a passing one differs by exactly the trailing
+\0 that pv_display prints when LEN > CUR. Measured rate matches P(byte is 0-9)
+= 10/256 = 3.9%.
+
+Fix: normalise the scalar where it crosses out of CryptX --
+File::SOPS::Encrypted::decrypt_bytes now returns "$plaintext" instead of
+$plaintext. Assignment through a stringify goes via sv_setpvn, which allocates a
+buffer Perl terminates itself. Chosen over patching the two conversions in
+_deserialize_value because decrypt_bytes is the boundary: the type conversion,
+the MAC digest and any caller doing arithmetic on the returned bytes are all
+downstream of it, and a per-conversion fix would need repeating at each new one.
+
+Measured before/after on this machine (perl 5.36.0, CryptX 0.087, glibc):
+  ticket repro loop 4000 iterations : 143 bad -> 0 bad
+  t/07-mac.t, 60 runs               : 4 failures -> 0 failures
+  new t/18-decrypt-determinism.t    : failed 3/3 runs -> passes 5/5
+
+Regression test: t/18-decrypt-determinism.t, ~2.2s, 60 round trips x 50 float
+leaves = 3000 leaf decryptions. Statistical by necessity (the defect only fired
+when the trailing byte was a digit); N chosen so the unfixed code fails with
+probability 1 - 0.988**3000. Verified red before the fix, green after.
+
+Full suite green in a clean worktree at ff35348 with only this change, and
+t/04-interop.t ACTUALLY RAN against sops 3.13.3 -- 27 subtests, all pass.
