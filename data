@@ -1,0 +1,79 @@
+---
+claimed_at: 2026-08-09T06:37:49Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T06:04:45Z
+id: 56
+priority: high
+started: 2026-08-09
+status: done
+tags:
+- interop
+- wire
+- json
+title: JSON output depends on which JSON::MaybeXS backend the process happened to
+  load, and neither matches sops on floats
+updated: 2026-08-09T06:39:57Z
+---
+
+Measured while working karr #49 (sops 3.13.3, Cpanel::JSON::XS 4.42, JSON::XS 4.03).
+
+File::SOPS::Format::JSON emits through JSON::MaybeXS->new(utf8/pretty/canonical). Which backend that is is decided once per process, by JSON::MaybeXS::_choose_json_module:
+
+    return "Cpanel::JSON::XS" if $INC{"Cpanel/JSON/XS.pm"};
+    return "JSON::XS"         if $INC{"JSON/XS.pm"} && eval { JSON::XS->VERSION(3.0); 1 };
+    ... otherwise require Cpanel::JSON::XS, then JSON::XS, then JSON::PP
+
+so whoever loads JSON::MaybeXS FIRST in a process decides it, and CryptX (pulled in by File::SOPS::Encrypted via Crypt::AuthEnc::GCM) loads JSON.pm and with it JSON::XS.
+
+The backends do not emit the same bytes:
+
+    perl -Ilib -MFile::SOPS -e ... Format::JSON->emit({ratio => 1.0, zero => -0.0})
+
+    Cpanel::JSON::XS   "ratio" : 1.0     "zero" : -0.0
+    JSON::XS           "ratio" : 1       "zero" : -0
+
+Today lib/File/SOPS.pm line 14 (use JSON::MaybeXS) runs before File::SOPS::Encrypted, so a plain `use File::SOPS` gets Cpanel::JSON::XS. It is not a guarantee -- a caller who loaded JSON::XS (or anything that loads it) before File::SOPS gets JSON::XS instead:
+
+    perl -MJSON::XS -Ilib -MFile::SOPS -e "print JSON::MaybeXS::JSON()"   # JSON::XS
+    perl -Ilib -MFile::SOPS -MJSON::XS -e "print JSON::MaybeXS::JSON()"   # Cpanel::JSON::XS
+
+So the same data can be written two ways by the same library depending on the calling program.
+
+What sops writes, measured -- plaintext {"ratio_unencrypted": 1.0, "zero_unencrypted": -0.0} through `sops --encrypt --unencrypted-suffix _unencrypted --output-type json`:
+
+    "ratio_unencrypted": 1,
+    "zero_unencrypted": -0,
+
+i.e. sops agrees with JSON::XS, not with the backend we currently land on.
+
+Not currently a verification failure: `sops -d` accepts our Cpanel output (exit 0, MAC verifies) because Encrypted::value_to_bytes already hashes NV 1.0 as "1" and sops renormalises the parsed float the same way. It is a byte-difference against the reference emitter plus a caller-dependent output, which is what this ticket is about.
+
+Wire lane decision needed, one of:
+  a) pin the backend deliberately and say why in the POD, or
+  b) make Format::JSON emit independently of the backend (own number formatting), or
+  c) accept the divergence and document it.
+
+Do NOT resolve this by deleting the use line in SOPS.pm -- see karr #49 for why that path is a disguised wire change.
+Measured before implementing; the ticket premise held on the bytes and NOT on the consequence.
+
+SCOPE (measured, sops 3.13.3, Perl 5.36.0, Cpanel::JSON::XS 4.40, JSON::XS 4.04, JSON::PP 4.16):
+  * Only FLOATS differ between backends. Integers (including int64max and 2**53+1), strings, booleans, null, key order, unicode and pretty-printing are byte-identical across all three. Encrypted values are ENC[...] strings, so untouched -- premise confirmed. Metadata fields are strings/ints/bools, so untouched.
+  * So the affected values are exactly: unencrypted floats (unencrypted_suffix / encrypted_suffix / unencrypted_regex and anything else left in plaintext), plus everything decrypt_file and edit write.
+  * The YAML path has no backend choice (YAML::XS is parser and emitter) and does not move.
+
+IT DOES TOUCH THE MAC. The ticket said no; verified otherwise:
+  * JSON::XS writes NV -0.0 as `-0`. `-0` parses back as the INTEGER zero (all three backends, and Go), digesting as "0" while the MAC covers "-0". Our own decrypt fails, and sops -d fails: MAC mismatch, exit 51.
+  * JSON::XS DECODER is not correctly rounded: it reads 0.3 as the double whose shortest form is 0.30000000000000004, and 0.7 as 0.7000000000000001. Consequence measured end to end: a document sops wrote and can itself verify was REFUSED here with "MAC verification failed", in any process that had JSON::XS loaded. That is the read side, which the ticket did not consider at all.
+  * Only 1.0 vs 1 is cosmetic: both digest as "1", and sops -d accepts our 1.0 (exit 0).
+
+AND THE REFERENCE IS WRONG ON -0. sops --encrypt of {"negzero_unencrypted": -0.0} writes `-0` and then FAILS ITS OWN MAC on the file it just produced (sops -d exit 51, reproduced standalone). So "sops agrees with JSON::XS" is true about bytes and false about interop: adopting JSON::XS rendering would import a bug the reference cannot survive either.
+
+DECISION: option (a), but toward Cpanel::JSON::XS, not toward sops literal bytes -- docs/adr/0005. Format::JSON names the backend for emitter AND parser; JSON::MaybeXS stays only for JSON->true/false, which is JSON::PP::Boolean on every backend. cpanfile gains Cpanel::JSON::XS 4.38 (the version JSON::MaybeXS itself declares, so usually already installed). Option (b) is not reachable without writing our own emitter AND parser: no JSON backend accepts a pre-rendered number (a scalar with a PV is emitted quoted), and the decoder half cannot be fixed by formatting at all.
+
+Byte effect: none for a process that loads File::SOPS normally (the pinned object is byte-identical to JSON::MaybeXS(utf8,pretty,canonical) on Cpanel). For a JSON::XS-contaminated process, floats only: 1 -> 1.0, -0 -> -0.0. Old documents stay readable except a `-0`, which never was. Parsing also gains a deterministic refusal of duplicate keys (JSON::XS accepted them, last wins).
+
+Two defects found alongside, NOT fixed here, split out: karr #58 (all emitters render floats with %.15g while the digest uses the shortest round-trip form, so an unencrypted 0.1+0.2 fails its own MAC in BOTH formats and in sops) and karr #59 (non-finite floats reach JSON as null/inf and YAML as Inf, never round-trip).
+Format::JSON names Cpanel::JSON::XS for emitter and parser instead of inheriting whatever JSON::MaybeXS bound (docs/adr/0005, written before the code). Determinism and the sops-rendering question turned out to point the SAME way: JSON::XS both writes -0 (a document that fails its own MAC and sops -d, exit 51 -- sops writes -0 itself and cannot read it back either) and decodes 0.3 one ULP off (a valid sops document was REFUSED here with "MAC verification failed"). So the ticket premise "does not touch the MAC" does not hold, and matching sops literal bytes would have been the wrong direction. New prerequisite Cpanel::JSON::XS 4.38, the version JSON::MaybeXS itself declares. No bytes move for a process that loads File::SOPS normally; for a JSON::XS-contaminated one, unencrypted floats only (1 -> 1.0, -0 -> -0.0), old documents still readable. Changes entry written. t/23-json-backend.t compares fresh child perls with each backend preloaded (emit bytes, parsed values via value_to_bytes, and a full encrypt/decrypt round trip) -- verified RED against HEAD 36aafbd (3 of 18), green after. t/04-interop.t gained a both-directions subtest driving the real binary from a -MJSON::XS child -- also verified red against HEAD (Perl->sops MAC mismatch exit 51, sops->Perl refused). Full suite SOPS_BIN=$HOME/bin/sops prove -lr t/: 555 tests, all pass, t/04-interop.t RAN against sops 3.13.3, and the whole suite also passes under PERL5OPT=-MJSON::XS. Split out and not fixed: karr #58 (%.15g float truncation vs the shortest-round-trip digest, both formats, fails its own MAC) and karr #59 (non-finite floats). Left for the API lane: File/SOPS.pms `use JSON::MaybeXS` is now genuinely unused (comment updated, line kept) -- karr #49s original premise is true as of this change. NOT committed.
+Committed. Orchestrating agent re-verified: full suite 555 tests green both plainly and under PERL5OPT=-MJSON::XS; 9 of 18 subtests in t/23 red against 36aafbd under JSON::XS. ADR 0005 accepted.
