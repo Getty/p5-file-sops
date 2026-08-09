@@ -196,9 +196,14 @@ GCP KMS, Azure KV, Vault (karr #39; the metadata fields for them exist and
 round-trip, the encryption does not). Treat that file as a roadmap, not as a
 description of the code.
 
-`encrypt_in_place` and `edit` do exist. Both write through `_replace_file` — temp
-file next to the target, then `rename` — so a failure part-way leaves the original
-intact; `encrypt_file` and `rotate` still write over a file the old way (karr #40).
+`encrypt_in_place` and `edit` do exist. **Every** method that writes a file now goes
+through `_replace_file` — temp file next to the target, then `rename` — so a failure
+part-way leaves the original intact (karr #40 closed this for `encrypt_file`,
+`decrypt_file` and `rotate`, which used to open the target with `>` and check neither
+the `print` nor the `close`). The cost is a new inode: hard links keep the old
+content, and replacing a file needs write permission on the *directory*. A target
+that exists and is not a regular file (`/dev/stdout`, a fifo) is written through
+directly instead.
 `edit` re-encrypts under a **new data key**, where `sops edit` keeps the existing one
 (karr #41), which is why it refuses the same foreign-key-material documents `rotate`
 refuses.

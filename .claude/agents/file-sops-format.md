@@ -52,10 +52,19 @@ property of the emitters is load-bearing for the whole encoding rule.
   calls, never assigned at load time: it is a process global that used to rewrite how
   unrelated code in the same interpreter parsed YAML.
 
-- **`decrypt_file` still calls `YAML::XS::Dump` directly**, bypassing the format
-  handler, and therefore has to set the boolean mode itself. That duplication is filed
-  as karr #35; it is a live trap, because a change made in the handler alone does not
-  reach that path.
+- **`emit` is on the wire path — it is not a plaintext formatting knob.** Each handler
+  has one emitter: `emit` turns a tree into text, `serialize` is `emit` plus the `sops`
+  section, and `File::SOPS::_serialize_plaintext` — what `decrypt_file` writes and what
+  `edit` hands the editor — is `emit` on its own. So a change that looks like it only
+  affects the plaintext output changes the encrypted document too.
+
+  The trap here **inverted** with karr #35 (commit 3e4f3bb). Until then `decrypt_file`
+  called `YAML::XS::Dump` directly and the danger was that a change in the handler did
+  *not* reach it. Now the danger is the reverse. In particular `canonical` in the JSON
+  encoder and the boolean mode in the YAML one are MAC-relevant: sorted key order is
+  what the MAC's encrypt side hashes in, and it is the document's own order only
+  because `emit` sorts. Dropping `canonical` does not produce ugly output, it produces
+  a document that fails its own digest.
 
 - **Quoting is interop-critical, not aesthetic.** YAML::XS emits a bare RFC3339
   timestamp, Go's yaml.v3 resolves it to `time.Time`, and sops then refuses the whole
