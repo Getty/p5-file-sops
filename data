@@ -1,0 +1,35 @@
+---
+claimed_at: 2026-08-09T05:15:03Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T04:46:34Z
+id: 47
+priority: low
+started: 2026-08-09
+status: done
+tags:
+- bug
+- api
+title: edit reports a reserved-key collision in the edited text as 'does not parse'
+updated: 2026-08-09T05:16:38Z
+---
+
+Found while closing karr #34.
+
+File::SOPS::edit wraps the reparse of the edited text in an eval and reports any failure as "The edited document does not parse (REASON)". Since #34 made a non-mapping top-level sops entry a parse-time refusal, an edited document containing e.g. "sops: mine" now takes that branch - so the user is told the document does not parse when it parses perfectly well, and the dedicated message immediately below ("The edited document has a top-level sops entry. That name is reserved for the metadata section, which is written back automatically -- remove it and edit again.") is unreachable for every shape of that entry except a mapping.
+
+The REASON text is interpolated, so the message is still actionable and the file is left unchanged either way. Only the framing is wrong.
+
+Fix candidate: distinguish the two inside the eval, or let the reserved-key refusal out of the eval and keep it for the dedicated croak. Both touch edit only.
+Direct consequence of the karr #34 fix committed as edb7444 -- our own regression, introduced hours ago, so it should not outlive the release that introduces it. Sequenced for tonight.
+Fixed in the working tree, NOT committed. edit now classifies the exception that comes out of the format handler's parse: File::SOPS::_is_sops_not_a_mapping matches the refusal Metadata::from_hash raises, so every shape of a top-level 'sops' entry in the edited text (scalar, list, null, mapping) reaches the dedicated reserved-key message, and only text that really does not parse gets the parse message. The message itself moved into _edited_sops_key_reserved, shared by both call sites. Chose classification over 'distinguish inside the eval' because the format handlers offer no syntax-only parse and adding one is the format lane's -- recorded as karr #51 with the structural shape (a read-side counterpart to emit, so edit could load-then-validate the way sops does).
+
+Measured on sops 3.13.3 in editor mode, which draws the same line and is shape-independent too: 'Tree not valid for encryption' plus the reserved-key text for sops: mine, a list, a null and a mapping alike, against 'Could not load tree, probably due to invalid syntax' for broken YAML. Recorded in the code comment, the POD and the Changes entry.
+
+Regression test in both directions in t/17-in-place-and-edit.t: the sops-entry subtest now loops over all four shapes and asserts the dedicated message AND that it is not framed as a parse failure; the broken-YAML subtest gained an unlike() so the fix cannot over-correct. Against HEAD 3e4f3bb: 6 assertions fail (scalar, list and null x 2 each), one failing subtest, 1 of 26 top-level tests -- the mapping shape passes there, which is exactly the shape-dependence the ticket describes.
+
+Full suite with the binary, SOPS_BIN=$HOME/bin/sops prove -lr t/: 21 files, 499 tests, all pass. t/04-interop.t RAN (reported 'Using sops binary: /storage/raid/home/getty/bin/sops', sops 3.13.3) and so did the two sops -d subtests at the end of t/17. t/14-encryption-rules.t was green this run; the karr #48 flake did not fire and nothing there was touched.
+
+Files: lib/File/SOPS.pm, t/17-in-place-and-edit.t, Changes (entry under {{$NEXT}}, worded as never-released -- the parse-time refusal that made the branch reachable is new in the same release).
+Committed. Orchestrating agent verified the documented coupling: rewording the croak in Metadata.pm makes t/17 test 19 fail, so the message dependency is pinned rather than silent. Full suite 499 tests, interop ran.
