@@ -1,0 +1,112 @@
+---
+claimed_at: 2026-08-09T05:27:52Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T04:29:21Z
+id: 44
+priority: high
+started: 2026-08-09
+status: done
+tags:
+- crypto
+- duplication
+title: _random_bytes exists twice, and its /dev/urandom fallback does not check the
+  read
+updated: 2026-08-09T05:29:25Z
+---
+
+Found while measuring the CryptX boundaries for ADR 0004 (karr #43). Not fixed there; recorded rather than folded into an ADR-only change.
+
+Two copies:
+  lib/File/SOPS/Encrypted.pm  sub _random_bytes   (the 32-byte IV per value)
+  lib/File/SOPS.pm            sub _random_bytes   (the 32-byte data key)
+
+They are byte-identical apart from where one line wraps. This is the twin
+shape the distribution keeps getting caught by, applied to the CSPRNG rather
+than to the value conversion: the two cannot currently disagree about anything
+observable, but nothing stops them, and one of them generates the data key.
+
+Two things worth deciding at the same time, both in the shared body:
+
+1. The fallback is silent. If Crypt::PRNG fails to load, both fall back to
+   reading /dev/urandom, and neither says so. A caller who thinks they are
+   getting a CSPRNG-backed key gets whatever the fallback produced, with no
+   signal either way. "Fail loud" would argue for croaking instead: CryptX is
+   already a hard runtime prerequisite (Crypt::AuthEnc::GCM), so Crypt::PRNG
+   being absent means the install is broken, not that a fallback is wanted.
+
+2. The fallback does not check its read:
+
+       read $fh, $bytes, $length;
+       close $fh;
+       return $bytes;
+
+   read() can return short, and returns undef on error. A short return here
+   yields a key or an IV of the wrong length with no error. For the IV that is
+   a wrong-length GCM nonce -- ADR-relevant, since 32 bytes is part of the wire
+   format, not a preference. Should be a checked read (or read_random /
+   sysread loop) with a croak.
+
+Suggested shape: one helper, in File::SOPS::Encrypted (which is where the wire
+format lives and which File::SOPS already loads), called by both; no silent
+fallback; checked read if a fallback is kept at all.
+
+No test covers the fallback path today, so a fix wants one that forces it.
+Priority raised to high by the orchestrating agent. The duplication is the cosmetic half; the unchecked read is not. A short read from /dev/urandom yields a data key or a GCM nonce of the wrong LENGTH with no error raised -- that is a cryptographic defect in the fallback path, not a refactor. The silent fallback compounds it: a missing Crypt::PRNG downgrades the CSPRNG without anyone being told.
+
+Sequenced for tonight after karr #35.
+Fixed and pinned, not committed (tree left dirty as instructed).
+
+One helper: File::SOPS::Encrypted::_random_bytes, called by encrypt_value for
+the nonce and directly by File::SOPS::encrypt for the data key. No cycle --
+File::SOPS already loads Encrypted, not the reverse. The copy in File::SOPS.pm
+is gone.
+
+The unchecked read, measured before fixing (CryptX 0.087, sops 3.13.3, real
+binary at ~/bin/sops):
+
+  data key -> 16 bytes   our encrypt OK, our decrypt OK, `sops -d` exit 0
+  data key -> 24 bytes   our encrypt OK, our decrypt OK, `sops -d` exit 0
+  data key -> 20/31      dies inside CryptX as "Invalid key size", blamed on gcm
+  iv -> 12 bytes         written as 12, our decrypt OK, `sops -d` exit 0
+  iv ->  1 byte          written as  1, our decrypt OK, `sops -d` exit 0
+  iv ->  0 bytes         dies inside CryptX as CRYPT_ERROR
+
+So a short read ran all the way onto the wire and past the reference binary.
+16 and 24 are valid AES key sizes; GCM does not fix the nonce length, so a
+1-byte nonce is a working nonce out of a 256-value space. Nothing between the
+CSPRNG and sops looks at either length, which is why the check has to be at the
+source. It croaks naming only lengths, never bytes.
+
+The fallback is deleted, not repaired. Crypt::PRNG ships in CryptX, the same
+installed distribution as the Crypt::AuthEnc::GCM that Encrypted.pm uses at
+compile time (verified: same .packlist), so the eval could not fail in any
+install able to compile the file -- unreachable code that would have silently
+downgraded the CSPRNG if reached. Crypt::PRNG is now a compile-time use.
+
+IV size checked against the reference, not changed: sops 3.13.3 writes iv=32
+bytes and tag=16 for every value. The 32-byte nonce in Encrypted.pm is correct.
+
+Regression test t/21-random-bytes.t replaces Crypt::PRNG::random_bytes with a
+truncating source and requires the wrong length to be refused before it becomes
+a key or a nonce; it also asserts there is no second _random_bytes, and that the
+error does not carry the bytes. Against HEAD 4f17de5 (clean worktree, test
+copied in): 6 of 7 subtests fail, 32 of 42 assertions. The 7th is the anchor
+subtest (32-byte iv, 16-byte tag, round trip) and passes on both.
+
+Full suite with interop: SOPS_BIN=$HOME/bin/sops prove -lr t/ -> 22 files, 506
+tests, all pass. t/04-interop.t RAN (sops 3.13.3 at ~/bin/sops, no skip_all,
+no skipped assertions anywhere in the suite).
+
+No ADR: no wire bytes move. A correctly generated document is byte-identical
+before and after; only a broken CSPRNG behaves differently. The measurements
+above live in the comment on _random_bytes and in the test header, which is
+where a future reader deciding to delete the length check would look.
+
+Changes entry added under {{$NEXT}} as SECURITY.
+Follow-up filed as karr #52 (Crypt::Age has the same unchecked-return shape for
+the age file key that wraps our data key; upstream, low).
+Committed. Orchestrating agent re-ran the counter-check: 6 of 7 subtests in t/21 fail against 4f17de5. Full suite 506 tests, interop ran.
+
+Decision on the ADR the worker offered: NOT written. The fix moves no wire bytes and the architectural content is thin -- 'the source is the only place a check can live' is already in the code comment next to the check, which is where someone about to delete it will read it. The reference-implementation measurements (sops accepts a 16-byte data key and a 1-byte nonce, exit 0) are recorded in that comment and in the test header. Reopen if the maintainer wants them as ADR 0005.
