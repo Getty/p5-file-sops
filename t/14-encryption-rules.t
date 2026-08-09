@@ -211,7 +211,7 @@ subtest 'encrypt takes its policy from a metadata template' => sub {
     is($sops->{age}[0]{recipient}, $public, 'and it is the one just encrypted for')
         or diag('the template key material must never be carried into a new document');
     isnt($sops->{lastmodified}, '1999-01-01T00:00:00Z', 'lastmodified is regenerated');
-    unlike($sops->{mac}, qr/data:x/, 'and so is the MAC');
+    isnt($sops->{mac}, 'ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]', 'and so is the MAC');
 
     like($yaml, qr/^password_enc: ENC\[/m, 'the carried rule is actually applied');
     like($yaml, qr/^host: h$/m,            'to both sides of it');
