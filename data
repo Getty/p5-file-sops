@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-08-09T04:46:55Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:20:23Z
+id: 34
+priority: medium
+started: 2026-08-09
+status: done
+tags:
+- bug
+- api
+title: A non-hash top-level 'sops' entry is still silently deleted by parse
+updated: 2026-08-09T04:49:48Z
+---
+
+Left open deliberately while fixing karr #18, which guards the two reachable cases: encrypt refuses a data hash with a sops key, and encrypt_file refuses an input whose parse returned a Metadata object.
+
+The hole: File::SOPS::Metadata->from_hash does "return unless ref $hash eq HASH", and both format handlers call it as from_hash(delete $data->{sops}). So a PLAINTEXT file with a scalar/array/undef top-level sops entry - e.g. "sops: mine" - has the key deleted by parse, from_hash returns undef, encrypt_file sees no metadata, and the key is silently gone from the encrypted output. Measured: sops refuses exactly that file, exit 203, same message as for an already-encrypted one.
+
+Fix candidate: make from_hash croak instead of returning undef when the entry exists but is not a HashRef. One line, one place, and it also improves decrypt, which currently reports the generic "No SOPS metadata found" for such a document. It is a documented public contract change (the POD says "Returns undef if the input is not a HashRef"), so it needs a Changes entry.
+
+Not done inside #18 to keep that change out of Metadata.pm while karr #17 is in flight there.
+Fixed in Metadata::from_hash, which now croaks on any non-HashRef instead of returning undef; the ticket's fix candidate was the right place, but it had to cover undef too, not just defined-non-HashRef.
+
+Why undef dies with the rest: both format handlers guard the call with exists(), so no-sops-key documents never reach from_hash (verified: t/09 pins that they still parse to undef metadata). delete $data->{sops} collapses 'absent' and 'present but null' into the same undef, and sops refuses the second - so the only variant that closes the null case without moving the check into Format/*.pm (another lane) is croaking on undef as well.
+
+Measured on sops 3.13.3, for scalar / list / null / empty-mapping alike: encrypt exits 203 with the same reserved-key message it gives an already-encrypted file; decrypt and rotate stop with 'Found sops entry that is not a mapping'. Presence of the key decides, not its type.
+
+All six public entry points (encrypt_file, encrypt_in_place, decrypt_file, extract, rotate, edit) now refuse with the specific message and leave the file byte-identical.
+
+POD: from_hash's 'Returns undef if the input is not a HashRef' replaced; encrypt_file's 'Dies if the input already has a top-level sops entry' extended (it was false for non-mapping entries); one prose clause added to each parser's parse POD - no code touched in Format/*.pm. Changes entry under {{$NEXT}}.
+
+Tests: t/09-reserved-sops-key.t section 5 (53 tests in the file; 31 fail against HEAD's lib, all pass with the fix). t/04-interop.t subtest 21 extended - it already measured 'sops: mine' against the binary but never asked File::SOPS the same question; 3 of the 5 new assertions fail against the unfixed lib.
+
+Full suite WITH the real binary: SOPS_BIN=$HOME/bin/sops prove -lr t/ -> 20 files, 492 tests, PASS. t/04-interop.t RAN (sops 3.13.3), it did not skip. dzil build clean, woven POD syntax OK.
+
+Drift filed as karr #47: edit reports this collision as 'does not parse', making its own dedicated reserved-key message unreachable.
+
+NOT committed - maintainer reviews the diff.
+Committed as edb7444. from_hash croaks on every non-mapping shape including undef, since delete collapses absent and null and sops refuses both. Counter-check done by the orchestrating agent: 31 of 53 tests in t/09 fail against the unfixed lib. Full suite 492 tests, interop ran. Follow-up #47 raised for the framing regression this introduced in edit.
