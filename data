@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-08-09T00:14:41Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:38Z
+id: 17
+priority: medium
+started: 2026-08-08
+status: done
+tags:
+- api
+title: encrypt cannot set any encryption rule, so the documented suffix feature is
+  unreachable
+updated: 2026-08-09T01:01:25Z
+---
+
+encrypt always constructs Metadata with defaults and takes no argument for it, so unencrypted_suffix, encrypted_suffix, unencrypted_regex and encrypted_regex cannot be configured through the public API. The feature is documented in the File::SOPS POD, in CLAUDE.md and in Metadata. Meanwhile the default _unencrypted suffix IS live, which is how the encrypt/decrypt MAC asymmetry gets triggered by accident. Related: Metadata from_hash turns an absent field into an explicit undef, which suppresses the Moo default, so metadata parsed from a file has no suffix rule while a fresh object has one.
+Done in b5ecbbc (branch worktree-agent-a1c47d951be5f0670).
+
+All four rules are now arguments to encrypt and encrypt_file, plus metadata => $meta to carry an existing policy. Two measurements against sops 3.13.3 shaped the API:
+
+1. sops REFUSES a document carrying more than one of the six rule fields ("Cannot use more than one of encrypted_suffix, unencrypted_suffix, ..."), before decrypting anything. So they are mutually exclusive here too, checked in Metadata::BUILD, and the _unencrypted default stands down as soon as another rule is set - otherwise every configured document would carry two rules and be unreadable. sops does the same: sops -e writes unencrypted_suffix, sops -e --encrypted-suffix _enc does not.
+
+2. The ticket says from_hash turning an absent field into an explicit undef is part of the problem. It is not - it is correct, and it is now documented as deliberate. Delete unencrypted_suffix from a file sops wrote and sops stops treating a _unencrypted key as plaintext ("Input string ... does not match sops data format"). A default belongs to CREATING a document, not to reading one; applying it on parse would leave values in plaintext that the document produced by sops encrypts. The fresh-object default is unchanged and still matches sops -e.
+
+Also landed here because the exclusivity rule needs it: Metadata no longer drops unmodelled sops fields (new extra attribute) - two of the six rule fields (unencrypted_comment_regex, encrypted_comment_regex) are ones this distribution does not model, and they can only take part in the check if they survive parsing. encrypt refuses to WRITE under either: they select values by comment and neither parser keeps comments.
+
+Tests: t/09-encryption-rules.t (9 of 10 subtests red before the change), plus t/04-interop.t "Non-default encryption rule" - which ran against the real sops 3.13.3, not skipped.
