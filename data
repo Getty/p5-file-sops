@@ -1,0 +1,15 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:10:25Z
+id: 4
+priority: low
+status: done
+tags:
+- roadmap
+title: 'Roadmap gap: features described in CLAUDE.md that do not exist'
+updated: 2026-08-09T01:01:04Z
+---
+
+CLAUDE.md is the original design document and describes more than the code implements: ENV and INI format handlers, .sops.yaml creation rules, encrypt_in_place, edit, and every backend other than age (PGP, KMS, GCP KMS, Azure KV, Vault). The metadata fields for the other backends exist and round-trip, the encryption does not. Decide per item: implement, or drop from the design document. Split into separate tickets when one is picked up.
+Split into #36 (ENV), #37 (INI), #38 (.sops.yaml creation rules) and #39 (backends beyond age). encrypt_in_place and edit were implemented instead of deferred -- both are in lib/File/SOPS.pm with POD, t/17-in-place-and-edit.t and a Changes entry, and CLAUDE.md's status note now names what is left. Two further tickets fell out of the work: #40 (encrypt_file/rotate still write non-atomically) and #41 (edit re-keys where sops edit does not).
