@@ -1,0 +1,310 @@
+---
+claimed_at: 2026-08-09T15:10:45Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T06:26:21Z
+id: 58
+priority: high
+started: 2026-08-09
+status: done
+tags:
+- interop
+- wire
+- json
+- yaml
+- mac
+title: Unencrypted floats needing 16-17 digits are written with 15 and fail their
+  own MAC, both formats
+updated: 2026-08-09T21:39:47Z
+---
+
+Found while measuring karr #56 (sops 3.13.3, Perl 5.36.0, Cpanel::JSON::XS 4.40, JSON::XS 4.04, JSON::PP 4.16, YAML::XS 0.904.0).
+
+File::SOPS::Encrypted::value_to_bytes writes a float as strconv.FormatFloat(v, "f", -1, 64) -- the SHORTEST decimal that round-trips, up to 17 significant digits. That is what the MAC digest covers. Every emitter this distribution has writes the same double with 15 significant digits:
+
+  * Cpanel::JSON::XS, JSON::XS and JSON::PP all render through %.15g (NV_DIG).
+  * YAML::XS renders through Perl stringification, which is also 15.
+
+For any double that needs 16 or 17 digits the document therefore says one number and the digest covers another. Measured end to end, default configuration, unencrypted_suffix (no config needed):
+
+  value 0.1+0.2   digest 0.30000000000000004   emitted 0.3                 self MAC FAIL, sops -d exit 51
+  value 1/3       digest 0.3333333333333333    emitted 0.333333333333333   self MAC FAIL, sops -d exit 51
+
+Both formats, all three JSON backends, so this is not the backend question of #56 -- it survives ADR 0005.
+
+sops itself writes such a value at full precision ("sum_unencrypted": 0.30000000000000004) and reads it back, exit 0, so the reference has no such defect and a sops-written document with one of these values is readable here.
+
+Only UNENCRYPTED floats are affected: an encrypted value is an ENC[...] string on the wire, and its plaintext is the digest bytes by construction.
+
+Not attempted under #56 because a fix moves wire bytes for both formats and needs its own ADR. Options, none measured yet:
+  a) emit floats ourselves as the same canonical form value_to_bytes uses (JSON has no portable raw-number injection -- all three backends quote a scalar that carries a PV -- so this likely means a wrapper class per format handler, or a post-pass over the emitted text)
+  b) hash what the emitter will actually write, i.e. derive the digest from the document rather than from the tree (inverts ADR 0001s direction and breaks the encrypt sides sorted-key walk)
+  c) refuse to write a float that does not survive its own emitter, at assert_representable, and say so -- fails loud, loses no data, writes no bad document
+Wire lane.
+MEASUREMENT SPIKE (no implementation). sops 3.13.3 at /storage/raid/home/getty/bin/sops,
+perl 5.36.0, YAML::XS 0.904.0, YAML::PP 0.38.0, Cpanel::JSON::XS 4.40, JSON::XS 4.04,
+JSON::PP 4.16, Math::BigFloat 1.999830. Full suite WITH interop ran green before and
+after all measurements: 24 files, 555 tests, t/04-interop.t executed (not skipped).
+Prototypes lived outside the repo; nothing under lib/ was touched.
+
+=== 1. TICKET NUMBERS: CONFIRMED, and the blast radius is larger ===
+
+Reproduced exactly as written, both formats:
+  0.1+0.2  digest 0.30000000000000004  emitted 0.3                self MAC FAIL, sops -d exit 51
+  1/3      digest 0.3333333333333333   emitted 0.333333333333333  self MAC FAIL, sops -d exit 51
+
+"all three JSON backends": confirmed at the encoder level -- Cpanel::JSON::XS, JSON::XS
+and JSON::PP all render a pure NV 0.1+0.2 as 0.3. Since ADR 0005 the distribution only
+ever uses Cpanel, so the backend choice is irrelevant to this defect, which is what
+"survives ADR 0005" means.
+
+Corrections / additions the ticket does not have:
+
+(1a) THE TWO FORMATS ARE NOT SYMMETRIC. The trigger is a float SV with NOK and no POK.
+     YAML::XS retains the PV of every float it parses (measured: plain, flow, in a
+     sequence, anchored, aliased, nested -- all -NP) and emits that PV verbatim and
+     unquoted. So a float that came out of a YAML document survives a YAML round trip
+     by accident. Cpanel::JSON::XS returns a bare NV (-N-), so a float that came out of
+     a JSON document does NOT.
+     Consequence: rotate/encrypt_in_place on a LEGITIMATE sops-written JSON document
+     destroys the value and produces a file the real sops rejects:
+       sops -e writes  "sum_unencrypted": 0.30000000000000004   (sops -d exit 0)
+       File::SOPS rotate rewrites it as 0.3                      (sops -d exit 51)
+     YAML rotate of the same document is fine (exit 0). The ticket reads as if only
+     self-produced documents are affected; JSON rotate of a foreign document is worse.
+
+(1b) edit() SILENTLY CORRUPTS INSTEAD OF FAILING. Measured on a sops-written JSON
+     document with an unencrypted 0.30000000000000004 and an editor that changes an
+     unrelated key: edit returns 1, and the resulting file is accepted by sops -d
+     (exit 0) -- with the value now 0.3. edit round-trips through the plaintext
+     emitter, so the degraded value and the digest agree and nothing complains.
+     This is the worst variant: no error anywhere, wrong number on disk.
+
+(1c) decrypt_file AND extract LOSE PRECISION ON *ENCRYPTED* FLOATS, BOTH FORMATS.
+     "only unencrypted floats are affected" is true of the MAC, not of the data.
+     decrypt_value converts the plaintext with +0.0, giving a bare NV, which the
+     plaintext emitter then writes at 15 digits:
+       sops -d                 -> ratio: 0.30000000000000004
+       File::SOPS decrypt_file -> ratio: 0.3
+       sops -d --extract       -> 0.30000000000000004
+       File::SOPS extract      -> 0.3
+     decrypt_file is fixed by the same emitter change; extract is an API-lane matter
+     (it hands the caller an NV, and any stringification of it loses the digits).
+
+(1d) CROSS-FORMAT CONVERSION BREAKS EVEN FOR YAML OUTPUT: a tree parsed from JSON and
+     emitted as YAML carries bare NVs, so the YAML document also fails (exit 51).
+     Same for any caller-supplied computed float, e.g. encrypt(data => {x_unencrypted
+     => 0.1+0.2}, format => 'yaml').
+
+(1e) SIBLING DEFECTS IN THE SAME FAMILY, found while building the case matrix. All are
+     "the emitter and value_to_bytes disagree about a float"; none is the 16/17-digit
+     case, all should be separate tickets:
+       YAML  -0.0     emitted 0     digest -0     sops -d exit 51, self MAC FAIL
+       YAML  +Inf     emitted Inf   digest +Inf   sops -d exit 51 (self OK)
+       JSON  NaN/Inf  emitted null  digest NaN    sops -d exit 51, self MAC FAIL
+     (JSON -0.0 is fine today -- Cpanel writes -0.0, which is exactly what ADR 0005
+     bought. Any fix must not regress it; see 3b.)
+
+(1f) HOW OFTEN THIS FIRES. Hand-typed decimals essentially never need >15 significant
+     digits (0 of 0.1 0.5 1.5 3.14 2.718 99.99 0.001 1e10 12.34). Computed values almost
+     always do: 1/n for n=1..1000 -> 93%, n/7 -> 86%, rand() -> 92%, 0.01*n -> 13%.
+     That is why a hand-written config never trips it and any machine-generated
+     document does.
+
+=== 2. OPTION (c) IS AN INTEROP REGRESSION, AND A LEAKY ONE ===
+
+Prototype: assert_representable additionally croaks when sprintf('%.15g',$v)+0 != $v.
+Measured against documents the real sops wrote:
+
+  encrypt() of a float that WILL BE ENCRYPTED   CROAKS (yaml and json)
+  decrypt of a sops-written document            OK  (assert is not on that path)
+  rotate  of a sops-written document            CROAKS -- yaml AND json
+  encrypt_in_place of the plaintext             CROAKS -- yaml AND json
+  edit    of a sops-written json document       does NOT croak (see 1b: the value has
+                                                already been degraded to 0.3 by then)
+
+Three findings:
+
+(2a) It refuses values that have a perfectly good SOPS wire form. An encrypted float is
+     ENC[...,type:float] whose plaintext IS the canonical decimal; it round-trips through
+     both implementations today. The int64 case is not analogous -- there no wire form
+     preserves the value; here one does, and (c) would refuse it.
+
+(2b) rotate on a legitimate sops-written document would croak in BOTH formats, where
+     `sops -r` succeeds and where File::SOPS YAML rotate succeeds today. That is the
+     answer to the question the ticket asks: yes, (c) is an interop regress.
+
+(2c) (c) cannot be expressed at assert_representable at all. "Does not survive its own
+     emitter" is a property of the emitter, and assert_representable sees only a scalar.
+     A format-blind 15-digit rule refuses YAML documents that work today; a
+     format-aware rule needs the emit-and-reparse check that option (a) needs. So any
+     correct (c) is option (a) minus the substitution -- same machinery, no fix.
+
+=== 3. OPTION (a) IS FEASIBLE FOR BOTH FORMATS. Prototyped end to end. ===
+
+The requirement is weaker than "emit the canonical form": the MAC agrees iff the emitted
+decimal PARSES BACK TO THE SAME DOUBLE, because Go re-derives FormatFloat(v,'f',-1,64)
+from whatever it parsed. Verified: a sops document carrying the non-canonical but
+round-tripping literal 0.300000000000000044408920985 verifies and rotates fine.
+
+Per-emitter capability, measured:
+
+  YAML::XS   dualvar(NV, canonical) -> emits the PV verbatim, UNQUOTED, as a real
+             scalar. WORKS. No new dependency (Scalar::Util is core).
+             Caveat: YAML::XS emits a dualvar's PV whatever it says -- dualvar(0.3,
+             'hello') emits `v: hello`. It is a raw-text primitive with no guard rail,
+             which is fine only because the text comes from value_to_bytes itself.
+  YAML::PP   dualvar -> QUOTED ('0.30000000000000004'). Does not work.
+             $ypp->schema->add_representer(class_equals => ..., code => sub { $node->
+             {data} = $text; $node->{style} = YAML_PLAIN_SCALAR_STYLE }) DOES work.
+             But that means replacing YAML::XS as the emitter -- ADR 0001's rejected
+             option 2. YAML::PP does sort keys by default (checked), so the MAC's
+             sorted-key premise survives, but it emits block scalars where YAML::XS
+             emits one-line double-quoted strings, i.e. it moves the wire bytes of
+             every multi-line string in every document. Not worth it when the dualvar
+             works.
+  Cpanel::JSON::XS  dualvar -> QUOTED. JSON_TYPE_FLOAT (Cpanel::JSON::XS::Type) ->
+             0.3, no help. convert_blessed/TO_JSON -> quoted.
+             allow_bignum + Math::BigFloat WORKS: {"v":0.30000000000000004} as a bare
+             JSON number, exact text from BigFloat's bstr. Measured: allow_bignum
+             changes nothing else on encode (byte-identical output for a sample with
+             ints, NVs, strings, booleans, undef, arrays, -0.0). Must be a SEPARATE
+             encoder instance -- allow_bignum on the shared object would also change
+             decoding.
+  JSON::XS   has no allow_bignum at all (confirmed: method does not exist). Irrelevant
+             since ADR 0005 names Cpanel, but it means (a) is only available because
+             the backend was pinned.
+  JSON::PP   allow_bignum works too.
+  post-pass over emitted text: possible in principle -- YAML::XS never emits a block
+             scalar (checked with newlines, tabs, a 200-char string) and Cpanel pretty
+             output is one value per line -- but it needs a text position -> tree leaf
+             mapping, i.e. a parser built out of regexes. That is the exact defect
+             class ADR 0001 removed. Rejected on fragility, not on feasibility.
+
+(3a) FULL-CASE MATRIX, prototype vs today (unencrypted leaf, sops -d exit code):
+
+  case          yaml today            yaml (a)                 json today          json (a)
+  0.1+0.2       0.3            51     0.30000000000000004  0   0.3           51    0.30000000000000004  0
+  1/3           0.333333333333333 51  0.3333333333333333   0   0.333...15 digits 51 0.3333333333333333   0
+  -(0.1+0.2)    -0.3           51     -0.30000000000000004 0   -0.3          51    -0.30000000000000004 0
+  1.0           1               0     1                    0   1.0            0    1.0                  0
+  0.5           0.5             0     0.5                  0   0.5            0    0.5                  0
+  1e20          1e+20           0     1e+20                0   1e+20          0    1e+20                0
+  1e-20         1e-20           0     1e-20                0   1e-20          0    1e-20                0
+  -0.0          0              51     0                   51   -0.0           0    -0.0                 0
+  NaN           NaN             0     NaN                  0   null          51    null                51
+  +Inf          Inf            51     Inf                 51   null          51    null                51
+
+  Zero wire-byte movement for every value that works today, every broken 16/17-digit
+  case fixed, and no new failures. That matrix is from the MINIMAL-INTERVENTION variant:
+  render the scalar with the real emitter, reparse it, and substitute only when the
+  emitter's own output does not come back as the same double. The naive always-wrap
+  variant also fixes everything but moves bytes for values that are fine today
+  (1e+20 -> 100000000000000000000, 1e-20 -> 0.00000000000000000001, JSON 1.0 -> 1) AND
+  REGRESSES JSON -0.0 to exit 51, because Math::BigFloat->new('-0') drops the sign.
+  Recommend the minimal variant; it needs no -0.0 carve-out because -0.0 fails the
+  round-trip test on its own terms and is excluded by a sign check.
+
+(3b) COSTS OF (a): a new runtime dependency on Math::BigFloat (core, JSON path only,
+     one object per float leaf that needs it); the float canonicalisation pass lives in
+     the two format handlers but its TEXT must come from Encrypted::value_to_bytes, so
+     the single-source-of-truth rule holds -- the wrapper is a carrier, not a second
+     conversion; the wrappers must be applied to a COPY of the tree and only AFTER the
+     digest, because a Math::BigFloat leaf would make detect_type say 'str'; and NaN/
+     Inf must be excluded (BigFloat renders them as JSON null, same as today).
+     Lane note: the change sits in Format/YAML.pm and Format/JSON.pm but it moves the
+     digest's agreement with the document, so per CLAUDE.md it is wire-lane work with a
+     format-lane review, not the other way round.
+
+(3c) BONUS, measured: (a) also fixes 1c's decrypt_file precision loss in both formats
+     (plaintext output becomes 0.30000000000000004), because decrypt_file goes through
+     the same emit(). extract is unaffected and stays an API-lane ticket.
+
+=== 4. OPTION (b) IS OUT. Three independent reasons, one measured. ===
+
+ADR 0001's boundary is explicit: "YAML::PP supplies order and nothing else... Nothing
+YAML::PP produces reaches the digest as data, so a divergence in how it represents a
+scalar cannot change a MAC." Option (b) makes the reparse's scalar representation the
+digest's data source, which is the one thing that ADR forbids. That is not a
+formality -- measured, YAML::XS (libyaml, YAML 1.1) and YAML::PP (YAML 1.2 core) resolve
+7 of 29 tested YAML scalars to different values: 0o17 (0o17 vs 15), 0x1f (0x1f vs 31),
+NULL and Null (string vs undef), .inf (.inf vs +Inf), .nan (.nan vs NaN), Inf (+Inf vs
+Inf). Under (b) the digest would follow YAML::PP where sops follows yaml.v3. Booleans
+and every float tested do agree, and for JSON documents Cpanel and YAML::PP agree on all
+8 numeric literals tested -- but a fix that trades one wrong-scalar class for seven is
+not a fix.
+
+Second: on the encrypt side (b) is structurally awkward. The digest goes INTO the
+document as sops.mac, so hashing the document requires emit -> reparse -> hash ->
+re-emit. And for ENCRYPTED leaves the digest is over the plaintext, which is not in the
+document at all, so (b) can only cover unencrypted leaves -- a digest with two sources,
+which is the defect class this lane exists to prevent.
+
+Third and decisive: (b) does not fix the bug, it ratifies it. If the digest covers what
+the emitter wrote, File::SOPS stores 0.3 where the caller passed 0.30000000000000004,
+the document verifies, and nothing reports anything. That is exactly the measured edit()
+behaviour in 1b -- sops -d exit 0 with the wrong number on disk.
+
+=== RECOMMENDATION (maintainer decides) ===
+
+(a), in the minimal-intervention form, with an ADR before the code. It is the only
+option that keeps the value the caller gave us; it moves no wire byte that works today;
+it fixes decrypt_file as a side effect; and both emitters have a mechanism that
+demonstrably works. (c) is a regression on both formats and cannot even be written where
+the ticket puts it. (b) is excluded by ADR 0001 and by the fact that it would make the
+corruption official.
+
+Follow-up tickets to file separately (drift found, not fixed here): 1c extract/decrypt
+precision (API lane), 1e the -0.0/Inf/NaN emitter disagreements, and one more found in
+passing -- a JSON integer wider than int64 (100000000000000000000) parses to a PV string
+in every JSON backend, so File::SOPS rotate rewrites a sops-written JSON NUMBER as a
+JSON STRING; the MAC still agrees (same digits) and sops -d exits 0, so it is silent
+type drift rather than breakage.
+Drift found during this spike is filed separately, not folded in: #61 (decrypt_file/extract float precision), #62 (-0.0, NaN, Inf emitter disagreements), #63 (JSON int64-overflow number rewritten as a string by rotate). #58 stays scoped to the 16/17-digit unencrypted float.
+IMPLEMENTED (option a, minimal-intervention form). Not committed -- maintainer reviews the diff.
+
+Changed: lib/File/SOPS/Encrypted.pm (canonical_float_tree + POD),
+lib/File/SOPS/Format/YAML.pm (dualvar carrier, YAML::XS round-trip predicate),
+lib/File/SOPS/Format/JSON.pm (Math::BigFloat carrier under a separate
+allow_bignum encoder, Cpanel round-trip predicate, foreign-bignum guard),
+one POD line in lib/File/SOPS.pm, cpanfile, Changes, docs/adr/0006.
+t/ untouched -- t/24-float-precision.t is file-sops-test-writer's and passes.
+
+ACCEPTANCE CONDITION HOLDS. Emitted bytes captured before and after over 16
+values x 2 formats plus the encrypted-leaf path: 29 lines identical, 12 changed,
+and every changed line is one of the six broken cases going from sops -d exit 51
+to exit 0 (0.1+0.2, 1/3, -(0.1+0.2), each in yaml and json). 1.0, 0.5, 1e+20,
+1e-20, 3.14, 0.1, int 42, the string '0.3', NaN, +Inf, -Inf and -- the one that
+matters -- JSON -0.0 at exit 0 are byte-for-byte unchanged.
+
+Suite: 25 files, 563 tests, PASS, with t/04-interop.t EXECUTED against
+sops 3.13.3 (SOPS_BIN=/storage/raid/home/getty/bin/sops), not skipped.
+dzil build clean, Test::Pod clean on the woven dist, Math::BigFloat present in
+META.json.
+
+Spike scenarios re-measured post-fix: rotate and encrypt_in_place on a
+sops-written JSON document now preserve the value (exit 0, was 51); edit no
+longer silently degrades it; cross-format JSON->YAML fixed; decrypt_file now
+writes what sops -d writes in both formats. extract still returns an NV (#61,
+out of scope). #63 unchanged, as intended.
+
+ONE THING FOUND WHILE IMPLEMENTING, and closed rather than smoothed over:
+allow_bignum whitelists Math::BigFloat and Math::BigInt for every value, not
+just our carrier, so a CALLER-supplied one -- which the encoder previously
+refused outright -- would have been emitted as a bare JSON number silently.
+That is a fresh instance of this very defect: detect_type calls a blessed leaf
+str, so the digest covers the stringification while the document carries a
+number Go reparses as a double. Measured:
+Math::BigFloat->new('1.00000000000000000000000000001') digests as 29 digits and
+reads back as 1. canonical_float_tree therefore takes an optional reject
+callback and Format::JSON refuses both classes by name. Callers still get a
+die where they got a die before, with a message that says why. Recorded in the
+ADR consequences.
+
+Math::BigFloat costs +47ms on every 'use File::SOPS' (0.122s -> 0.169s), paid by
+YAML-only callers too since both handlers load unconditionally. Loaded with use
+rather than require per house rules; flagging it in case the maintainer prefers
+the trade the other way.
+Fix implementiert (Option a, Minimal-Intervention), ADR 0006 geschrieben, t/24-float-precision.t gruen. Orchestrator hat die Suite selbst verifiziert: 563 Tests, 25 Dateien, PASS, t/04-interop.t gegen sops 3.13.3 GELAUFEN (nicht geskippt). Durchsatz gemessen, unkritisch: 500 Floats = 36ms YAML / 19ms JSON. Ladezeit +51ms durch Math::BigFloat (112 -> 159ms), use vs require ist eine offene Maintainer-Entscheidung. OFFEN: Testluecken (Foreign-Bignum-Guard, globale BigFloat-accuracy, nested/array floats, cross-format, decrypt_file) -- der test-writer ist dabei an einem API-Session-Limit abgebrochen. Nichts committet.
+Committet als bc611e5, inkl. ADR 0006 und t/24-float-precision.t. use statt require fuer Math::BigFloat vom Maintainer bestaetigt, Begruendung in den ADR-Consequences. Restliche Testluecken laufen unter #64.
