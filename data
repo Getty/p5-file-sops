@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-08-09T05:09:12Z
+claimed_by: file-sops-test-writer
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T05:01:39Z
+id: 48
+priority: medium
+started: 2026-08-09
+status: done
+tags:
+- test
+- flake
+title: 't/14-encryption-rules.t fails ~1.6% of runs: unlike(mac, qr/data:x/) matches
+  by chance'
+updated: 2026-08-09T05:10:06Z
+---
+
+Found while running the full suite for karr #35. t/14-encryption-rules.t subtest 7 ("encrypt takes its policy from a metadata template") failed once in a full run and passed on every rerun.
+
+The assertion is
+
+    unlike($sops->{mac}, qr/data:x/, "and so is the MAC");
+
+whose intent is "the stale template MAC ENC[AES256_GCM,data:x,iv:y,tag:z,type:str] was not carried over". But the pattern is unanchored and the regenerated MAC is ENC[AES256_GCM,data:<base64>,...] -- so it also matches whenever the fresh base64 payload happens to START with the letter x. Base64 alphabet, so once in 64 encryptions.
+
+Measured: 10 hits in 500 encryptions (2.0%), against the predicted 1.6%.
+
+The claim is right, the pattern is wrong. It should pin the whole stale value (or at least data:x, with the comma), not a prefix that a random payload can reproduce. Same shape of anchoring bug as the mac:/hmac: one in the MAC skip, so worth a look at whether any sibling assertion in that file has it too.
+
+Not caused by, and does not affect, the emitter consolidation in #35.
+Fixed the one occurrence: t/14-encryption-rules.t:214, unlike($sops->{mac}, qr/data:x/) -> isnt($sops->{mac}, 'ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]'), matching the sibling isnt() pattern already used one line above for lastmodified. Audited every other unlike()/like() in t/ against base64/mac/data content (07-mac.t, 12-diagnostics.t, 06-wire-format-regressions.t, 08-encoding.t, 09-reserved-sops-key.t, 13-multidoc-yaml.t, 20-plaintext-emitter.t) -- all are either fully ^...$m anchored literal-line checks or match fixed non-random literals (error text, known plaintext), none share the unanchored-prefix-against-random-base64 shape. Proved intent preserved: a Test::Builder-isolated script showed the new isnt() still goes red when the stale MAC literal really is carried over, and stays green (unlike the old regex) on a real fresh MAC whose base64 happens to start with 'x'. Quantified: 300 real File::SOPS->encrypt runs through the actual fixed assertion (Test::More, single process) -- 300/300 pass; the same 300 runs checked against the OLD regex would have false-failed 3 times (1.0%, consistent with ticket's 1.6% prediction / 2.0% measurement). Full suite: SOPS_BIN=~/bin/sops prove -lr t/ -- 21 files, 499 tests, all green, t/04-interop.t DID run (sops 3.13.3). Only t/14-encryption-rules.t touched; no Changes entry per instructions.
+Committed as part of tonight's run. Exact-literal comparison replaces the unanchored regex; verified the claim is preserved (still red on a genuinely carried-over MAC) and the flake is gone (300/300). Sibling audit across t/ found no second instance.
