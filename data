@@ -1,0 +1,98 @@
+---
+claimed_at: 2026-08-09T04:29:54Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:56:39Z
+id: 43
+priority: medium
+started: 2026-08-09
+status: done
+tags:
+- adr
+- docs
+- architecture
+title: 'Propose ADR: foreign scalars are normalised at the cipher boundary'
+updated: 2026-08-09T04:49:26Z
+---
+
+From #32. The fix there establishes a rule that is not obvious from the code and
+that a future maintainer would plausibly undo as a redundant copy:
+
+  A scalar returned by XS code outside this distribution is normalised where it
+  enters, not where it is used. decrypt_bytes returns "$plaintext" rather than
+  $plaintext, and that stringify is load-bearing.
+
+This is worth an ADR rather than only a code comment because it interacts
+directly with ADR 0002. Since 0002 the type of a value is read off the SV
+(_sv_kind reads SVf_IOK / SVf_NOK), so this distribution has made itself
+sensitive to SV-level properties of scalars it did not create. 0002 records that
+we trust the SV; nothing records that we must first make the SV trustworthy when
+it came from foreign XS. The two belong next to each other.
+
+Scope to decide in the ADR:
+  - only decrypt_bytes (where a numeric read demonstrably happens), or every
+    CryptX boundary including gcm_encrypt_authenticate ciphertext/tag and
+    Crypt::PRNG::random_bytes? Those are only ever consumed length-aware today
+    (base64, cipher input), so normalising them would be speculative -- but the
+    rule reads cleaner if it is unconditional.
+  - what the rule says about Crypt::Age, whose output (the data key) is likewise
+    foreign XS but is never read numerically.
+
+Not urgent, not blocking the #32 fix. Proposing rather than writing it: the
+worker who found this did not have a mandate to add an ADR.
+ADR written: docs/adr/0004-foreign-scalars-are-normalised-where-their-bytes-become-a-value.md (Status: accepted, matching 0001-0003).
+
+SCOPE CHOSEN: narrow, and the rule is phrased as a precondition on READS rather
+than on origins:
+
+  A foreign scalar is normalised at the boundary where this distribution starts
+  reading its bytes as a value. A foreign scalar that only ever passes through as
+  opaque, length-delimited bytes is not normalised. A scalar whose SV state is
+  itself the information is never normalised.
+
+Today that names exactly one site, decrypt_bytes. No behavioural code change.
+
+The scope question was settled by measurement, not by preference. Three findings:
+
+1. The unconditional version of the rule is not merely speculative, it is WRONG.
+   The parsers are foreign XS too, and a stringify normalisation measurably
+   erases the flags ADR 0002 reads: YAML::XS bare 007 goes IOK|POK -> POK, i.e.
+   type:int -> type:str. An unconditional rule would rewrite every numeric leaf
+   in every document as a string. So the rule must carry a scope; the ADR puts
+   the scope in the rule rather than in an unwritten exception list.
+
+2. The ticket underestimated the other CryptX boundaries. Under a poisoned
+   allocator (300 samples each): gcm_encrypt_authenticate ciphertext 299/300 NOT
+   NUL-terminated, Crypt::PRNG::random_bytes 299/300 NOT terminated, hkdf and
+   chacha20poly1305_decrypt_verify 300/300 NOT terminated. The GCM tag, hmac and
+   both parsers are 0/300 -- CryptX splits by return shape, terminating its
+   fixed-size digests and not its variable-length buffers. So they are affected;
+   they are just unreachable, because every consumer is length-delimited.
+
+3. Normalising them anyway was rejected on durability, not on cost: nothing can
+   pin a stringify on the ciphertext, since no reader of it can fire the defect,
+   so the next maintainer deletes it as a redundant copy and is right by every
+   argument available at the site. decrypt_bytes is different in kind --
+   t/18 goes red without it.
+
+CRYPT::AGE: the data key falls on the opaque side, not normalised. The ADR
+states explicitly that this does NOT rest on the measurement -- Crypt::Age
+returns a terminated data key 0/300 only because decrypt_payload ends in
+join(q{}, @chunks), while the chacha primitive under it is 300/300
+non-terminated. The licence is that the data key is never interpreted here.
+
+CODE: one non-behavioural change, in this lane -- a 7-line comment extension at
+the decrypt_bytes stringify in lib/File/SOPS/Encrypted.pm pointing at ADR 0004
+and saying it is deliberately the only such normalisation. That is the deletion
+site, and rejected alternative 2 turns on the pointer being there. No Changes
+entry (parallel agent is in that file). lib/File/SOPS.pm untouched -- if a POD
+cross-reference to 0004 is wanted there, it still needs doing.
+
+SUITE: SOPS_BIN=$HOME/bin/sops prove -lr t/ -- 20 files, 456 tests, PASS.
+t/04-interop.t ACTUALLY RAN against sops 3.13.3: 276 assertions, 0 skips.
+
+NOT COMMITTED. New drift ticket: karr #44 (_random_bytes duplicated across
+Encrypted.pm and SOPS.pm; its /dev/urandom fallback is silent and its read is
+unchecked).
+Committed as ee55f35. ADR 0004 accepted; scope decision recorded (one normalisation site, rule phrased as a precondition on reads). Suite green, interop ran.
