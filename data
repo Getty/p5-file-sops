@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-09T00:21:42Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:49Z
+id: 19
+priority: low
+started: 2026-08-08
+status: done
+tags:
+- diagnostics
+title: 'Diagnostics: MAC failures never say which value or why'
+updated: 2026-08-09T01:01:36Z
+---
+
+The document-order scrape skips a value that cannot be located, parsed or decrypted with a bare next, so the only symptom is a generic MAC verification failed with no indication of the culprit. That is what makes the other MAC findings expensive to diagnose. Also: an unknown type field passes through silently returning the raw string where Go errors with Unknown datatype, and base64 decoding ignores invalid characters where Go errors. Note Go also emits type:time and type:comment, which our ladder does not know.
+Measured sops 3.13.3. type:time - a bare RFC3339 scalar and a bare date are both encrypted as type:time with an RFC3339 plaintext (2026-08-09 -> '2026-08-09T00:00:00Z'). Today that falls into our str/unknown branch and therefore happens to be CORRECT: the raw string is returned and the MAC hashes decrypt_bytes, so a sops file with timestamps verifies and round-trips right now. Making unknown types croak would break that unless 'time' is added to the ladder first.
+type:comment - a YAML comment is encrypted as a separate node written as '#ENC[...,type:comment]' on its own line, with no key and a different AAD. YAML::XS drops comments on parse, so File::SOPS never sees them - and a sops file with comments still VERIFIES here, which proves Go does not hash comments into the MAC either. So comment is only reachable via Encrypted->parse directly.
+Note the bare 'next' the ticket describes is gone since 11658c3 replaced the raw-text scrape with _document_leaves; the same defect now takes the form of a silent 'return $out' on a structural mismatch plus a context-free 'MAC verification failed'.
+Fixed, t/12-diagnostics.t. Note the bare 'next' the ticket describes no longer exists (11658c3 replaced the scrape with _document_leaves); the same defect had become a silent 'return $out' on structural mismatch, which could still produce a MATCHING digest because a missing key contributed an undef leaf that hashes as nothing. Now: value errors name the key path on both encrypt and decrypt sides (_at_path), structural disagreement is reported at its path, MAC failure says how many leaves in which order and how to read it anyway. Unknown type: croaks 'Unknown datatype' as Go does - but type:time and type:comment were ADDED first, because measurement showed a sops file with timestamps verifies and round-trips correctly today purely via the unknown branch, so rejecting them would have broken reading real sops documents. type:float plaintext is validated too (+0.0 silently made garbage 0). Base64 is now strict per field. NO message contains a plaintext, data key or age identity; I also chose NOT to print the two digests that sops prints, since a SHA-512 over concatenated plaintexts is an oracle for a document with one short secret - say if you want sops's exact wording instead. Found and pinned while doing this: treating any ref as a structural mismatch rejects every document with an unencrypted boolean, because the order-preserving reparse yields a plain scalar where the format parsers yield JSON::PP::Boolean.
