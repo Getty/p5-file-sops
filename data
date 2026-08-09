@@ -1,0 +1,75 @@
+---
+claimed_at: 2026-08-09T05:51:22Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:53:20Z
+id: 38
+priority: medium
+started: 2026-08-09
+status: done
+tags:
+- roadmap
+- api
+title: '.sops.yaml creation rules: the small one on this list'
+updated: 2026-08-09T05:56:06Z
+---
+
+CLAUDE.md documents a `.sops.yaml` with `creation_rules` and nothing reads it: recipients are always passed explicitly. Split out of karr #4.
+
+Assessed while implementing encrypt_in_place/edit (karr #4), and this one really is
+small -- it is config lookup plus a regex match, with no wire format, no MAC, no
+crypto and no new dependency. It sits entirely in the api lane.
+
+Measured against sops 3.13.3:
+
+- The config is found by walking UP from the DIRECTORY OF THE FILE being
+  encrypted, looking for `.sops.yaml`. (sops also honours --config and
+  $SOPS_CONFIG; a Perl equivalent would be an explicit `config => $path`
+  argument.)
+- `path_regex` is matched against the ABSOLUTE path, not the path as typed:
+  `sops -e x.yaml` run from inside `sub/` still matched `path_regex: sub/.*\.yaml$`.
+- The FIRST matching rule wins; a later `path_regex: .*` is a catch-all.
+- A rule can carry `age` (comma- or newline-separated recipients) and the
+  encryption rules -- `encrypted_suffix: _enc` in the matching rule produced a
+  document with `encrypted_suffix: _enc` in its sops section and the rule applied.
+
+What a minimal useful version is:
+
+    my %args = File::SOPS->creation_rules_for($file);   # recipients + policy
+    File::SOPS->encrypt_in_place(file => $file, %args);
+
+i.e. find config, match, return `recipients` plus whichever of the four
+encryption rules the matching rule carried, and let the existing encrypt path do
+the rest -- all of those are already arguments to encrypt/encrypt_file/
+encrypt_in_place. Roughly 100 lines plus tests.
+
+What NOT to promise in the first version, because each is its own decision:
+- `key_groups` / `shamir_threshold` (this distribution cannot do Shamir at all)
+- `pgp`, `kms`, `gcp_kms`, `azure_kv`, `hc_vault` recipients (karr #39 -- a rule
+  naming one must FAIL rather than silently encrypt for the age keys only)
+- Go RE2 vs Perl regex semantics on a `path_regex` that uses either dialect
+- `destination_rules`, and the `--config` search rules in full
+
+The honest reason it is worth doing: it is the difference between "a library you
+call with the right recipients" and "a library that encrypts the file the way
+this repository has decided its files are encrypted", which is what people
+actually have sops for.
+Implemented as File::SOPS->creation_rules_for(file => $path, config => $path). NAMED arguments, not the ticket's positional creation_rules_for($file) - CLAUDE.md records the house making exactly that correction for encrypt_in_place/edit.
+
+TWO OF THE TICKET'S MEASURED FACTS WERE WRONG. Re-measured on sops 3.13.3:
+ 1. The config is found by walking up from the CURRENT WORKING DIRECTORY, not from the directory of the file. Decisive: 'sops -e a/b/c/s.yaml' run from the top of that tree does NOT see a/b/.sops.yaml, and 'sops -e /abs/path/s.yaml' from an unrelated cwd finds no config at all however many sit above the file. Implemented as a DELIBERATE DEVIATION - the search walks up from the FILE - documented in the POD, in Changes and pinned in t/04-interop.t, which asserts sops's cwd behaviour and ours side by side.
+ 2. path_regex is NOT matched against the absolute path. It is matched against the file made absolute and normalised and then taken RELATIVE TO THE DIRECTORY HOLDING THE CONFIG FILE, with the absolute path as a fallback when the file is not under that directory. '^a/b/c/secrets.yaml$' matches, '^/' does not. Had this been built to the ticket, the very common '^secrets/' idiom would never have matched.
+
+Other measurements the implementation is built on (all 3.13.3): first matching rule wins; a rule without path_regex is a catch-all; the walk stops only at the filesystem root (.git and $HOME do not stop it); the name must be exactly .sops.yaml (.sops.yml is warned about and ignored); symlinks are NOT resolved; age is comma-split with whitespace trimmed, or a YAML list, and a NEWLINE is not a separator; mac_only_encrypted in a rule is honoured; unknown fields are ignored; a rule with two encryption rules is refused at config-load time; a matching rule with no key material fails with 'empty key group provided'.
+
+Judgement calls, all documented in the POD:
+ * No config found / no rule matched / no age recipient => CROAK. sops exits 1 on all three. encrypt does already refuse recipients => [] ('at least one recipient required'), so an empty list could not have produced an undecryptable document - but that error names neither the file nor the config, which is the silent-ish failure this layer keeps making.
+ * config => $path implemented (cheap). $SOPS_CONFIG deliberately NOT read from the environment - documented, with the one-line opt-in.
+ * A rule naming pgp/kms/gcp_kms/azure_keyvault/hc_vault_transit_uri/key_groups/shamir_threshold is REFUSED, as rotate refuses such a document. Those are the CONFIG's field names, which differ from the sops section's (azure_kv, hc_vault) - taking the list from Metadata::KEY_MATERIAL_FIELDS would have let azure_keyvault and hc_vault_transit_uri through.
+ * A comment-based rule is refused (neither parser keeps comments).
+
+PROOF: SOPS_BIN=$HOME/bin/sops prove -lr t/ => 23 files, 533 tests, all pass. t/04-interop.t RAN (not skipped) and carries a new 23-assertion subtest that puts one .sops.yaml in front of both implementations and requires the same rule out of both. New unit file t/22-creation-rules.t (26 subtests); its three load-bearing claims were mutation-checked - matching the path as typed, last-rule-wins, and cwd-based lookup each turn it red.
+
+Touched: lib/File/SOPS.pm (method + POD), t/22-creation-rules.t (new), t/04-interop.t, Changes ({{$NEXT}}), cpanfile (File::Path for tests). NOT committed, as instructed. CLAUDE.md's '.sops.yaml - not implemented (karr #38)' section is now false and was left for the maintainer. Follow-ups filed: karr #53 (RE2 vs Perl regex dialect), #54 (destination_rules, key_groups/shamir, other backends, $SOPS_CONFIG); note added to #49 (YAML::XS is used by File::SOPS.pm again).
+Committed as b8c8c50. Orchestrating agent independently re-measured the cwd-vs-file config search and confirms the worker's finding: with configs at the root and at a/b/, sops -e a/b/c/s.yaml from the root selects the OUTER, from a/b/c the INNER, while creation_rules_for selects the INNER from either. Divergence raised as karr #55 for the maintainer to confirm or revert. CLAUDE.md and the file-sops-core skill brought in line separately.
