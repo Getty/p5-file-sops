@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-08-09T00:15:02Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:16Z
+id: 13
+priority: high
+started: 2026-08-08
+status: done
+tags:
+- bug
+- data-loss
+title: rotate silently discards every part of the sops section it did not create
+updated: 2026-08-09T01:01:09Z
+---
+
+rotate decrypts and then calls encrypt, which always constructs a fresh Metadata object. Injected pgp entries, shamir_threshold and mac_only_encrypted are gone after a rotate; only age recipients survive, and only because rotate re-reads them explicitly. Scenario: rotate a file shared with PGP or KMS recipients and you have silently revoked their access while the command reports success. Metadata from_hash knows 13 fields and drops everything else on any rewrite.
+Confirmed still open after the MAC rewrite, with one part narrowed: mac_only_encrypted is now carried across a rotate (it was added by that work), and the remaining gap is documented in the rotate POD. Everything else still resets to defaults, including a custom unencrypted_suffix, because encrypt always builds fresh Metadata.
+Done in efc6d3b (branch worktree-agent-a1c47d951be5f0670).
+
+rotate now hands the parsed metadata to encrypt as a policy template (the metadata argument from #17), so the rules, mac_only_encrypted and any unmodelled field survive; the wrapped keys, MAC and lastmodified are regenerated as they must be. Confirmed the ticket was right that mac_only_encrypted was already carried - it was, and there is now a test for it.
+
+The unknown-field question, measured rather than guessed: sops rotate on a document carrying shamir_threshold: 2 and some_future_field: hello writes shamir_threshold back out and DROPS some_future_field. So Go preserves what it models and drops the rest. We model 13 fields, Go models about 18, and the delta (shamir_threshold, key_groups, the two comment regexes) is real data we were dropping. Decision: preserve everything unmodelled, in a new extra attribute. That is a superset of Go, and a safe one - Go ignores a field it does not know, so preserving one can never make a document unreadable, whereas dropping shamir_threshold demonstrably changes what sops does with the file. It also avoids modelling key_groups, whose semantics we cannot implement.
+
+The part of the ticket that turned out to need a different answer: carrying pgp/kms entries over is not a fix. Rotation makes a NEW data key, so every wrapped copy of the old one is stale - keeping them leaves those recipients a key that decrypts nothing, dropping them revokes access silently. Both are wrong, so rotate REFUSES a document holding key material it cannot re-encrypt (pgp, kms, gcp_kms, azure_kv, hc_vault, key_groups), names the fields, and points at the sops CLI or at an explicit decrypt+encrypt. No opt-out flag: a caller who wants those recipients gone can say so with two public calls that are entirely in their control.
+
+Tests: t/10-rotate.t (5 of 8 subtests red before the change, including the foreign-key-material and unmodelled-field ones), plus t/04-interop.t "Rotate a sops-written document with a non-default rule" - sops writes with --encrypted-suffix, we rotate, sops decrypts the result. Ran against the real sops 3.13.3.
+
+Side finding worth keeping: a document must not be reparsed and re-dumped to be modified in a test - a re-dump sorts keys and the MAC is order-dependent, so it invalidates the file rather than testing anything. Both test helpers say so now.
