@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-08-09T00:15:23Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:33Z
+id: 16
+priority: medium
+started: 2026-08-08
+status: done
+tags:
+- interop
+title: should_encrypt_key is per-level; the reference checks every path component
+updated: 2026-08-09T01:01:20Z
+---
+
+For the unencrypted rules the difference is invisible because the walk stops descending anyway. For encrypted_suffix and encrypted_regex it diverges: Go encrypts a leaf when some component of its path matches, this library checks only the leaf key. Latent today only because encrypt cannot set any rule at all (separate ticket).
+Partially resolved: Metadata should_encrypt_path now implements the Go rule faithfully (a leaf is encrypted when any path component carries the suffix), but it is currently used only for the mac_only_encrypted gate. The tree walk still uses the per-level check, so the divergence stands for encrypted_suffix and encrypted_regex - the correct implementation now exists and just needs to be adopted there.
+Done in 14f5be3 (branch worktree-agent-a1c47d951be5f0670).
+
+_encrypt_tree now descends unconditionally and decides at the leaf with should_encrypt_path, which already implemented the rule correctly.
+
+The ticket asked to verify against the real binary what Go does on a nested match. Measured, sops 3.13.3, sops -e --encrypted-suffix _enc:
+
+  top_enc: {inner: v1, other: v2}   -> BOTH encrypted (parent decides for the branch)
+  plain:   {nested_enc: v3, nested: v4} -> nested_enc encrypted, nested readable
+  deep: {branch: {leaf_enc: v5, leaf: v6}} -> leaf_enc encrypted, leaf readable
+  list_enc: [e1, e2]                -> both encrypted (array adds no path component)
+
+Our per-level walk got the first two wrong in opposite directions: it left inner/other readable, and it never reached nested_enc because it stopped descending at the non-matching parent. sops REFUSED the document we produced under a rule it had written itself - that assertion is in the interop test and was red before the fix.
+
+The ticket also asked to check the unencrypted rules keep their descent behaviour: confirmed, and pinned. sops leaves a whole *_unencrypted branch readable at any depth, which is what both the old and the new walk produce, so the difference really is invisible there. t/09-encryption-rules.t "the unencrypted rules still exclude a whole branch" passes before and after and exists to keep it that way.
+
+should_encrypt_key is kept - it correctly answers the single-key question - but its POD now says plainly that it is not the rule a document is encrypted under. Removing it is a candidate for a later breaking change, not taken here.
+
+Tests: two new subtests in t/09-encryption-rules.t (both red before), and t/04-interop.t "Encryption rules apply to the whole path", which asserts on sops OWN choices first and then requires us to make the same ones. Ran against the real sops 3.13.3.
