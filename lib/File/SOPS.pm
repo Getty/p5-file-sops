@@ -386,8 +386,11 @@ sub encrypt {
     croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
     croak _sops_key_reserved('data') if exists $data->{sops};
 
-    # Generate random 256-bit data key
-    my $data_key = _random_bytes(32);
+    # Generate random 256-bit data key. The one CSPRNG in this distribution
+    # lives next to the per-value nonce that shares its failure mode; see the
+    # comment on File::SOPS::Encrypted::_random_bytes for why a short return
+    # has to be caught there and cannot be caught anywhere else.
+    my $data_key = File::SOPS::Encrypted::_random_bytes(32);
 
     # Create metadata
     my $metadata = _metadata_for_encrypt(\%args);
@@ -2063,20 +2066,6 @@ sub _detect_format_from_filename {
     return 'json' if $filename =~ /\.json$/i;
     return 'yaml' if $filename =~ /\.ya?ml$/i;
     return 'yaml';
-}
-
-sub _random_bytes {
-    my ($length) = @_;
-    my $bytes = '';
-    if (eval { require Crypt::PRNG; 1 }) {
-        $bytes = Crypt::PRNG::random_bytes($length);
-    } else {
-        open my $fh, '<:raw', '/dev/urandom'
-            or croak "Cannot open /dev/urandom: $!";
-        read $fh, $bytes, $length;
-        close $fh;
-    }
-    return $bytes;
 }
 
 =head1 SEE ALSO

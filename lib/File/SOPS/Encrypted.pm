@@ -7,6 +7,7 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Crypt::AuthEnc::GCM qw(gcm_encrypt_authenticate gcm_decrypt_verify);
+use Crypt::PRNG ();
 use JSON::MaybeXS;
 use namespace::clean;
 
@@ -833,16 +834,54 @@ sub _encode_base64_oneline {
     return $encoded;
 }
 
+# The only source of random bytes in this distribution. Both things that must
+# never repeat come from here: the per-value GCM nonce above, and the data key
+# in File::SOPS::encrypt, which calls this directly. It lived in both files
+# once, byte-identical; nothing made them stay that way.
+#
+# The length check is not defensive noise, and it is the reason this is a sub
+# at all rather than a bare call. A short return is invisible to everything
+# downstream of it -- measured here against CryptX 0.087 and sops 3.13.3:
+#
+#   * A data key truncated to 16 or 24 bytes is a valid AES-128 or AES-192
+#     key. Encryption succeeds, our own decrypt succeeds, and `sops -d`
+#     accepts the document and exits 0. The key is silently weaker than the
+#     one every part of the system believes it is using, and no error exists
+#     anywhere to say so.
+#   * An IV truncated to anything from 1 to 31 bytes is accepted by GCM
+#     identically at both ends, because the nonce length is not fixed by the
+#     construction. A 1-byte nonce also round-trips through `sops -d` with
+#     exit 0 -- from an 8-bit space, so it repeats under the same data key
+#     within a couple of hundred values, which is the one thing GCM does not
+#     survive.
+#
+# Only two short lengths fail on their own: a data key that is not 16, 24 or
+# 32 bytes, and an IV of exactly 0 bytes. Both fail inside CryptX as "FATAL:
+# ccm_memory failed: Invalid key size" attributed to the gcm call, naming
+# neither the CSPRNG nor which of the two values was short. Nothing else in
+# either implementation looks at these lengths, so this is the only place that
+# can look at them.
+#
+# Crypt::PRNG is not optional and there is no fallback: it ships in CryptX,
+# the same distribution as the Crypt::AuthEnc::GCM this module already loads at
+# compile time, so an install missing it cannot compile this file. The
+# /dev/urandom branch that used to stand here was unreachable, and if it had
+# ever been reached it would have downgraded a seeded CSPRNG to an unchecked
+# read without telling anyone.
 sub _random_bytes {
     my ($length) = @_;
-    my $bytes = '';
-    if (eval { require Crypt::PRNG; 1 }) {
-        $bytes = Crypt::PRNG::random_bytes($length);
-    } else {
-        open my $fh, '<:raw', '/dev/urandom' or croak "Cannot open /dev/urandom: $!";
-        read $fh, $bytes, $length;
-        close $fh;
-    }
+
+    my $bytes = Crypt::PRNG::random_bytes($length);
+
+    # Lengths only. The bytes themselves are the data key or the nonce, and an
+    # error message is something a user pastes into a bug report.
+    croak "Refusing to use the result: Crypt::PRNG::random_bytes($length) "
+        . "returned "
+        . (defined $bytes ? length($bytes) . " bytes" : "undef")
+        . ". A wrong length here becomes a data key or a GCM nonce of that "
+        . "length, which neither this implementation nor sops rejects."
+        unless defined $bytes && length($bytes) == $length;
+
     return $bytes;
 }
 

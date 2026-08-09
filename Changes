@@ -59,6 +59,24 @@ Revision history for File-SOPS
   the stored ciphertext. Where a value gated access or behaviour, verify
   it by hand: a wrong value may have been in effect since it was written.
 
+  - SECURITY: the random data key and the per-value GCM nonce are now
+    checked for length where they are generated, and there is only one
+    generator left. _random_bytes existed twice, in File::SOPS and in
+    File::SOPS::Encrypted, and both ended in an unchecked read from
+    /dev/urandom - which can return short, and returns undef on error.
+    Nothing downstream could catch that: a data key short to 16 or 24
+    bytes is a valid AES-128/AES-192 key, so encryption succeeded, this
+    library decrypted it, and the sops CLI accepted the document and
+    exited 0; a nonce short to anything from 1 to 31 bytes was likewise
+    accepted at both ends, and a 1-byte nonce repeats under one data key
+    within a few hundred values. A wrong length now dies naming the
+    short return instead of reaching a key or a nonce. The /dev/urandom
+    fallback is gone rather than fixed: it stood behind a silent eval on
+    Crypt::PRNG, which ships in CryptX alongside the Crypt::AuthEnc::GCM
+    this distribution loads at compile time, so it could not be reached
+    by any install able to load the code - and had it been reached it
+    would have downgraded a seeded CSPRNG without telling anyone. No
+    correctly generated document is affected and no wire bytes move.
   - Fix Perl-encrypted YAML being rejected outright by the sops CLI:
     lastmodified was emitted as a bare RFC3339 scalar, which Go's YAML
     parser types as time.Time where sops expects a string, so sops
