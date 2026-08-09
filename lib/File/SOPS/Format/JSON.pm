@@ -83,6 +83,14 @@ sub serialize {
     my $data     = $args{data}     // croak "data required";
     my $metadata = $args{metadata} // croak "metadata required";
 
+    # The metadata goes into `sops`, so a value already there would be
+    # overwritten -- and since the digest was computed over the tree BEFORE
+    # serialization, the document that came out failed its own MAC. Refuse
+    # instead, as sops does (exit 203). See File::SOPS::encrypt.
+    croak "data contains a top-level 'sops' entry, which is where the SOPS "
+        . "metadata section goes"
+        if exists $data->{sops};
+
     my %output = %$data;
     $output{sops} = $metadata->to_hash;
 
@@ -100,6 +108,11 @@ Class method to serialize data and metadata to JSON.
 
 The C<data> parameter must be a HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
+
+Dies if C<data> has a top-level C<sops> key: that is where the metadata section
+is written, so the value would be overwritten. Until 0.004 it was, silently,
+and the resulting document failed its own MAC because the digest had already
+covered the discarded value.
 
 Returns a pretty-printed, canonically-ordered JSON string with the C<sops>
 section included.

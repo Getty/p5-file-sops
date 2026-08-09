@@ -228,6 +228,17 @@ where Perl's flags can be contaminated by the caller are in
 L<File::SOPS::Encrypted/detect_type> and
 L<File::SOPS::Encrypted/value_to_bytes>.
 
+=head3 Integers are Go's int64, and Perl's are wider
+
+Perl's integers reach C<2**64-1>; the SOPS C<int> type is Go's C<int64> and
+stops at C<2**63-1>. L</encrypt> B<dies> rather than write an integer outside
+that range, and L</decrypt> dies rather than read one, because there is no wire
+form that preserves it: C<type:int> makes C<sops -d> stop with C<strconv.Atoi:
+value out of range>, and C<type:float> -- what sops's own JSON store falls back
+to -- silently drops digits. Pass such a value as a B<string>; that is
+C<type:str>, written verbatim, and it survives both implementations intact.
+See L<File::SOPS::Encrypted/assert_representable>.
+
 =cut
 
 my %FORMATS = (
@@ -244,6 +255,7 @@ sub encrypt {
 
     croak "data must be a hash ref" unless ref($data) eq 'HASH';
     croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
+    croak _sops_key_reserved('data') if exists $data->{sops};
 
     # Generate random 256-bit data key
     my $data_key = _random_bytes(32);
@@ -298,6 +310,13 @@ write to a C<:raw> handle. See L</Character encoding>.
 
 The C<recipients> parameter must be an ArrayRef of age public keys (starting
 with C<age1...>).
+
+B<Dies if C<data> has a top-level C<sops> key.> That name is reserved for the
+metadata section; there is nowhere else to put the metadata, so a document
+using it cannot be encrypted. Until 0.004 the user's value was silently
+replaced by the metadata -- and since the digest had already covered it, the
+resulting document failed its own MAC on the next read. sops refuses such a
+file too, with exit code 203, and its advice applies here: rename the entry.
 
 Supported formats: C<yaml>, C<yml>, C<json>.
 
@@ -404,9 +423,16 @@ sub encrypt_file {
     my $content = do { local $/; <$fh> };
     close $fh;
 
-    # Parse to get data structure
+    # Parse to get data structure.
+    #
+    # parse() SPLITS OFF the sops section, so by the time $data reaches
+    # encrypt() an already-encrypted input is indistinguishable from a plain
+    # tree of ENC[...] strings -- which encrypt would happily wrap a second
+    # time. $metadata being defined is exactly "the input had a top-level sops
+    # entry", which is the condition sops itself refuses on.
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
-    my ($data, undef) = $format_class->parse($content);
+    my ($data, $metadata) = $format_class->parse($content);
+    croak _sops_key_reserved("input file '$input'") if $metadata;
 
     # Encrypt
     my $encrypted = $class->encrypt(
@@ -441,6 +467,17 @@ encrypted content to the output file. If C<output> is not specified, encrypts
 in-place (overwrites the input file).
 
 The input is read as UTF-8; see L</Character encoding>.
+
+B<Dies if the input already has a top-level C<sops> entry> -- which is what an
+already-encrypted file looks like. Until 0.004 there was no such check, and the
+result destroyed data: parsing split the C<sops> section off before L</encrypt>
+ever saw it, so the C<ENC[...]> strings were encrypted a second time under a
+B<new> data key while the old section -- holding the key they were encrypted
+with -- was discarded rather than written back. The doubly-wrapped file was
+written out successfully and silently, over the original if C<output> was
+omitted, and decrypting it returns the inner C<ENC[...]> strings that nothing
+can now decrypt. To re-key an encrypted file use L</rotate>; to change its
+contents, decrypt it first. sops refuses the same input with exit code 203.
 
 Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>)
 unless explicitly specified.
@@ -483,6 +520,13 @@ sub decrypt_file {
         $decrypted = JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1)
             ->encode($data);
     } else {
+        # Same boolean mode File::SOPS::Format::YAML dumps under, and localised
+        # for the same reason: without it a JSON::PP::Boolean comes out as
+        # `!!perl/scalar:JSON::PP::Boolean 1` instead of `true`. This used to
+        # work only because Format::YAML set the variable process-wide at load
+        # time -- an action-at-a-distance dependency, on a global that is not
+        # ours to set.
+        local $YAML::XS::Boolean = $File::SOPS::Format::YAML::BOOLEAN_MODE;
         $decrypted = YAML::XS::Dump($data);
     }
 
@@ -559,30 +603,37 @@ sub extract {
 
 Extracts and decrypts a single value from an encrypted file.
 
-This is more efficient than decrypting the entire file when you only need
-one value.
-
 Path can be specified in two formats:
 
 =over 4
 
-=item * Bracket notation: C<["database"]["password"]>
+=item * Bracket notation: C<["database"]["password"]>, C<['database']['password']>
 
 =item * Dot notation: C<database.password>
 
 =back
 
-For array indices, use numeric keys: C<["items"][0]> or C<items.0>
+For array indices, use a bare number: C<["items"][0]> or C<items.0>. Before
+0.004 the bracket parser only recognised double-quoted components, so
+C<["items"][0]> matched C<items> alone and returned the whole ArrayRef.
 
-The whole file is still decrypted and MAC-verified; C<extract> saves you the
-navigation, not the work. C<ignore_mac> is passed through to L</decrypt>.
+The whole file is decrypted and MAC-verified either way. C<extract> saves you
+the navigation, not the work -- it is not a cheaper L</decrypt>.
+C<ignore_mac> is passed through to L</decrypt>.
 
 C<path> is a character string and is matched against the document's keys as
 characters, so a non-ASCII key is written in C<path> exactly as you would write
-it in C<data>. The returned value is a character string. See
-L</Character encoding>.
+it in C<data>. See L</Character encoding>.
 
-Returns the decrypted value (scalar, not reference).
+Returns whatever the path names: a decrypted scalar for a leaf, or a HashRef or
+ArrayRef for a branch -- C<extract(path =E<gt> '["database"]')> returns the
+whole subtree, as C<sops --extract> does.
+
+B<Dies if the path does not exist>, at any depth, naming the component that was
+not found. Before 0.004 a missing B<top-level> key returned C<undef> while a
+missing nested one died, so the same mistake was silent or loud depending on
+where it was made -- and C<undef> was indistinguishable from a key whose value
+really is null. sops reports C<component ['nope'] not found> at every level.
 
 =cut
 
@@ -678,6 +729,57 @@ Returns true on success.
 
 # Internal helpers
 
+# The top-level `sops` key is reserved for the metadata section, and there is
+# no way to encrypt a document that already uses it: serialization assigns the
+# metadata into that key unconditionally, so the user's value is overwritten --
+# after the digest has already covered it, which leaves a document that fails
+# its own MAC on the very next read.
+#
+# sops refuses the same thing, before encrypting anything, with exit code 203:
+#
+#   The file you have provided contains a top-level entry called 'sops' [...]
+#   SOPS uses a top-level entry called 'sops' to store the metadata required to
+#   decrypt the file. For this reason, SOPS can not encrypt files that already
+#   contain such an entry.
+#
+# It makes no distinction between "already encrypted" and "a user key that
+# happens to be called sops" -- and neither do we, because from the outside
+# they are the same document.
+sub _sops_key_reserved {
+    my ($what) = @_;
+    return
+        "$what contains a top-level 'sops' entry, which is reserved for the "
+      . "SOPS metadata section. Encrypting would overwrite it and produce a "
+      . "document that fails its own MAC verification. This usually means the "
+      . "input is already encrypted -- use rotate to re-key it, or decrypt it "
+      . "first. If it really is plaintext, rename the entry. (sops refuses "
+      . "such a file too, with exit code 203.)";
+}
+
+# Say WHERE something went wrong. A generic failure in a document of a hundred
+# leaves costs an afternoon; the key path costs nothing to carry and is the
+# only thing that makes the message actionable.
+#
+# The path is made of KEYS, which a SOPS document leaves readable by design.
+# Nothing derived from the plaintext, the data key or an age identity is ever
+# interpolated into an error -- an error message goes to logs and bug reports,
+# and a value that leaks there was not encrypted for any practical purpose.
+sub _at_path {
+    my ($path, $err) = @_;
+    my $where = ($path && @$path) ? join(':', @$path) : '(document root)';
+    return "$where: " . _reason($err);
+}
+
+# An inner error's own text, without the file and line croak appended to it --
+# the outer croak supplies a fresh one. Empty $@ becomes something readable
+# rather than an empty pair of parentheses.
+sub _reason {
+    my ($err) = @_;
+    return 'no reason given' unless defined $err && length $err;
+    $err =~ s/\s+at\s+\S+\s+line\s+\d+\.?\s*\z//;
+    return length($err) ? $err : 'no reason given';
+}
+
 sub _encrypt_tree {
     my ($node, $key, $metadata, $path) = @_;
 
@@ -703,21 +805,32 @@ sub _encrypt_tree {
     }
     else {
         # Leaf value - encrypt it
-        # SOPS doesn't encrypt empty values, returns empty string.
+        # SOPS doesn't encrypt empty values; they stay in the document AS THEY
+        # ARE. A null stays a null and an empty string stays an empty string.
+        # Returning '' for both turned every null in the input into an empty
+        # string, where sops leaves a null alone in YAML and in JSON alike
+        # (measured: `a: null` comes back out of `sops -d` as `a: null`). The
+        # digest does not notice, because Go hashes a nil as nothing and so do
+        # we -- but the value the caller stored came back changed, which is the
+        # one thing this library exists not to do.
+        #
         # The !blessed() guard is load-bearing: JSON::PP::Boolean overloads eq,
         # and JSON->false eq '' is TRUE (while it stringifies to '0'). Without
         # the guard every false boolean was skipped here and written to the file
         # as a plaintext '', after _compute_mac had already hashed 'False' --
         # so the document failed its own MAC check on the next read. sops
         # encrypts false as type:bool with plaintext 'False'.
-        return '' if !defined $node || (!blessed($node) && $node eq '');
+        return undef if !defined $node;
+        return ''    if !blessed($node) && $node eq '';
 
         my $aad = _path_to_aad($path);
-        my $enc = File::SOPS::Encrypted->encrypt_value(
-            value => $node,
-            key   => $key,
-            aad   => $aad,
-        );
+        my $enc = eval {
+            File::SOPS::Encrypted->encrypt_value(
+                value => $node,
+                key   => $key,
+                aad   => $aad,
+            );
+        } or croak _at_path($path, $@);
         return $enc->to_string;
     }
 }
@@ -742,9 +855,13 @@ sub _decrypt_tree {
         return \@result;
     }
     elsif (File::SOPS::Encrypted->is_encrypted($node)) {
-        my $enc = File::SOPS::Encrypted->parse($node);
         my $aad = _path_to_aad($path);
-        return $enc->decrypt_value(key => $key, aad => $aad);
+        my @value = eval {
+            my $enc = File::SOPS::Encrypted->parse($node);
+            (scalar $enc->decrypt_value(key => $key, aad => $aad));
+        };
+        croak _at_path($path, $@) if $@;
+        return $value[0];
     }
     else {
         return $node;
@@ -806,8 +923,25 @@ my $ORDERED_LOADER = YAML::PP->new(
 sub _compute_mac {
     my ($data, $key, $metadata) = @_;
 
+    my $leaves = _sorted_leaves($data, [], []);
+
+    # Every leaf this document will contain has to be one both implementations
+    # can write and read back. Checked HERE, before anything is emitted,
+    # because this is the only walk on the encrypt side that sees every leaf --
+    # including the ones the encryption rules exclude, which reach the document
+    # verbatim and are the case Go rejects hardest (a uint64 stops `sops -d`
+    # outright in YAML and produces a MAC mismatch in JSON). Doing it in
+    # encrypt_value would miss exactly those, and doing it in value_to_bytes
+    # would also reject legitimate sops documents on the READ side, where the
+    # same walk is used to verify.
+    for my $leaf (@$leaves) {
+        my ($path, $value) = @$leaf;
+        eval { File::SOPS::Encrypted->assert_representable($value); 1 }
+            or croak _at_path($path, $@);
+    }
+
     my $mac_value = _mac_digest(
-        leaves   => _sorted_leaves($data, [], []),
+        leaves   => $leaves,
         metadata => $metadata,
     );
 
@@ -832,9 +966,14 @@ sub _verify_mac {
         . "(pass ignore_mac => 1 to override)"
         unless defined $stored && length $stored;
 
-    my $mac_enc = File::SOPS::Encrypted->parse($stored)
-        or croak "Cannot parse MAC - refusing to return unverified data "
-        . "(pass ignore_mac => 1 to override)";
+    # parse() now dies on a well-shaped ENC value whose base64 is not valid,
+    # rather than decoding it to something shorter. Catch it here so the
+    # message still says WHICH value was unreadable -- the sops section's mac,
+    # not some leaf.
+    my $mac_enc = eval { File::SOPS::Encrypted->parse($stored) };
+    croak "Cannot parse MAC (" . _reason($@) . ") - refusing to return "
+        . "unverified data (pass ignore_mac => 1 to override)"
+        unless $mac_enc;
 
     my $expected = eval {
         $mac_enc->decrypt_bytes(key => $data_key, aad => $metadata->lastmodified // '')
@@ -857,7 +996,24 @@ sub _verify_mac {
         data_key => $data_key,
     );
 
-    croak "MAC verification failed" unless $expected eq $computed;
+    # Say what was checked. Neither digest is printed: it is a SHA-512 over the
+    # concatenated plaintexts of the whole document, and a document with one
+    # short secret in it is brute-forceable from that hash. sops prints both;
+    # we print the shape of the check instead, which is the part that tells you
+    # where to look. Nothing here is derived from a value, a data key or an age
+    # identity.
+    croak sprintf(
+        "MAC verification failed: the digest over %d leaf value%s in %s "
+        . "order does not match the one stored in the sops section%s. The "
+        . "document has been altered since it was written, or was written by "
+        . "something that computes the digest differently. Pass ignore_mac "
+        . "=> 1 to read it anyway -- what you get back is decrypted but not "
+        . "authenticated.",
+        scalar @$leaves,
+        (@$leaves == 1 ? '' : 's'),
+        ($ordered ? 'document' : 'sorted-key'),
+        ($metadata->mac_only_encrypted ? ', with mac_only_encrypted set' : ''),
+    ) unless $expected eq $computed;
 
     return 1;
 }
@@ -893,9 +1049,22 @@ sub _mac_bytes {
     # normalising, because SOPS's ToBytes titlecases the boolean it parsed
     # rather than echoing the spelling it was given.
     if (defined $data_key && File::SOPS::Encrypted->is_encrypted($value)) {
-        my $enc   = File::SOPS::Encrypted->parse($value);
-        my $bytes = $enc->decrypt_bytes(key => $data_key, aad => _path_to_aad($path));
-        return $bytes unless $enc->type eq 'bool';
+        # A value that will not parse or will not decrypt used to be skipped
+        # here, so the digest quietly covered a different document than the one
+        # on disk and the only symptom was "MAC verification failed" with no
+        # indication of which leaf caused it. That is what made every other MAC
+        # defect in this distribution expensive to find. Fail at the leaf, and
+        # say which leaf.
+        my ($bytes, $type) = do {
+            my @r = eval {
+                my $enc = File::SOPS::Encrypted->parse($value);
+                ($enc->decrypt_bytes(key => $data_key, aad => _path_to_aad($path)),
+                 $enc->type);
+            };
+            croak _at_path($path, $@) if $@;
+            @r;
+        };
+        return $bytes unless $type eq 'bool';
         return (lc($bytes) eq 'true' || $bytes eq '1') ? 'True' : 'False';
     }
 
@@ -924,22 +1093,53 @@ sub _sorted_leaves {
 # Leaves in document order. $ordered is the same document reparsed with key
 # order preserved and supplies the order; $node is the tree the rest of the
 # library is working with and supplies the values, so the digest never sees a
-# value the second parser resolved differently. A structural disagreement
-# between the two makes verification fail, which is the safe direction.
+# value the second parser resolved differently.
+#
+# A structural disagreement between the two is REPORTED, at the path it happens
+# at. It used to return the leaves collected so far, which is not "verification
+# fails" but "verification is performed over part of the document" -- and since
+# a missing key contributed an undef leaf, which hashes as nothing, that could
+# still produce a matching digest. Even when it did fail, the only symptom was
+# a bare "MAC verification failed" with no hint that half the tree had been
+# dropped before the digest was taken.
 sub _document_leaves {
     my ($ordered, $node, $path, $out) = @_;
 
     if (ref $ordered eq 'HASH') {
-        return $out unless ref $node eq 'HASH';
-        _document_leaves($ordered->{$_}, $node->{$_}, [@$path, $_], $out)
-            for keys %$ordered;
+        croak _at_path($path, "the document has a mapping here but the parsed "
+            . "tree does not, so the digest cannot be built over the same "
+            . "values the file contains")
+            unless ref $node eq 'HASH';
+
+        for my $k (keys %$ordered) {
+            croak _at_path([@$path, $k], "present in the document but not in "
+                . "the parsed tree")
+                unless exists $node->{$k};
+            _document_leaves($ordered->{$k}, $node->{$k}, [@$path, $k], $out);
+        }
     }
     elsif (ref $ordered eq 'ARRAY') {
-        return $out unless ref $node eq 'ARRAY';
+        croak _at_path($path, "the document has a sequence here but the parsed "
+            . "tree does not")
+            unless ref $node eq 'ARRAY';
+        croak _at_path($path, sprintf("the document has %d entries here but "
+            . "the parsed tree has %d", scalar @$ordered, scalar @$node))
+            unless @$ordered == @$node;
+
         _document_leaves($ordered->[$_], $node->[$_], $path, $out)
             for 0 .. $#$ordered;
     }
     else {
+        # Only a CONTAINER here is a disagreement. A blessed scalar is a leaf:
+        # a JSON::PP::Boolean is what the format parsers hand back for a bare
+        # true/false, while the order-preserving reparse yields a plain scalar
+        # for the same node -- the two disagree about the boolean's
+        # REPRESENTATION, never about the document's shape, and $ordered is
+        # consulted for order only.
+        croak _at_path($path, "the document has a scalar here but the parsed "
+            . "tree has a " . lc(ref $node))
+            if ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
         push @$out, [ $path, $node ];
     }
 
@@ -987,29 +1187,67 @@ sub _value_to_bytes {
 sub _extract_path {
     my ($data, $path) = @_;
 
-    # Parse path like ["database"]["password"] or .database.password
-    my @parts;
-    if ($path =~ /^\[/) {
-        while ($path =~ /\["([^"]+)"\]/g) {
-            push @parts, $1;
-        }
-    } else {
-        $path =~ s/^\.//;
-        @parts = split /\./, $path;
-    }
+    my @parts = _split_path($path);
 
+    # Navigation failure is an error at EVERY depth. It used to be an error
+    # only when nested: a missing top-level key fell through the loop and came
+    # back as undef, indistinguishable from a key whose value really is null.
+    # sops answers the same question the same way at every level --
+    # `error truncating tree: component ['nope'] not found`, exit 1.
     my $current = $data;
+    my @walked;
     for my $part (@parts) {
+        my $where = @walked ? join(':', @walked) : '(document root)';
+
         if (ref $current eq 'HASH') {
+            croak "Cannot navigate path '$path': component '$part' not found "
+                . "under $where"
+                unless exists $current->{$part};
             $current = $current->{$part};
-        } elsif (ref $current eq 'ARRAY' && $part =~ /^\d+$/) {
-            $current = $current->[$part];
-        } else {
-            croak "Cannot navigate path: $path";
         }
+        elsif (ref $current eq 'ARRAY' && $part =~ /\A\d+\z/) {
+            croak "Cannot navigate path '$path': index $part is out of range "
+                . "at $where"
+                unless $part <= $#$current;
+            $current = $current->[$part];
+        }
+        else {
+            croak "Cannot navigate path '$path': $where is not a "
+                . (ref($current) eq 'ARRAY' ? "list index" : "collection")
+                . ", so it has no component '$part'";
+        }
+
+        push @walked, $part;
     }
 
     return $current;
+}
+
+# ["database"]["password"], ['database'][0], or database.password / .items.0
+#
+# The bracket form used to be matched with /\["([^"]+)"\]/g, which only knows
+# QUOTED keys -- so the documented ["items"][0] matched only the first
+# component and extract handed back the whole arrayref instead of the element.
+# An unquoted component is what an index looks like, and it is the form sops
+# itself accepts: `sops -d --extract '["items"][0]'` returns the element.
+sub _split_path {
+    my ($path) = @_;
+
+    unless ($path =~ /\A\[/) {
+        $path =~ s/\A\.//;
+        return split /\./, $path;
+    }
+
+    my @parts;
+    my $rest = $path;
+    while (length $rest) {
+        $rest =~ s{\A \[ (?: "([^"]*)" | '([^']*)' | ([^\[\]]+) ) \] }{}x
+            or croak "Cannot parse path '$path' at '$rest': expected "
+                   . qq{["key"], ['key'] or [index]};
+        push @parts, $1 // $2 // $3;
+    }
+
+    return @parts;
 }
 
 sub _detect_format {

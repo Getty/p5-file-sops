@@ -29,6 +29,22 @@ Revision history for File-SOPS
       value under unencrypted_suffix produced a document that failed
       verification when it was written; there is nothing to recover
       there, and it must be rewritten from the plaintext.
+    * encrypt_file on a file that was ALREADY encrypted encrypted every
+      value a second time and wrote the result, silently - and with
+      output defaulting to input, over the original. THE VALUES ARE
+      GONE. Parsing split the existing sops section off and the new one
+      replaced it, so the file that was written holds the inner
+      ENC[...] strings under a NEW data key while the data key they
+      were encrypted with is not in the file at all. Decrypting such a
+      file returns the inner ENC[...] strings; nothing can decrypt
+      those. If you have a copy of the file from before it was
+      re-encrypted, its sops section holds the missing key.
+    * A top-level key literally named 'sops' in the data you encrypted
+      was overwritten by the metadata section. The value is gone, and
+      the document fails its own MAC because the digest covered it.
+    * A null value was written as an empty string, so a key whose value
+      was null came back as '' and reached sops as '' too. Repairable
+      by re-encrypting from the plaintext.
   Re-encrypt affected documents from their ORIGINAL PLAINTEXT, not from
   the stored ciphertext. Where a value gated access or behaviour, verify
   it by hand: a wrong value may have been in effect since it was written.
@@ -147,6 +163,105 @@ Revision history for File-SOPS
     came back as mojibake. decrypt, decrypt_file and extract now return
     characters. The bytes written to the file are unchanged. See the new
     "Character encoding" section in File::SOPS for the boundary rule.
+  - BEHAVIOUR CHANGE - the top-level 'sops' key is reserved, and both
+    ways of colliding with it now die instead of succeeding silently.
+    encrypt refuses a data structure carrying that key, because
+    serialization writes the metadata there and the user's value was
+    simply overwritten - after the digest had already covered it, so the
+    document failed its own MAC on the next read. encrypt_file refuses
+    an input that already has a sops section, because parsing split it
+    off before encrypt ever saw it and every ENC[...] string was then
+    encrypted a second time under a NEW data key, while the section
+    holding the key they were encrypted with was discarded rather than
+    written back - so the values became unrecoverable, and with output
+    defaulting to input that happened over the original. Measured: sops
+    makes no distinction between
+    the two either, and refuses both with exit code 203 and the same
+    message. Use rotate to re-key an encrypted file. The format
+    handlers' serialize method refuses the same collision.
+  - BEHAVIOUR CHANGE - an integer outside Go's int64 range is refused
+    rather than written. Perl's integers reach 2**64-1 and Go's int
+    stops at 2**63-1, and there is no wire form that preserves the
+    difference: written as type:int, sops -d stops with "strconv.Atoi:
+    value out of range" (exit 25); unencrypted, it stopped the YAML walk
+    outright ("unknown type: uint64") or produced a MAC mismatch in
+    JSON, because Go re-derived the digest from the float64 it parsed.
+    sops's own JSON store silently truncates such an integer to a
+    float64 and its YAML store refuses the document; this release
+    refuses in both, and says so at the key path. Store the digits as a
+    STRING to keep them - that is type:str, written verbatim, and it
+    survives both implementations. Reading is deliberately unaffected
+    for values sops legitimately writes: its truncated 12345678901234567000
+    parses back as a Perl integer above int64 and must still hash as
+    those digits. Reading a type:int whose plaintext is out of range, or
+    is not an integer at all, now dies as Go does; decrypt_bytes still
+    returns the plaintext, which is how such a value is recovered.
+  - BEHAVIOUR CHANGE - an unknown type: field is now an error ("Unknown
+    datatype", as Go says) instead of quietly returning the raw
+    plaintext, so a document this library cannot interpret no longer
+    looks like it was read. type:time and type:comment are added to the
+    ladder rather than rejected: sops emits both - a bare RFC3339 scalar
+    or date becomes type:time, and a YAML comment becomes a type:comment
+    node written as #ENC[...] on its own line - and both already worked
+    by accident through the unknown branch. A type:time value is
+    returned as its RFC3339 string, since Perl has no native date. A
+    type:float plaintext that is not a number is an error too, where
+    + 0.0 turned it into 0 without a word.
+  - BEHAVIOUR CHANGE - base64 in an ENC value is now decoded strictly.
+    MIME::Base64 ignores characters outside the alphabet and stops at a
+    short group, so a corrupted data, iv or tag field decoded to
+    something shorter and surfaced much later as "Authentication failed
+    - data may be corrupted", or as a cipher rejecting the nonce length.
+    Go fails immediately, and names the field. is_encrypted is
+    unaffected and still never dies: it answers about the shape.
+  - BEHAVIOUR CHANGE - encrypt_value refuses an empty value. GCM
+    ciphertext is as long as its plaintext, so an empty one produced
+    ENC[AES256_GCM,data:,...] - a string neither this module's own regex
+    nor sops accepts ("Input string ENC[...] does not match sops' data
+    format", exit 25). sops leaves empty values unencrypted, which is
+    what File::SOPS::encrypt does before it ever calls encrypt_value.
+  - BEHAVIOUR CHANGE - extract dies on a path that does not exist,
+    naming the component that was not found. A missing TOP-LEVEL key
+    used to return undef while a missing nested one died, so the same
+    mistake was silent or loud depending on where it was made - and
+    undef was indistinguishable from a key whose value really is null.
+    sops reports "component ['nope'] not found" at every level.
+  - Fix extract's bracket notation with an array index. The parser only
+    recognised double-quoted components, so the documented ["items"][0]
+    matched "items" alone and returned the whole ArrayRef instead of the
+    element. Bare indices and single-quoted keys now work, as they do in
+    sops --extract. Its POD claimed extract was more efficient than
+    decrypting the whole file (it decrypts the whole file) and that it
+    returned a scalar and not a reference (extracting a branch returns
+    the branch, as sops does); both claims are corrected.
+  - Fix undef being written as an empty string. sops leaves a null alone
+    in YAML and in JSON alike, so a key whose value was null came back
+    from File::SOPS as '' and reached sops as '' too. Both hash as
+    nothing, so the digest never noticed and the document verified
+    either way - the value was simply not the one that went in.
+  - Fix $YAML::XS::Boolean being set at load time. It is a process
+    global that changes what YAML::XS::Load and ::Dump do for every
+    other user of them in the same interpreter, so merely loading
+    File::SOPS rewrote how unrelated code parsed YAML. It is now set
+    with local around this distribution's own calls. decrypt_file, which
+    calls YAML::XS::Dump directly, was depending on that global to avoid
+    emitting booleans as !!perl/scalar:JSON::PP::Boolean, and now sets
+    it for itself.
+  - Failures say where and why. A value that would not parse, decrypt or
+    place was skipped during the MAC walk, so the digest quietly covered
+    a different document than the one on disk and the only symptom was
+    "MAC verification failed" with no indication of the culprit - which
+    is what made every other MAC defect in this distribution expensive
+    to find. Value errors now name the key path on both the encrypt and
+    the decrypt side, a structural disagreement between the document and
+    the parsed tree is reported at the path it happens at instead of
+    truncating the digest, and the MAC message says how many leaves were
+    covered, in which order, and how to read the file anyway. No error
+    message contains a plaintext value, a data key or an age identity -
+    the key path only, which a SOPS document leaves readable by design.
+    The digests themselves are deliberately not printed, unlike sops:
+    a SHA-512 over the concatenated plaintexts is an oracle for a
+    document with one short secret in it.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without
@@ -154,7 +269,11 @@ Revision history for File-SOPS
     The encoding tests include a document written by the real sops
     3.13.3, checked in with its throwaway age identity, so the read side
     is pinned against the reference implementation even when the binary
-    is absent.
+    is absent. Four more files pin the reserved sops key, the integer
+    range, the API edges above and the diagnostics, and the interop
+    suite gained the Go half of each: the exit-203 refusal, sops's own
+    int64 boundary in both formats, nulls in both directions, and a real
+    sops document containing timestamps and comments.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

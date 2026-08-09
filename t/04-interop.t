@@ -961,4 +961,205 @@ subtest 'Latin-1-range values survive in both directions' => sub {
     }
 };
 
+###############################################################################
+# Test 21: the top-level `sops` key is reserved, in Go too (karr #18)
+#
+# The rule File::SOPS now enforces is not invented here. sops refuses ANY input
+# document with a top-level `sops` entry -- an already-encrypted file and a
+# plaintext file with a user key of that name alike -- before it encrypts
+# anything, with exit code 203. This subtest is what makes that a measurement
+# rather than a claim, and it will notice if the reference ever changes.
+###############################################################################
+subtest 'sops refuses a document with a top-level sops key' => sub {
+    my $plain = "$tempdir/userkey.yaml";
+    write_file($plain, "sops: mine\nother: v\n");
+
+    my $out = `$sops_bin -e --age $public $plain 2>&1`;
+    is($? >> 8, 203, 'sops refuses a plaintext file with a user key named sops');
+    like($out, qr/top-level entry called 'sops'/,
+        'and says why');
+
+    # Already encrypted: same refusal, same code.
+    my $encrypted = File::SOPS->encrypt(
+        data => { secret => 'value' }, recipients => [$public], format => 'yaml',
+    );
+    my $enc_file = "$tempdir/already_encrypted.yaml";
+    write_file($enc_file, $encrypted);
+
+    $out = `$sops_bin -e --age $public $enc_file 2>&1`;
+    is($? >> 8, 203, 'sops refuses to encrypt an already-encrypted file');
+
+    # And File::SOPS refuses the same two inputs.
+    my $err = do {
+        local $@;
+        eval { File::SOPS->encrypt_file(
+            input => $enc_file, output => "$tempdir/twice.yaml", recipients => [$public],
+        ) };
+        $@;
+    };
+    like($err, qr/top-level 'sops' entry/, 'and so does File::SOPS');
+};
+
+###############################################################################
+# Test 22: integers are Go's int64 (karr #28)
+#
+# Measured: sops writes type:int only within int64. Outside it, YAML refuses the
+# document outright (uint64) and JSON silently degrades to a truncated float64.
+# File::SOPS used to write the exact decimal under type:int, which sops -d then
+# refused with "strconv.Atoi: value out of range" (exit 25) -- and unencrypted,
+# a uint64 stopped the YAML walk (exit 25) or produced a MAC mismatch in JSON
+# (exit 51). The pin is that everything we DO write, sops reads.
+###############################################################################
+subtest 'Integer range against the reference' => sub {
+    # The widest values sops writes as type:int. If these ever stop working,
+    # the range check is wrong in the other direction.
+    for my $edge (9223372036854775807, -9223372036854775807 - 1) {
+        my $encrypted = File::SOPS->encrypt(
+            data => { v => $edge, n => 1 }, recipients => [$public], format => 'yaml',
+        );
+        my $f = "$tempdir/int_edge.yaml";
+        write_file($f, $encrypted);
+
+        my $output = `$sops_bin -d $f 2>&1`;
+        is($? >> 8, 0, "sops decrypts a document holding $edge")
+            or diag("sops output: $output");
+        like($output, qr/^v: \Q$edge\E$/m, "and gives it back exactly") if $? >> 8 == 0;
+    }
+
+    # sops's own boundary, restated as an assertion. A YAML uint64 is not
+    # something sops can even encrypt, which is why File::SOPS refuses to
+    # produce one rather than degrading it to a float.
+    my $plain = "$tempdir/uint64.yaml";
+    write_file($plain, "v: 12345678901234567890\n");
+    my $out = `$sops_bin -e --age $public $plain 2>&1`;
+    is($? >> 8, 23, 'sops itself refuses a YAML integer above int64');
+    like($out, qr/unknown type: uint64/, 'because yaml.v3 hands it a uint64');
+
+    # And File::SOPS refuses to write one, in either format, encrypted or not.
+    for my $key (qw(v v_unencrypted)) {
+        my $err = do {
+            local $@;
+            eval { File::SOPS->encrypt(
+                data => { $key => 12345678901234567890 },
+                recipients => [$public], format => 'yaml',
+            ) };
+            $@;
+        };
+        like($err, qr/int64/, "File::SOPS refuses to write one under '$key'");
+    }
+
+    # The digits survive as a string, which is what a caller does instead.
+    my $encrypted = File::SOPS->encrypt(
+        data => { v => '12345678901234567890' },
+        recipients => [$public], format => 'yaml',
+    );
+    my $f = "$tempdir/int_string.yaml";
+    write_file($f, $encrypted);
+    my $output = `$sops_bin -d $f 2>&1`;
+    is($? >> 8, 0, 'sops decrypts the same digits stored as a string')
+        or diag("sops output: $output");
+    like($output, qr/^v: "12345678901234567890"$/m,
+        'and reads them back as a string, with every digit') if $? >> 8 == 0;
+};
+
+###############################################################################
+# Test 23: null stays null (karr #20d)
+#
+# sops leaves a null alone in both formats: it is not encrypted and comes back
+# as a null. File::SOPS turned every undef into an empty string, so a value the
+# caller stored came back changed -- silently, because the digest treats both
+# as nothing and the document verified either way.
+###############################################################################
+subtest 'Null values survive in both directions' => sub {
+    for my $format (qw(yaml json)) {
+        # --- we write, sops reads ------------------------------------------
+        my $encrypted = File::SOPS->encrypt(
+            data       => { nothing => undef, empty => '', filled => 'v' },
+            recipients => [$public],
+            format     => $format,
+        );
+        my $f = "$tempdir/null.$format";
+        write_file($f, $encrypted);
+
+        my $output = `$sops_bin -d $f 2>&1`;
+        my $code = $? >> 8;
+        is($code, 0, "[$format] sops decrypts a document with a null")
+            or diag("sops output: $output");
+        next unless $code == 0;
+
+        my $back = $format eq 'json' ? decode_json($output) : Load($output);
+        ok(exists $back->{nothing}, "[$format] the null key is there");
+        is($back->{nothing}, undef, "[$format] and sops reads it back as a null");
+        is($back->{empty}, '', "[$format] the empty string is still an empty string");
+
+        # --- sops writes, we read ------------------------------------------
+        my $plain_file = "$tempdir/null_src.$format";
+        write_file($plain_file, $format eq 'json'
+            ? qq({"a": null, "d": "x", "e_unencrypted": null}\n)
+            : "a: null\nd: x\ne_unencrypted: null\n");
+
+        my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops encrypts a document with nulls")
+            or diag($sops_enc);
+        like($sops_enc, qr/^\s*"?a"?\s*:\s*null,?$/m,
+            "[$format] and leaves the null unencrypted");
+
+        my $got = eval {
+            File::SOPS->decrypt(
+                encrypted => $sops_enc, identities => [$secret], format => $format,
+            );
+        };
+        is($@, '', "[$format] Perl verifies a sops document with nulls")
+            or diag("died: $@");
+        is($got->{a}, undef, "[$format] and the null comes back as undef") if $got;
+    }
+};
+
+###############################################################################
+# Test 24: type:time, and the shapes Go refuses (karr #19)
+#
+# sops emits type:time for a bare RFC3339 scalar and for a bare date. Our type
+# ladder did not know the name, and only reached the right answer because the
+# unknown branch returned the raw string. Now that an unknown type is an error,
+# this is the test that keeps a sops file with a timestamp readable.
+#
+# Comments are the other half: sops writes them as `#ENC[...,type:comment]` on
+# their own line, YAML::XS drops them on parse -- and the document still
+# verifies, which is the measurement that says Go does not hash them either.
+###############################################################################
+subtest 'type:time and type:comment in a real sops document' => sub {
+    my $plain_file = "$tempdir/time.yaml";
+    write_file($plain_file, <<'YAML');
+# a leading comment
+ts: 2026-08-09T12:00:00Z
+date: 2026-08-09
+# an inner comment
+key: value
+YAML
+
+    my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+    is($? >> 8, 0, 'sops encrypts a document with timestamps and comments')
+        or diag($sops_enc);
+
+    like($sops_enc, qr/^ts: ENC\[[^\]]*type:time\]$/m,
+        'sops types a bare RFC3339 scalar as time');
+    like($sops_enc, qr/^date: ENC\[[^\]]*type:time\]$/m,
+        'and a bare date too');
+    like($sops_enc, qr/^#ENC\[[^\]]*type:comment\]$/m,
+        'and writes comments as their own type:comment nodes');
+
+    my $got = eval {
+        File::SOPS->decrypt(
+            encrypted => $sops_enc, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'Perl verifies it -- so comments are not in the digest')
+        or diag("died: $@");
+    return unless $got;
+
+    is($got->{ts}, '2026-08-09T12:00:00Z', 'a type:time value comes back as its RFC3339 text');
+    is($got->{date}, '2026-08-09T00:00:00Z', 'and a bare date as midnight UTC');
+    is($got->{key}, 'value', 'and the ordinary value is untouched');
+};
+
 done_testing;

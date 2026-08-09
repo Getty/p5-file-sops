@@ -12,7 +12,13 @@ use namespace::clean;
 # Load/Dump round-trip YAML true/false as JSON::PP::Boolean objects -- the same
 # class JSON::MaybeXS blesses into on every backend. Do not "modernise" this
 # string to 'JSON::MaybeXS'; YAML::XS would reject it.
-$YAML::XS::Boolean = 'JSON::PP';
+#
+# LOCALISED around our own calls, never assigned at load time. $YAML::XS::Boolean
+# is a process-global that changes what YAML::XS::Load and ::Dump do for
+# EVERYONE in the program, and setting it as a side effect of `use File::SOPS`
+# silently rewrote the semantics of unrelated code that merely happened to share
+# the interpreter.
+our $BOOLEAN_MODE = 'JSON::PP';
 
 =head1 SYNOPSIS
 
@@ -46,12 +52,18 @@ C<true> loaded from YAML and a C<true> decoded from JSON are the same kind of
 object throughout this distribution, and both are emitted as bare C<true> /
 C<false> rather than degrading to C<1> / C<0> on the next write.
 
+The mode is set with C<local> around this module's own C<Load> and C<Dump>
+calls. C<$YAML::XS::Boolean> is a process global that changes what L<YAML::XS>
+does for every other user of it in the same interpreter, so before 0.004 merely
+loading File::SOPS changed how unrelated code parsed YAML.
+
 =cut
 
 sub parse {
     my ($class, $content) = @_;
     croak "content required" unless defined $content;
 
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
     my $data = Load($content);
     croak "YAML did not parse to a hash" unless ref $data eq 'HASH';
 
@@ -88,9 +100,18 @@ sub serialize {
     my $data     = $args{data}     // croak "data required";
     my $metadata = $args{metadata} // croak "metadata required";
 
+    # The metadata goes into `sops`, so a value already there would be
+    # overwritten -- and since the digest was computed over the tree BEFORE
+    # serialization, the document that came out failed its own MAC. Refuse
+    # instead, as sops does (exit 203). See File::SOPS::encrypt.
+    croak "data contains a top-level 'sops' entry, which is where the SOPS "
+        . "metadata section goes"
+        if exists $data->{sops};
+
     my %output = %$data;
     $output{sops} = $metadata->to_hash;
 
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
     return _quote_sops_timestamp(Dump(\%output));
 }
 
@@ -149,6 +170,11 @@ Class method to serialize data and metadata to YAML.
 
 The C<data> parameter must be a HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
+
+Dies if C<data> has a top-level C<sops> key: that is where the metadata section
+is written, so the value would be overwritten. Until 0.004 it was, silently,
+and the resulting document failed its own MAC because the digest had already
+covered the discarded value.
 
 Returns a YAML string with the C<sops> section appended.
 
