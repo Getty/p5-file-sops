@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-08-09T00:21:10Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:44Z
+id: 18
+priority: medium
+started: 2026-08-08
+status: done
+tags:
+- bug
+title: 'Two silent clobbers: a user key named sops, and re-encrypting an encrypted
+  file'
+updated: 2026-08-09T01:01:31Z
+---
+
+Serialization assigns the metadata into the sops key unconditionally, so a user value under that name vanishes and the resulting file then fails MAC verification. Separately, encrypt_file has no guard against an already-encrypted input: parse drops the existing sops section and the ENC strings get encrypted a second time, succeeding silently. Both reproduced.
+Measured sops 3.13.3: BOTH halves are one rule in Go. Any input document with a top-level 'sops' entry is refused before encryption, exit code 203, message: "The file you have provided contains a top-level entry called 'sops' ... SOPS can not encrypt files that already contain such an entry. If this is an unencrypted file, rename the 'sops' entry. If this is an encrypted file and you want to edit it, use the editor mode". Same refusal for a plain file with 'sops: mine', for sops -e on an already-encrypted file, and for sops -e -i. So the guard is 'a top-level sops key is reserved', not 'the input looks encrypted'.
+Fixed. Both halves are one rule, matching sops's exit-203 refusal. encrypt croaks on a data hash with a top-level sops key; encrypt_file croaks when parse returns a Metadata object; both format handlers' serialize croak on the same collision (that is where the clobber physically is, and serialize is public). rotate still works. Reproduced first in t/09-reserved-sops-key.t (9 of 13 red before the fix), Go half pinned in t/04-interop.t subtest 21. CORRECTION to the ticket body: double encryption does not merely produce a confusing file, it DESTROYS the values - parse splits the sops section off and encrypt writes a new one, so the inner data key is not in the file at all and the inner ENC strings can never be decrypted. Pinned as an assertion, and the Changes recovery block says so. Left open: a top-level sops entry that is NOT a hash is still silently deleted by parse -> karr #34.
