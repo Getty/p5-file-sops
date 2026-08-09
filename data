@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-08-09T00:21:15Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T23:31:20Z
+id: 28
+priority: medium
+started: 2026-08-08
+status: done
+tags:
+- bug
+- interop
+- types
+title: Integers beyond Perl's IV range lose precision and produce files sops refuses
+updated: 2026-08-09T01:01:58Z
+---
+
+Found while fixing karr #15; pre-existing, deliberately left alone there. File::SOPS::Encrypted::_deserialize_value converts type:int with int($data), which routes a large integer through an NV. Measured with sops 3.13.3: a JSON document containing 12345678901234567890 is encrypted fine by sops, but File::SOPS decrypts it as 12345678901234567000 - the value is silently wrong. Re-encrypting that value then writes a plaintext Go cannot read back at all: sops -d exits 25 with "Could not decrypt value: strconv.Atoi: parsing 12345678901234567000: value out of range". So the defect is both a silent value change and a file sops rejects. Note the MAC itself is not affected on a straight read, because verification hashes the authenticated plaintext (decrypt_bytes) rather than the converted value. The fix has to decide what a Perl-representable int64/uint64 boundary means here and what to do above it - Go itself only handles int and float64 in ToBytes. Wants measurement of what sops writes for values above 2^63 before anything is implemented.
+Measured sops 3.13.3, per format, one key per file.
+YAML (go yaml.v3): [-2^63, 2^63-1] -> type:int, exact decimal. [2^63, 2^64-1] -> yaml.v3 yields uint64 and sops REFUSES THE FILE: exit 23, 'Error encrypting tree: Error walking tree: Cannot walk value, unknown type: uint64'. > 2^64-1 -> float64 -> type:float, positional FormatFloat (123456789012345678901234567890 -> 123456789012345680000000000000). < -2^63 -> type:float (-9223372036854775809 -> -9223372036854776000).
+JSON (encoding/json): int64-representable -> type:int; everything else -> type:float with the truncated float64 (12345678901234567890 -> type:float, plaintext 12345678901234567000; 18446744073709551615 -> 18446744073709552000).
+So sops NEVER writes type:int outside int64, in either format. Reading type:int outside int64 fails in Go with strconv.Atoi value out of range.
+Perl side (ivsize=8): int() and 0+ are exact through UV max (18446744073709551615) and only lose precision above 2^64. So the real defect is the WRITE side: a Perl UV in [2^63, 2^64-1] gets detect_type 'int' and an exact decimal plaintext, and sops -d then exits 25 with 'strconv.Atoi: parsing "12345678901234567890": value out of range' - reproduced.
+Fixed after measuring. sops never writes type:int outside int64 in either format: YAML refuses the document (exit 23, 'unknown type: uint64'), JSON silently truncates to float64. Decision: REFUSE on write rather than truncate, because truncating is the silent value change the ticket calls the defect, and because Go itself refuses in the YAML case. New Encrypted->assert_representable is called from _compute_mac's leaf walk - the only encrypt-side walk that sees unencrypted leaves too, which is the case Go rejects hardest - and from encrypt_value for direct callers. Deliberately NOT in value_to_bytes: sops's truncated 12345678901234567000 parses back as a Perl UV above int64, and refusing it there would reject a legitimate sops JSON file on READ (measured). Read side now croaks on a type:int plaintext out of int64 or not an integer, matching strconv.Atoi; decrypt_bytes remains the recovery path. Range test is on the decimal TEXT, not a numified copy: -9223372036854775809 rounds to exactly -2**63 as a double and would have passed a numeric check. t/10-integer-range.t + t/04-interop.t subtest 22.
