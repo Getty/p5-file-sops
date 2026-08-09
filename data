@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T21:25:17Z
+id: 64
+priority: high
+status: done
+tags:
+- test
+- wire
+- json
+title: 'karr #58 Nachtrag: die Testluecken des Float-Fixes'
+updated: 2026-08-09T21:49:51Z
+---
+
+Der Fix aus #58 ist drin und gruen, aber ein Teil seines NEUEN Verhaltens ist ungetestet. Der test-writer war genau daran und ist an einem API-Session-Limit abgebrochen, bevor er eine Zeile geschrieben hat.
+
+Abzudecken, Reihenfolge nach Wichtigkeit:
+
+1. Foreign-Bignum-Guard (WICHTIGSTE Luecke, komplett neues Verhalten). Format::JSON::emit braucht allow_bignum fuer den eigenen Math::BigFloat-Carrier; das whitelistet die Klasse aber fuer JEDEN Wert, auch fuer einen vom Caller uebergebenen, den der Encoder vorher abgelehnt hat. _reject_foreign_bignum croakt jetzt darauf. Ungetestet. Schadensfall gemessen: Math::BigFloat->new("1.00000000000000000000000000001") digestet als 29 Ziffern und laese sich als 1 zurueck.
+2. Globale Math::BigFloat->accuracy/precision. _float_carrier uebergibt explizit undef, undef dagegen und hat eine Assertion. Test muss die globale Einstellung setzen, den 17-stelligen Float pruefen und die Einstellung danach wiederherstellen.
+3. Verschachtelte und Array-Float-Leaves. Der Walk ist rekursiv, getestet ist nur die oberste Ebene.
+4. Cross-Format JSON->YAML und decrypt_file gegen sops -d-Output. Beide laut Messung mitrepariert, beide ungetestet.
+
+Nicht mit reinziehen: NaN, Inf, -0.0 darueber hinaus, int64-Ueberlauf -- das sind #59, #62, #63.
+
+Bevorzugt an t/24-float-precision.t anhaengen. SOPS_BIN=/storage/raid/home/getty/bin/sops fuer Interop. Test-lane.
+Committet als db17acc. Alle vier Punkte gruen, 573 Tests. Der YAML-Grenzfall, den der test-writer dabei gefunden hat, ist als #65 abgelegt.
