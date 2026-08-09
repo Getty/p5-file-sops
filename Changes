@@ -86,6 +86,35 @@ Revision history for File-SOPS
     today's behaviour.
     New prerequisite: Math::BigFloat (core). It is the only carrier
     measured to reach JSON as a bare number rather than a quoted string.
+  - BEHAVIOUR CHANGE: a YAML document with a REFERENCE as a leaf value is
+    now refused instead of written. YAML::XS writes a blessed reference
+    as a Perl-specific tagged structure - !!perl/hash:Math::BigFloat,
+    !!perl/scalar:Foo, !!perl/regexp - and an unblessed one as
+    !!perl/ref or !!perl/code, while detect_type calls the leaf str so
+    the MAC digest covers its STRINGIFICATION. The document and its own
+    MAC then stated different things and nothing could read the file:
+    measured against sops 3.13.3, every such document failed its own
+    verification here and all but one failed in sops too (exit 51). The
+    exception is qr//, which sops accepts because Go resolves the
+    unknown tag to the scalar text - and which File::SOPS then cannot
+    read back, because YAML::XS rebuilds a Regexp from it. It was
+    written silently in every case. The JSON handler has refused these
+    leaves all along (Cpanel::JSON::XS will not encode an object without
+    allow_blessed), so this is the same answer in both formats rather
+    than a new rule. See docs/adr/0008.
+    Nothing that worked stops working. An exact JSON::PP::Boolean is
+    still written as bare true/false - that is the one reference whose
+    document form and digest agree, and it is what JSON->true and a
+    YAML true/false already produce, including the mac_only_encrypted
+    flag in the sops section. A SUBCLASS of it is refused: detect_type
+    calls it bool but YAML::XS writes it as a tag. And only leaves that
+    reach the document verbatim can trigger this at all - values
+    excluded by the encryption rules, plaintext documents, the sops
+    section. An object in an ENCRYPTED slot is an ENC[...] string by the
+    time the emitter sees it and still stores its stringification as
+    type:str, unchanged.
+    The error names the class and what to pass instead; it never names
+    the value.
   - SECURITY: the random data key and the per-value GCM nonce are now
     checked for length where they are generated, and there is only one
     generator left. _random_bytes existed twice, in File::SOPS and in

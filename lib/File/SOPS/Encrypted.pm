@@ -731,11 +731,17 @@ every JSON backend quotes it and needs a L<Math::BigFloat> under
 C<allow_bignum> instead.
 
 =item * C<reject> is optional and is called for every blessed or otherwise
-referenced leaf, so a handler can refuse one its emitter would write
-unfaithfully. It exists because enabling a carrier can widen what the emitter
-silently accepts: C<allow_bignum> also makes L<Cpanel::JSON::XS> write a
-B<caller-supplied> L<Math::BigFloat> as a bare number, where it used to refuse
-the document outright, and the digest hashes such a value as a string.
+referenced leaf, so a handler can refuse one its emitter cannot write as the
+text the digest covers. L</detect_type> calls every reference but a
+L<JSON::PP::Boolean> C<str>, so the digest covers its stringification, and an
+emitter that writes something else instead produces a document that fails its
+own MAC. Both handlers use it: L<File::SOPS::Format::YAML> refuses every
+reference except an exact L<JSON::PP::Boolean>, because L<YAML::XS> writes the
+rest as C<!!perl/> tagged structures; L<File::SOPS::Format::JSON> refuses
+L<Math::BigFloat> and L<Math::BigInt> by name, because the C<allow_bignum>
+its own carrier needs would otherwise make a B<caller-supplied> one a bare
+number where the encoder used to refuse the document outright. See
+L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>.
 
 =back
 

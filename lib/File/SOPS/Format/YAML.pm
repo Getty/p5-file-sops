@@ -3,7 +3,7 @@ package File::SOPS::Format::YAML;
 our $VERSION = '0.003';
 use Moo;
 use Carp qw(croak);
-use Scalar::Util qw(dualvar);
+use Scalar::Util qw(blessed dualvar);
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -277,7 +277,62 @@ sub emit {
         $data,
         roundtrips => \&_float_roundtrips,
         carrier    => \&_float_carrier,
+        reject     => \&_reject_unwritable_leaf,
     ));
+}
+
+# A referenced leaf YAML::XS cannot write as the text the digest covers.
+#
+# detect_type calls every blessed leaf but a JSON::PP::Boolean `str`, so the
+# digest covers its STRINGIFICATION. YAML::XS writes it as a Perl-specific
+# tagged structure instead -- measured against sops 3.13.3, one document per
+# row, leaf under _unencrypted:
+#
+#   Math::BigFloat->new("1.5")  !!perl/hash:Math::BigFloat + guts   exit 51
+#   bless {a=>1}, 'Foo'         !!perl/hash:Foo + guts              exit 51
+#   an object overloading ""    !!perl/hash:Overloaded + guts       exit 51
+#   bless \$s, 'Bar'            !!perl/scalar:Bar x                 exit 51
+#   sub { 1 }                   !!perl/code '{ "DUMMY" }'           exit 51
+#   \1  (unblessed)             !!perl/ref + `=: 1`                 exit 51
+#   qr/abc/                     !!perl/regexp (?^:abc)              exit 0 (!)
+#
+# All seven fail their own MAC check here. qr// is the one sops accepts, because
+# yaml.v3 resolves the unknown tag to the scalar text -- which is what we
+# digested -- while YAML::XS reconstructs a Regexp from it, so File::SOPS cannot
+# read back what it just wrote. Both halves of the same disagreement.
+#
+# JSON has refused all of these since before ADR 0006 (Cpanel::JSON::XS will not
+# encode a blessed reference without allow_blessed/convert_blessed/allow_tags),
+# which is the asymmetry this closes. See docs/adr/0008.
+#
+# The exception is the EXACT class, not ->isa: detect_type accepts a
+# JSON::PP::Boolean subclass as bool, but YAML::XS writes one as
+# `!!perl/scalar:MyBool 1` while the digest still says True -- the same defect
+# wearing the whitelist. The exact class is what $YAML::XS::Boolean = 'JSON::PP'
+# knows how to write, so it is the only reference that survives this emitter.
+#
+# Unblessed refs are in scope deliberately: \1 and a coderef fail identically,
+# and the callback already has them in hand.
+#
+# Not in assert_representable: that runs on the verify side too, and over
+# leaves that are about to become ENC[...] strings. A blessed leaf in an
+# ENCRYPTED slot works in both formats today (type:str, plaintext = the same
+# stringification) and must keep working.
+sub _reject_unwritable_leaf {
+    my ($node) = @_;
+
+    return if ref($node) eq 'JSON::PP::Boolean';
+
+    my $what = blessed($node) ? "a leaf blessed into " . ref($node)
+                              : "an unblessed " . ref($node) . " reference";
+
+    croak "cannot write $what to a SOPS document: YAML::XS writes it as a "
+        . "Perl-specific !!perl/ tagged structure while the digest covers its "
+        . "stringification, so the document and its own MAC would state "
+        . "different things and neither sops nor this module could read the "
+        . "file. Pass a plain Perl scalar, or the string you want stored. A "
+        . "boolean has to be an exact JSON::PP::Boolean (JSON->true / "
+        . "JSON->false); a subclass of it is written as a tag as well";
 }
 
 # Does YAML::XS's own rendering of this float come back as the same double?
@@ -340,6 +395,29 @@ practice that is most of them: YAML::XS retains the text of every float it
 parsed, so only bare NVs -- computed by the caller, or parsed out of JSON --
 are ever rewritten. C<NaN>, C<Inf> and C<-0.0> are unchanged. See
 L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
+
+B<A reference as a leaf value is refused>, with one exception. L<YAML::XS>
+writes a blessed reference as a Perl-specific C<!!perl/> tagged structure --
+C<!!perl/hash:Math::BigFloat>, C<!!perl/scalar:Foo>, C<!!perl/regexp> -- and an
+unblessed one as C<!!perl/ref> or C<!!perl/code>, while
+L<File::SOPS::Encrypted/detect_type> calls the leaf C<str> so the MAC digest
+covers its B<stringification>. The document and its own MAC then state
+different things, and the file is unreadable to sops and to this module alike.
+Until 0.003 it was written anyway, without a word; now it dies naming the class
+(never the value).
+
+The exception is an exact L<JSON::PP::Boolean>, which this emitter writes as
+bare C<true> / C<false> -- the one reference whose document form and digest
+agree. A B<subclass> of it is not covered: C<detect_type> calls it C<bool> but
+L<YAML::XS> writes it as a tag, so it is refused like any other object.
+
+Only leaves that reach the document B<verbatim> can trigger this -- values
+excluded by the encryption rules, everything in a plaintext document, and the
+C<sops> section. A value that gets encrypted is an C<ENC[...]> string by the
+time this method sees it, so an object in an encrypted slot is unaffected and
+still stores its stringification as C<type:str>. L<File::SOPS::Format::JSON>
+has refused the same leaves all along; see
+L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>.
 
 =cut
 
