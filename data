@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-09T00:21:37Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:38:54Z
+id: 20
+priority: low
+started: 2026-08-08
+status: done
+tags:
+- bug
+- api
+title: 'Small correctness edges: extract path parsing, empty value, undef, global
+  YAML boolean'
+updated: 2026-08-09T01:01:41Z
+---
+
+Four small ones, all reproduced. extract parses bracket notation with a quoted-key-only regex, so the documented form with a numeric index returns the whole arrayref instead of the element; dot notation with a numeric index does work. Its POD also claims it is more efficient than decrypting the whole file (it decrypts everything) and that it returns a scalar and not a reference (it can return a reference). Missing paths return undef at the top level but croak when nested. Encrypted encrypt_value with an empty string builds an ENC string its own regex rejects. undef becomes an empty string on encrypt where Go leaves nil alone. And setting the YAML::XS Boolean package variable at load time is a process-global side effect on the caller: it should be localised around the Load and Dump calls.
+Measured sops 3.13.3: (a) sops -d --extract '["items"][0]' returns 'one' - a BARE numeric index in brackets is the working form, which our quoted-key-only regex cannot parse. (b) A missing component errors at EVERY level, exit 1: 'error truncating tree: component [\'nope\'] not found' - both top-level and nested. So unify on croak, not on undef. Extracting a whole branch is legal and returns the branch, so the POD claim 'scalar, not reference' is wrong in the other direction too. (d) null: sops leaves a null value alone in both YAML and JSON - it is not encrypted and comes back as null; a File::SOPS-written null verifies in Go, so nil hashes as empty in the MAC, same as our _value_to_bytes(undef). (e) trap: File::SOPS::decrypt_file calls YAML::XS::Dump directly and DEPENDS on the load-time global - without it a JSON::PP::Boolean dumps as '!!perl/scalar:JSON::PP::Boolean 1'. Localising in Format::YAML alone would break it.
+All five fixed, t/11-api-edges.t. (a) bracket parser now takes "key", 'key' and bare [0]; POD's two false claims removed (it is not cheaper than decrypt, and it can return a reference - sops --extract returns a branch too). (b) unified on CROAK at every depth, matching sops's 'component [x] not found' at every level; naming the missing component. (c) encrypt_value croaks on an empty plaintext - measured that Go rejects the resulting shape too: 'Input string ENC[...] does not match sops data format', exit 25, so loosening our regex would have diverged. (d) undef now stays null; measured that sops leaves null alone in both formats and that our digest already matched Go's nil handling, so only the emitted value moves. (e) SEPARATE REPORT, see below. Interop: t/04-interop.t subtest 23 covers nulls in both directions.
