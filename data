@@ -1,0 +1,26 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T05:02:08Z
+id: 50
+priority: medium
+status: done
+tags:
+- docs
+- agents
+title: file-sops-format briefing still describes decrypt_file as calling YAML::XS::Dump
+  directly
+updated: 2026-08-09T05:06:35Z
+---
+
+Stale after karr #35. .claude/agents/file-sops-format.md (the file-sops-format briefing) says under "Known ground here":
+
+    **decrypt_file still calls YAML::XS::Dump directly**, bypassing the format
+    handler, and therefore has to set the boolean mode itself. That duplication is
+    filed as karr #35; it is a live trap, because a change made in the handler
+    alone does not reach that path.
+
+That is no longer true: decrypt_file and edit go through File::SOPS::Format::{YAML,JSON}->emit, and a change made in the handler now DOES reach that path -- which inverts the trap. The replacement warning is the other direction: emit is shared with serialize, so a change to the plaintext emitter now moves the encrypted document too, and is therefore wire work rather than format work.
+
+Not edited by the agent that fixed #35: an agent definition is configuration, and a subagent does not change its own briefing. Needs the maintainer.
+Done by the orchestrating agent (configuration is its lane, not a worker's). Both entries were rewritten rather than deleted: the format briefing now states the INVERTED trap (emit is shared and on the wire path, canonical is MAC-relevant) and names commit 3e4f3bb; the file-sops-core skill's claim that encrypt_file and rotate write non-atomically is replaced with what d5d23ec actually does and what rename costs. Checked both files for hardlinks first -- linkcount 1, project-owned, so Edit was safe.
