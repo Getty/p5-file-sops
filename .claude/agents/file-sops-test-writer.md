@@ -33,8 +33,10 @@ is at stake (`True`/`False`, the trailing colon in the AAD, the 32-byte IV).
 which new interop subtests follow:
 
 ```perl
-my $sops_bin = $ENV{SOPS_BIN} || '/tmp/sops';
-plan skip_all => "sops CLI not found at $sops_bin" unless -x $sops_bin;
+# The file already resolves $sops_bin at the top: SOPS_BIN wins and DIES if it
+# is not executable (an explicit path that silently fell back to auto-detection
+# would hide which binary was actually tested), otherwise sops on PATH, then
+# /tmp/sops, then an honest skip_all. Reuse it; do not add a second resolution.
 
 my ($public, $secret) = Crypt::Age->generate_keypair();
 my $tempdir = tempdir(CLEANUP => 1);
