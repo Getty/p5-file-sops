@@ -1,0 +1,14 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-08T21:39:10Z
+id: 23
+priority: high
+status: done
+tags:
+- testing
+title: The interop suite has holes that let the failures through
+updated: 2026-08-09T01:01:47Z
+---
+
+The suite passed for two releases while the distribution could not produce a YAML file sops accepts, because the whole file skips without a binary. Beyond that: one subtest runs sops -e against a .dec file that is never written and never asserts the result; another puts a float in the data and never asserts it came back; a third carries a comment saying it avoids bool-like strings, which is exactly the case that is broken. Nothing covers unencrypted-suffix keys, unicode through decrypt_file, multi-document YAML, or numeric-looking strings. Close the holes as the underlying bugs get fixed.
