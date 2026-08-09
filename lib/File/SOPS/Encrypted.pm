@@ -347,6 +347,13 @@ sub decrypt_bytes {
     # conversion, the MAC digest and any caller doing arithmetic on what this
     # method returns are all downstream of it, and a fix at the conversions
     # would have to be repeated at each new one. See t/18-decrypt-determinism.t.
+    #
+    # This is the ONLY such normalisation, deliberately: the ciphertext, the tag
+    # and the IV come out of CryptX just as unterminated, and are left alone
+    # because nothing ever reads them as anything but length-delimited bytes.
+    # docs/adr/0004 has the measurements and says why "normalise every CryptX
+    # boundary" is not the rule -- and why "normalise every foreign scalar"
+    # would break ADR 0002 outright.
     return "$plaintext";
 }
 
