@@ -435,9 +435,49 @@ leaving them a wrapped copy of a key that no longer encrypts anything.
 
 =cut
 
+# What the `sops` entry turned out to be, for the refusal below. Names the
+# shape only -- never the value, which in a document using that key for its own
+# purposes is the user's data.
+sub _shape_of {
+    my ($value) = @_;
+    return 'null'                unless defined $value;
+    my $ref = ref $value;
+    return 'a scalar'            unless $ref;
+    return 'a list'              if $ref eq 'ARRAY';
+    return 'a code reference'    if $ref eq 'CODE';
+    return "a $ref reference";
+}
+
 sub from_hash {
     my ($class, $hash) = @_;
-    return unless ref $hash eq 'HASH';
+
+    # Returning undef here is how a document lost a key. Both format handlers
+    # call this as from_hash(delete $data->{sops}) once they have seen the key
+    # EXIST, so undef meant "there was a top-level sops entry, it was not a
+    # mapping, and it has already been removed from the tree" -- and every
+    # caller reads undef as "this document has no metadata". File::SOPS::encrypt
+    # then wrote a document without the entry, over the original if the caller
+    # had asked for that. `sops: mine` in a plaintext file was silently deleted.
+    #
+    # sops refuses such a document from both directions, and does not care what
+    # the entry holds: `sops -e` stops with exit code 203 on the same
+    # reserved-key message it gives an already-encrypted file, whether the entry
+    # is a scalar, a list, null or an empty mapping; `sops -d` and `sops rotate`
+    # stop with "Found sops entry that is not a mapping". Measured on 3.13.3.
+    #
+    # The check cannot live at the call sites' `delete`, which collapses "no
+    # entry" and "entry holding null" into the same undef, and sops refuses the
+    # second. So an undef arriving here is a caller that has already established
+    # the key exists -- there is no reason to ask this method about a section
+    # that is not there, and no caller in this distribution does.
+    croak "the top-level 'sops' entry is " . _shape_of($hash) . ", not a "
+        . "mapping. That name is reserved for the SOPS metadata section, so a "
+        . "document using it for anything else can neither be read (there is "
+        . "no metadata to read) nor encrypted (the entry is where the metadata "
+        . "goes). If this is plaintext that happens to use the name, rename the "
+        . "entry. sops refuses the same document: 'Found sops entry that is not "
+        . "a mapping' when reading, exit code 203 when encrypting."
+        unless ref $hash eq 'HASH';
 
     my %extra = map  { $_ => $hash->{$_} }
                 grep { !$MODELLED_FIELD{$_} } keys %$hash;
@@ -480,7 +520,29 @@ treating a C<_unencrypted> key as plaintext, failing with C<Input string ...
 does not match sops' data format>. Applying the default here would make this
 library leave a value in plaintext that the document's own producer encrypts.
 
-Returns C<undef> if the input is not a HashRef.
+B<Dies if the input is not a HashRef>, naming the shape it got instead. Until
+0.003 it returned C<undef>, and that return was a data-loss path rather than a
+convenience: both format handlers call this as
+C<< from_hash(delete $data->{sops}) >> after seeing the key B<exist>, so C<undef>
+came back meaning "there was a top-level C<sops> entry, it was not a mapping,
+and it is now gone from the tree" while every caller reads C<undef> as "this
+document has no metadata". A plaintext file containing C<sops: mine> therefore
+lost that key on the way through L<File::SOPS/encrypt_file> -- over the original
+file if C<output> was omitted -- and L<File::SOPS/decrypt> reported the generic
+C<No SOPS metadata found> for a document whose C<sops> section it had in fact
+just discarded.
+
+sops refuses such a document from both directions and does not care what the
+entry holds -- a scalar, a list, C<null> or an empty mapping are all the same to
+it. Measured against sops 3.13.3: C<sops encrypt> stops with exit code 203 and
+the same reserved-key message it gives an already-encrypted file, C<sops decrypt>
+and C<sops rotate> stop with C<Found sops entry that is not a mapping>.
+
+C<undef> dies too, rather than being read as "no section". The distinction
+between an absent C<sops> key and one holding C<null> does not survive the
+C<delete> at the call site, and sops refuses both, so the only caller that can
+tell them apart is the one that still has the document -- it asks C<exists>
+first and does not call this method at all when the answer is no.
 
 Dies if the document carries more than one encryption rule, see
 L</Encryption rules are mutually exclusive>.

@@ -1031,6 +1031,41 @@ subtest 'sops refuses a document with a top-level sops key' => sub {
         $@;
     };
     like($err, qr/top-level 'sops' entry/, 'and so does File::SOPS');
+
+    # karr #34: the plaintext half of the same rule was measured above and not
+    # asked of File::SOPS, which is exactly where it was still silently
+    # deleting the key. `sops: mine` is not a mapping, so parse used to remove
+    # it and report no metadata section -- the condition the guard tests for.
+    $err = do {
+        local $@;
+        eval { File::SOPS->encrypt_file(
+            input => $plain, output => "$tempdir/userkey.enc.yaml",
+            recipients => [$public],
+        ) };
+        $@;
+    };
+    like($err, qr/top-level 'sops' entry/,
+        'File::SOPS refuses the plaintext file sops just refused');
+    ok(!-e "$tempdir/userkey.enc.yaml",
+        'and writes nothing, where it used to write the document without the key');
+
+    # The read direction. sops has a distinct message for it, so this is not a
+    # document it considers merely metadata-less either.
+    $out = `$sops_bin -d $plain 2>&1`;
+    isnt($? >> 8, 0, 'sops refuses to decrypt it too');
+    like($out, qr/Found sops entry that is not a mapping/,
+        'and calls it a sops entry that is not a mapping');
+
+    $err = do {
+        local $@;
+        eval { File::SOPS->decrypt(
+            encrypted => "sops: mine\nother: v\n", identities => [$secret],
+            format => 'yaml',
+        ) };
+        $@;
+    };
+    like($err, qr/not a mapping/,
+        'File::SOPS says the same, instead of "no metadata found"');
 };
 
 ###############################################################################

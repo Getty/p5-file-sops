@@ -218,4 +218,173 @@ for my $format (qw(yaml json)) {
     );
 }
 
+# ----------------------------------------------------------------------------
+# 5. The same rule for a `sops` entry that is NOT a mapping (karr #34).
+#
+# Everything above is about an entry the parser could turn into a Metadata
+# object. The hole left open was the entry it could not: from_hash returned
+# undef for anything that was not a HashRef, and both format handlers call it
+# as from_hash(delete $data->{sops}) once they have seen the key EXIST. So a
+# PLAINTEXT file containing `sops: mine` reached encrypt with the key already
+# removed from the tree and no metadata to refuse on -- and the encrypted
+# document that came out simply did not have it. With output defaulting to
+# input that happened over the original.
+#
+# Measured against sops 3.13.3, on `sops: mine`, on a list, on an explicit
+# null and on an empty mapping alike:
+#
+#   sops encrypt  -> exit 203, the same reserved-key message as for an
+#                    already-encrypted file
+#   sops decrypt  -> "Found sops entry that is not a mapping"
+#   sops rotate   -> "Found sops entry that is not a mapping"
+#
+# so the presence of the key decides, not its type. The empty mapping was
+# already refused here (from_hash builds a Metadata from {}, and the guards
+# above fire on it); the other three were not.
+# ----------------------------------------------------------------------------
+
+# The unit-level claim: from_hash refuses what it used to swallow.
+{
+    for my $case (
+        ['a scalar', 'mine'],
+        ['a list',   ['one', 'two']],
+        ['null',     undef],
+    ) {
+        my ($what, $value) = @$case;
+
+        my $err = do {
+            local $@;
+            eval { File::SOPS::Metadata->from_hash($value) };
+            $@;
+        };
+
+        like(
+            $err,
+            qr/top-level 'sops' entry is .+ not a mapping/,
+            "from_hash refuses a sops section that is $what"
+        );
+    }
+
+    # null dies with the rest deliberately: `delete $data->{sops}` gives undef
+    # for BOTH an absent entry and one holding null, and sops refuses the
+    # second. The caller that can still tell them apart is the parser, which
+    # asks exists() first -- so a document with no sops key must never reach
+    # from_hash, and must still parse.
+    for my $format (qw(yaml json)) {
+        my $content = $format eq 'json' ? '{"other":"kept"}' : "other: kept\n";
+        my $format_class = $format eq 'json'
+            ? 'File::SOPS::Format::JSON' : 'File::SOPS::Format::YAML';
+
+        my ($data, $metadata) = $format_class->parse($content);
+        is_deeply($data, { other => 'kept' },
+            "[$format] a document with no sops key still parses");
+        is($metadata, undef,
+            "[$format] and still reports no metadata rather than dying");
+    }
+
+    my $meta = File::SOPS::Metadata->from_hash({ version => '3.7.3' });
+    isa_ok($meta, 'File::SOPS::Metadata', 'from_hash on a real mapping');
+}
+
+# The data-loss claim, through the public API. This is the part that fails
+# against an unfixed lib: without the guard encrypt_file succeeds, and the
+# document it writes has no `sops` key at all.
+{
+    my %source = (
+        yaml => {
+            scalar => "other: kept\nsops: mine\n",
+            list   => "other: kept\nsops:\n  - one\n  - two\n",
+            null   => "other: kept\nsops:\n",
+        },
+        json => {
+            scalar => '{"other":"kept","sops":"mine"}',
+            list   => '{"other":"kept","sops":["one","two"]}',
+            null   => '{"other":"kept","sops":null}',
+        },
+    );
+
+    for my $format (qw(yaml json)) {
+        for my $shape (qw(scalar list null)) {
+            my $original = $source{$format}{$shape};
+
+            # a) input/output: nothing may be written.
+            my $in  = "$tempdir/nonmap-$shape-in.$format";
+            my $out = "$tempdir/nonmap-$shape-out.$format";
+            open my $fh, '>:raw', $in or die $!;
+            print $fh $original;
+            close $fh;
+
+            my $err = do {
+                local $@;
+                eval {
+                    File::SOPS->encrypt_file(
+                        input      => $in,
+                        output     => $out,
+                        recipients => [$public],
+                    );
+                };
+                $@;
+            };
+
+            like($err, qr/top-level 'sops' entry is .+ not a mapping/,
+                "[$format/$shape] encrypt_file refuses a non-mapping sops entry");
+            ok(!-e $out, "[$format/$shape] and writes no output file");
+
+            # b) in-place, which is where the key used to disappear from the
+            #    only copy. Byte-identical afterwards, not merely "still there".
+            my $inplace = "$tempdir/nonmap-$shape-inplace.$format";
+            open my $ip, '>:raw', $inplace or die $!;
+            print $ip $original;
+            close $ip;
+
+            eval {
+                File::SOPS->encrypt_in_place(
+                    file => $inplace, recipients => [$public],
+                );
+            };
+
+            my $after = do {
+                open my $rd, '<:raw', $inplace or die $!; local $/; <$rd>
+            };
+            is($after, $original,
+                "[$format/$shape] encrypt_in_place leaves the file untouched");
+
+            # The claim behind the byte comparison, said as the damage it
+            # prevents. NOT a search for the string "sops" in the result: an
+            # encrypted document contains that word in its own metadata
+            # section, so such a check passes on exactly the file this test
+            # exists to catch.
+            unlike($after, qr/BEGIN AGE ENCRYPTED FILE/,
+                "[$format/$shape] and was not replaced by an encrypted "
+                . "document with the user's key missing from it");
+        }
+    }
+}
+
+# Reading such a document says what is wrong with it, instead of the generic
+# "No SOPS metadata found" it reported while quietly discarding the section.
+{
+    for my $format (qw(yaml json)) {
+        my $content = $format eq 'json'
+            ? '{"other":"kept","sops":"mine"}' : "other: kept\nsops: mine\n";
+
+        my $err = do {
+            local $@;
+            eval {
+                File::SOPS->decrypt(
+                    encrypted  => $content,
+                    identities => [$secret],
+                    format     => $format,
+                );
+            };
+            $@;
+        };
+
+        like($err, qr/top-level 'sops' entry is .+ not a mapping/,
+            "[$format] decrypt names the malformed sops section");
+        unlike($err, qr/No SOPS metadata found/,
+            "[$format] rather than reporting it as absent");
+    }
+}
+
 done_testing;

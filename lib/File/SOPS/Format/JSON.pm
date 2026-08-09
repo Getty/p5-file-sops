@@ -76,6 +76,12 @@ Returns a two-element list:
 
 Dies if the JSON is invalid or doesn't parse to a HashRef.
 
+Dies too if the document has a top-level C<sops> entry that is B<not> an
+object -- C<"sops": "mine">, an array, or C<null>. Until 0.003 that entry was
+deleted from the tree and reported as no metadata at all, so
+L<File::SOPS/encrypt_file> wrote the document back without it. See
+L<File::SOPS::Metadata/from_hash>, which is where the refusal lives.
+
 =cut
 
 sub serialize {

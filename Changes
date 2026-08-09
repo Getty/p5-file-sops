@@ -205,6 +205,26 @@ Revision history for File-SOPS
     the two either, and refuses both with exit code 203 and the same
     message. Use rotate to re-key an encrypted file. The format
     handlers' serialize method refuses the same collision.
+  - BEHAVIOUR CHANGE - the same rule now covers a top-level 'sops' entry
+    that is not a mapping, which was still being deleted silently. A
+    PLAINTEXT file containing 'sops: mine', a list, or an explicit null
+    lost that key: File::SOPS::Metadata::from_hash returned undef for
+    anything that was not a HashRef, and the format handlers call it
+    only after seeing the key exist - so the entry was removed from the
+    tree and then reported as no metadata section at all, which is what
+    the guard above tests for. encrypt_file wrote the rest of the
+    document without the key and said nothing, over the original where
+    output defaulted to input; decrypt reported the generic "No SOPS
+    metadata found" for a section it had just discarded. Both now die,
+    naming the shape the entry had. Measured: sops refuses such a file
+    whatever the entry holds - exit code 203 on encrypt, the same
+    reserved-key message as for an already-encrypted file, and "Found
+    sops entry that is not a mapping" on decrypt and rotate. What
+    changes for direct callers of from_hash: it no longer returns undef
+    for a non-HashRef, it dies. undef dies with the rest, because
+    delete $data->{sops} cannot tell an absent entry from one holding
+    null and sops refuses the second; a document with no sops key never
+    reaches from_hash and still parses to no metadata.
   - BEHAVIOUR CHANGE - an integer outside Go's int64 range is refused
     rather than written. Perl's integers reach 2**64-1 and Go's int
     stops at 2**63-1, and there is no wire form that preserves the

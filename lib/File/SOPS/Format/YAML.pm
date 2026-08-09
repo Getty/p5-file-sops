@@ -156,6 +156,12 @@ Returns a two-element list:
 Dies if the YAML is invalid, doesn't parse to a HashRef, or contains more
 than one document. See L</Multi-document YAML>.
 
+Dies too if the document has a top-level C<sops> entry that is B<not> a
+mapping -- C<sops: mine>, a list, or an explicit C<null>. Until 0.003 that
+entry was deleted from the tree and reported as no metadata at all, so
+L<File::SOPS/encrypt_file> wrote the document back without it. See
+L<File::SOPS::Metadata/from_hash>, which is where the refusal lives.
+
 =cut
 
 sub serialize {

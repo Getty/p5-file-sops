@@ -650,6 +650,14 @@ omitted, and decrypting it returns the inner C<ENC[...]> strings that nothing
 can now decrypt. To re-key an encrypted file use L</rotate>; to change its
 contents, decrypt it first. sops refuses the same input with exit code 203.
 
+It dies whatever that entry holds. A B<plaintext> file using the name for its
+own value -- C<sops: mine>, a list, an explicit C<null> -- is refused for the
+same reason and with the same exit code by sops, and until 0.003 this method
+took it, dropped the key and wrote the rest back: parsing removed the entry
+before deciding there was no metadata section, so the guard above never saw it
+and the key was simply missing from the output. See
+L<File::SOPS::Metadata/from_hash>.
+
 Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>)
 unless explicitly specified.
 
