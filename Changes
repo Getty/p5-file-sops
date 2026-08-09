@@ -526,6 +526,46 @@ Revision history for File-SOPS
     t/20-plaintext-emitter.t pins that there is one emitter and not two
     that happen to agree: it replaces emit and requires decrypt_file,
     edit and serialize to follow it.
+  - Fix JSON output and JSON parsing depending on which backend the
+    CALLING program happened to load. Both went through JSON::MaybeXS,
+    which binds once per process to whichever of Cpanel::JSON::XS and
+    JSON::XS is already loaded, so the same data was written two ways by
+    the same library - and CryptX, which this distribution loads for
+    AES-GCM, pulls JSON::XS in on its own. File::SOPS::Format::JSON now
+    names Cpanel::JSON::XS, for the emitter and the parser, which adds
+    it as a direct prerequisite (4.38, the version JSON::MaybeXS itself
+    asks for, so it is usually already installed). Two measured defects
+    go with it, both of them only reachable in a process that had
+    JSON::XS loaded first:
+      * A sops-written JSON document holding an UNENCRYPTED float was
+        refused with "MAC verification failed". JSON::XS's decoder is
+        not correctly rounded - it reads 0.3 back as the double whose
+        shortest form is 0.30000000000000004 - so the digest computed
+        here covered a different number than the one in the file. The
+        MAC is what caught it; passing ignore_mac would have returned
+        the wrong value.
+      * An unencrypted -0.0 was written as `-0`, which parses back as
+        the integer zero and digests as "0" while the MAC covers "-0".
+        Such a document fails its own MAC here and in sops (exit 51).
+        sops writes `-0` itself and cannot read that file back either.
+    WHICH DOCUMENTS LOOK DIFFERENT: JSON written from a process that
+    loaded JSON::XS first, floats only - an unencrypted 1.0 is now
+    written as 1.0 rather than 1, and -0.0 as -0.0 rather than -0.
+    Integers, strings, booleans, nulls, key order and unicode are
+    unchanged, encrypted values are ENC[...] strings and were never
+    affected, and the YAML path has no backend choice and does not move
+    at all. A process that loads File::SOPS the ordinary way already got
+    these bytes; for it nothing changes.
+    OLD DOCUMENTS STAY READABLE, with one exception that never was: a
+    `-0` written for a float under unencrypted_suffix failed its own MAC
+    the moment it was written, here and in sops. Re-encrypt such a
+    document from its plaintext; nothing else needs touching.
+    JSON parsing is also stricter in one respect, now identically in
+    every process: a document with DUPLICATE KEYS is refused rather than
+    silently resolved to the last value, which is what JSON::XS did.
+    Such a document cannot have a well-defined MAC. The decision, the
+    measurements behind it and why matching sops's own float rendering
+    would have been the wrong direction are recorded in docs/adr/0005.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without

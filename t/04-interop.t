@@ -1639,4 +1639,114 @@ YAML
         'and sops agrees once its working directory is the file\'s own');
 };
 
+###############################################################################
+# Test 24: JSON floats, from a process that loaded JSON::XS first
+#
+# Until docs/adr/0005 the JSON backend was whatever JSON::MaybeXS had bound,
+# which is decided by the calling program: `perl -MJSON::XS -MFile::SOPS` got
+# JSON::XS, and so did anything that loaded File::SOPS::Encrypted first, since
+# CryptX pulls JSON.pm in. That reached the wire in both directions and only
+# the binary could see it:
+#
+#   * JSON::XS writes an NV -0.0 as `-0`, which parses back as the integer
+#     zero everywhere, so the digest (taken over `-0`) no longer describes the
+#     document -- `sops -d` answered MAC mismatch, exit 51.
+#   * JSON::XS reads `0.3` back as the double whose shortest form is
+#     0.30000000000000004, so a document sops had written and could itself
+#     verify was REFUSED here.
+#
+# t/23-json-backend.t pins the same thing without a binary, by comparing child
+# perls against each other. This is the half that says the answer they agree on
+# is the one sops accepts.
+###############################################################################
+subtest 'JSON floats from a JSON::XS process, both directions' => sub {
+    plan skip_all => 'JSON::XS is not installed, so the race cannot be lost'
+        unless eval { require JSON::XS; 1 };
+
+    # Runs $code in a fresh perl with JSON::XS loaded BEFORE anything of ours.
+    my $in_a_json_xs_perl = sub {
+        my ($code, @args) = @_;
+        my @inc = map { "-I$_" } grep { !ref } @INC;
+        open my $p, '-|', $^X, @inc, '-MJSON::XS', '-e', $code, @args
+            or die "cannot fork a perl: $!";
+        my $out = do { local $/; <$p> };
+        close $p;
+        return defined $out ? $out : '';
+    };
+
+    # ---- Perl -> sops -------------------------------------------------------
+    my $written = $in_a_json_xs_perl->(<<'CHILD', $public);
+use File::SOPS;
+print File::SOPS->encrypt(
+    data => {
+        negzero_unencrypted => -0.0,
+        third_unencrypted   => 0.3,
+        one_unencrypted     => 1.0,
+        half_unencrypted    => 1.5,
+        secret              => 'hunter2',
+    },
+    recipients => [ $ARGV[0] ],
+    format     => 'json',
+);
+CHILD
+
+    ok(length $written, 'the child perl produced a document') or return;
+    like($written, qr/"negzero_unencrypted" : -0\.0/,
+        'an unencrypted -0.0 is written as -0.0 even there');
+
+    my $file = "$tempdir/json-xs-floats.json";
+    write_file($file, $written);
+
+    my $out = `$sops_bin -d --input-type json --output-type json $file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts a JSON document written from a JSON::XS process')
+        or diag("sops output: $out");
+
+    if ($? >> 8 == 0) {
+        my $got = decode_json($out);
+        is($got->{third_unencrypted}, 0.3, 'sops reads 0.3 back as 0.3');
+        is($got->{one_unencrypted},   1,   'and 1.0 as 1');
+        is($got->{half_unencrypted},  1.5, 'and 1.5 as 1.5');
+        is($got->{secret}, 'hunter2', 'and the encrypted value is intact');
+    }
+
+    # ---- sops -> Perl -------------------------------------------------------
+    # -0.0 is deliberately absent here: sops writes it as `-0` and then fails
+    # its own MAC on the file it just produced (measured, sops 3.13.3, exit
+    # 51), so there is no such document to read. See docs/adr/0005.
+    my $plain = "$tempdir/json-xs-plain.json";
+    write_file($plain, <<'JSON');
+{
+  "third_unencrypted": 0.3,
+  "seventh_unencrypted": 0.7,
+  "one_unencrypted": 1.0,
+  "secret": "from-sops"
+}
+JSON
+
+    my $enc_file = "$tempdir/json-xs-fromsops.json";
+    system("$sops_bin --encrypt --age $public --unencrypted-suffix _unencrypted "
+         . "--input-type json --output-type json $plain > $enc_file 2>/dev/null");
+    is($? >> 8, 0, 'sops encrypted the fixture') or return;
+
+    my $read_back = $in_a_json_xs_perl->(<<'CHILD', $enc_file, $keyfile);
+use File::SOPS;
+my ($enc_file, $key_file) = @ARGV;
+my $slurp = sub { open my $r, '<:raw', $_[0] or die $!; local $/; <$r> };
+my $back = eval {
+    File::SOPS->decrypt(
+        encrypted  => $slurp->($enc_file),
+        identities => [ $slurp->($key_file) ],
+    );
+};
+if ($@) { print "died: " . (split /\n/, $@)[0]; exit }
+print join '|', map { $back->{$_} }
+    qw(third_unencrypted seventh_unencrypted one_unencrypted secret);
+CHILD
+
+    is($read_back, '0.3|0.7|1|from-sops',
+        'and a sops-written document with unencrypted floats is read there, '
+        . 'MAC and all')
+        or diag("child perl printed '$read_back'");
+};
+
 done_testing;

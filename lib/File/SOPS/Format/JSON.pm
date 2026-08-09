@@ -3,19 +3,35 @@ package File::SOPS::Format::JSON;
 our $VERSION = '0.003';
 use Moo;
 use Carp qw(croak);
-use JSON::MaybeXS qw(decode_json);
+use Cpanel::JSON::XS ();
 use namespace::clean;
 
-# The only JSON encoder in this distribution's write path, and the only
-# definition of its options. utf8 makes it emit encoded bytes whatever Perl's
-# UTF-8 flag says, canonical makes it emit keys sorted -- which the MAC's
-# encrypt side depends on, since that walk hashes in sorted order. emit() below
-# is the single entry point to it.
-my $json = JSON::MaybeXS->new(
-    utf8      => 1,
-    pretty    => 1,
-    canonical => 1,
-);
+# The only JSON encoder AND decoder in this distribution's document path, and
+# the only definition of their options. utf8 makes it emit encoded bytes
+# whatever Perl's UTF-8 flag says (and expect encoded bytes on the way in),
+# canonical makes it emit keys sorted -- which the MAC's encrypt side depends
+# on, since that walk hashes in sorted order. emit() and parse() below are the
+# only entry points to it.
+#
+# The backend is NAMED here rather than left to JSON::MaybeXS, which binds once
+# per process to whichever backend is already in %INC -- so the calling program
+# decided our wire bytes, and CryptX (loaded by File::SOPS::Encrypted) pulls in
+# JSON::XS. That is not a formatting preference:
+#
+#   * JSON::XS's decoder is not correctly rounded. It reads 0.3 back as the
+#     double whose shortest form is 0.30000000000000004, so File::SOPS in a
+#     process that had loaded JSON::XS REFUSED a valid sops document
+#     ("MAC verification failed") over an unencrypted 0.3.
+#   * JSON::XS writes an NV -0.0 as `-0`, which parses back as the INTEGER zero
+#     and digests as "0" while the MAC covers "-0". Such a document fails its
+#     own MAC here and in sops (exit 51). sops writes `-0` itself and cannot
+#     read that file back either -- matching its bytes would import its bug.
+#   * JSON::PP loses the sign entirely (`0`), same failure.
+#
+# Cpanel writes `1.0` and `-0.0` where sops writes `1` and `-0`; the first is
+# cosmetic (both digest as "1", sops -d accepts ours), the second is the point.
+# See docs/adr/0005. Do not "modernise" this back to JSON::MaybeXS.
+my $json = Cpanel::JSON::XS->new->utf8->pretty->canonical;
 
 =head1 SYNOPSIS
 
@@ -40,8 +56,14 @@ my $json = JSON::MaybeXS->new(
 JSON format handler for File::SOPS. Handles parsing and serialization of
 SOPS-encrypted JSON files.
 
-Uses L<JSON::MaybeXS> for JSON processing (automatically uses the fastest
-available JSON backend: Cpanel::JSON::XS, JSON::XS, or JSON::PP).
+Uses L<Cpanel::JSON::XS> for JSON processing, B<named rather than chosen at
+runtime>. It used to go through L<JSON::MaybeXS>, which binds to a backend once
+per process depending on what was loaded first, so the same data was written
+differently depending on the calling program -- and the alternatives are not
+merely differently formatted: L<JSON::XS> reads C<0.3> back as a different
+double, and both it and L<JSON::PP> write an C<-0.0> in a form that makes the
+document fail its own MAC. See
+L<docs/adr/0005|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0005-the-json-backend-is-chosen-not-inherited.md>.
 
 Output is always pretty-printed and canonically ordered for consistent diffs.
 
@@ -51,7 +73,7 @@ sub parse {
     my ($class, $content) = @_;
     croak "content required" unless defined $content;
 
-    my $data = decode_json($content);
+    my $data = $json->decode($content);
     croak "JSON did not parse to a hash" unless ref $data eq 'HASH';
 
     my $metadata;
@@ -80,6 +102,12 @@ Returns a two-element list:
 =back
 
 Dies if the JSON is invalid or doesn't parse to a HashRef.
+
+Dies on a document with B<duplicate keys> (C<Duplicate keys not allowed>). Such
+a document cannot have a well-defined MAC -- it carries two values under one
+key and the digest covers one of them -- so it is refused rather than silently
+resolved. Until 0.003 that depended on which JSON backend the process had
+loaded: L<JSON::XS> accepted such a document and kept the last value.
 
 Dies too if the document has a top-level C<sops> entry that is B<not> an
 object -- C<"sops": "mine">, an array, or C<null>. Until 0.003 that entry was
@@ -136,8 +164,9 @@ section included.
 #
 # It stays ONE sub because the options above have to be identical in both, and
 # until karr #35 they were kept identical by hand: decrypt_file built its own
-# JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1) with the values
-# copied across. canonical in particular is not a formatting preference -- the
+# encoder with the same options copied across -- and, being a second encoder,
+# it could also have bound a different backend. canonical in particular is not
+# a formatting preference -- the
 # MAC's encrypt side hashes in sorted key order, and that is only the document's
 # own order because this emitter sorts.
 #
@@ -212,7 +241,7 @@ Returns true if filename ends with C<.json> (case-insensitive).
 
 =item * L<File::SOPS> - Main SOPS interface
 
-=item * L<JSON::MaybeXS> - JSON parser/serializer
+=item * L<Cpanel::JSON::XS> - the JSON parser and serializer, named deliberately
 
 =back
 

@@ -262,11 +262,15 @@ sub _in_a_fresh_perl {
 # first in a process decides it. File::SOPS::Encrypted loads CryptX, which
 # loads JSON.pm and with it JSON::XS, so if File/SOPS.pm did not load
 # JSON::MaybeXS ahead of that, JSON::MaybeXS would never get to state its own
-# preference. That is not cosmetic: the two backends emit different bytes for
-# the same float (`1.0` vs `1` for an NV 1.0, `-0.0` vs `-0`), and that reaches
-# every JSON document with an unencrypted float in it, plus everything
-# decrypt_file and edit write. Which backend is the right one is karr #56; that
-# it must not change silently because someone tidied a use line is this test.
+# preference.
+#
+# This no longer reaches a document. karr #56 / docs/adr/0005 took the wire
+# format out of JSON::MaybeXS's hands: Format::JSON names Cpanel::JSON::XS for
+# the emitter and the parser, and t/23-json-backend.t is what pins that -- by
+# comparing fresh child perls that loaded different backends first, which is
+# the only way to see it. What is left here is that File::SOPS does not skew
+# the process-wide choice for OTHER code that uses JSON::MaybeXS, which is
+# worth keeping and is no longer a wire question.
 {
     my $alone = _in_a_fresh_perl('use JSON::MaybeXS; print JSON::MaybeXS::JSON()');
     my $ours  = _in_a_fresh_perl('use File::SOPS; print JSON::MaybeXS::JSON()');

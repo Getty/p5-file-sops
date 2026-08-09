@@ -12,20 +12,22 @@ use Scalar::Util qw(blessed);
 use Text::ParseWords qw(shellwords);
 use Digest::SHA qw(sha512);
 # Nothing below calls encode_json, decode_json or JSON(), and namespace::clean
-# strips all three from this package -- but this is NOT an unused import. Loading
-# JSON::MaybeXS HERE, before File::SOPS::Encrypted pulls in CryptX (which loads
-# JSON.pm, and with it JSON::XS), is what decides the JSON backend for the whole
-# process: JSON::MaybeXS::_choose_json_module takes whichever of Cpanel::JSON::XS
-# and JSON::XS is ALREADY in %INC. The two do not emit the same bytes --
-# Cpanel::JSON::XS writes an NV 1.0 as `1.0` and -0.0 as `-0.0`, JSON::XS writes
-# `1` and `-0` -- so deleting this line moves every JSON document this module
-# writes that carries an unencrypted float, and everything decrypt_file and edit
-# hand back. That is a wire change in a cleanup's clothes.
+# strips all three from this package.
 #
-# It is not a guarantee either: a caller who loaded JSON::XS before File::SOPS
-# gets JSON::XS regardless. karr #56 owns the decision and holds the
-# measurements, including what sops 3.13.3 itself writes for those two values --
-# `1` and `-0`, i.e. JSON::XS's rendering and not the one this line lands on.
+# This line used to be load-bearing for the WIRE FORMAT: loading JSON::MaybeXS
+# here, ahead of File::SOPS::Encrypted pulling in CryptX (which loads JSON.pm,
+# and with it JSON::XS), was what decided the JSON backend for the process, and
+# the backends do not emit or parse the same floats. It is not that any more --
+# karr #56 / docs/adr/0005 -- because Format::JSON now names Cpanel::JSON::XS
+# instead of inheriting whatever the calling program happened to bind. The
+# ordering here no longer reaches a document.
+#
+# What is left is JSON::PP::Boolean for JSON->true/false, and that comes from
+# File::SOPS::Encrypted's and File::SOPS::Metadata's own `use JSON::MaybeXS`,
+# in the same files as the calls that need it (all three backends bless into
+# JSON::PP::Boolean, so it is backend-independent). So this line is now a
+# genuinely unused import -- which is what karr #49 first claimed and could not
+# act on. Removing it is the API lane's call, not a wire question.
 use JSON::MaybeXS;
 # Used directly by _load_creation_rules to read a .sops.yaml, which is a config
 # file rather than a SOPS document and so does not go through Format::YAML.
@@ -254,8 +256,8 @@ numeric or boolean it reads:
 
 This is the rule the reference implementation follows -- it types a value by
 what the YAML/JSON parser returned, so a quoted scalar is a string -- and
-L<YAML::XS> and L<JSON::MaybeXS> preserve the same distinction, so a document
-loaded from a file keeps the types the file gave it. Perl has no native
+L<YAML::XS> and L<Cpanel::JSON::XS> preserve the same distinction, so a
+document loaded from a file keeps the types the file gave it. Perl has no native
 boolean, so C<type:bool> requires C<JSON-E<gt>true>/C<JSON-E<gt>false> or a
 C<true>/C<false> loaded from YAML or JSON.
 

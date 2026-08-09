@@ -283,8 +283,8 @@ cipher, which is what the Go implementation authenticates against, and
 B<neither consults Perl's UTF-8 flag>. For a string whose characters are all
 below U+0100 that flag is an internal storage detail rather than a statement
 about meaning: C<"caf\x{e9}"> may be held as one byte or as two, Perl considers
-both the same string, and C<YAML::XS::Dump> and C<JSON::MaybeXS(utf8 =E<gt> 1)>
-write both to the file as C<caf\xc3\xa9>. Anything that reads the flag
+both the same string, and C<YAML::XS::Dump> and the JSON emitter (built with
+C<utf8>) write both to the file as C<caf\xc3\xa9>. Anything that reads the flag
 therefore disagrees with the bytes our own emitter wrote, which is a document
 that fails its own MAC.
 
@@ -712,13 +712,13 @@ sub _expand_exponent {
 #
 # UNCONDITIONAL, by the same argument as _aad_bytes below: for a string whose
 # characters are all under U+0100 Perl's UTF-8 flag is storage, not meaning,
-# and neither emitter consults it -- YAML::XS::Dump and JSON::MaybeXS(utf8=>1)
-# write "caf\x{e9}" as caf\xc3\xa9 whichever way Perl is holding it. Under the
-# old flag-guarded rule an unflagged "caf\x{e9}" reached the wire as caf\xe9,
-# which is not UTF-8 at all, with two measured consequences: an UNENCRYPTED
-# value went into the document as UTF-8 and into the digest as Latin-1, so the
-# file failed its own MAC and sops reported "MAC mismatch"; and an encrypted
-# one was self-consistent but came back out of `sops -d` as
+# and neither emitter consults it -- YAML::XS::Dump and Format::JSON's encoder
+# (utf8) write "caf\x{e9}" as caf\xc3\xa9 whichever way Perl is holding it.
+# Under the old flag-guarded rule an unflagged "caf\x{e9}" reached the wire as
+# caf\xe9, which is not UTF-8 at all, with two measured consequences: an
+# UNENCRYPTED value went into the document as UTF-8 and into the digest as
+# Latin-1, so the file failed its own MAC and sops reported "MAC mismatch";
+# and an encrypted one was self-consistent but came back out of `sops -d` as
 # `!!binary Y2Fm6Q==` rather than as café. See ADR 0003.
 #
 # The cost is a caller who passes UTF-8 BYTES rather than characters: their
@@ -739,7 +739,7 @@ sub _utf8_bytes {
 # above came from.
 #
 # The AAD is derived from the document's key path, and the key it names is
-# written to the file by YAML::XS::Dump / JSON::MaybeXS(utf8 => 1). Both of
+# written to the file by YAML::XS::Dump / Format::JSON's encoder (utf8). Both of
 # those encode a key to UTF-8 whether or not it carries Perl's UTF-8 flag,
 # because for a string whose characters are all below U+0100 that flag is an
 # internal storage detail and not a statement about the string's meaning. So
@@ -807,7 +807,7 @@ sub _deserialize_value {
     #              type:time, the latter as `2026-08-09T00:00:00Z`. Perl has no
     #              native date, and handing back a DateTime would make this
     #              module a data-model library, so the RFC3339 string is the
-    #              value. It is also what YAML::XS and JSON::MaybeXS give the
+    #              value. It is also what the YAML and JSON parsers give the
     #              caller for the same scalar when it is NOT encrypted, so the
     #              document reads consistently either way.
     #   comment -- a YAML comment sops writes as `#ENC[...]` on its own line.
