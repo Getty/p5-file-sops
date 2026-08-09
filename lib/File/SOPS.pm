@@ -1290,7 +1290,8 @@ to do with the file it was handed, and a daemon whose cwd is C</> would find
 nothing at all. The two agree in the ordinary case -- one C<.sops.yaml> at the
 top of a repository, the file somewhere underneath it -- and differ only when
 config files are nested, where walking up from the file picks the nearer and
-more specific one.
+more specific one. The measurements and the two rejected alternatives are in
+L<docs/adr/0007|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0007-the-config-search-starts-at-the-file-not-at-the-working-directory.md>.
 
 C<config> names a config file explicitly, and skips the search entirely. It is
 the equivalent of sops's C<--config>. Its value is B<not> taken from

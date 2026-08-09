@@ -7,8 +7,8 @@ Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 > **every backend beyond age** — PGP, AWS KMS, GCP KMS, Azure KV, Vault (karr #39;
 > their metadata fields already round-trip, only the wrapping is missing).
 > Implemented since: `encrypt_in_place`, `edit`, and `.sops.yaml` creation rules
-> (`creation_rules_for`, karr #38 — with one deliberate divergence from sops that
-> is still open for confirmation, karr #55).
+> (`creation_rules_for`, karr #38 — with one deliberate divergence from sops,
+> confirmed by the maintainer and recorded in ADR 0007).
 > The description of what exists lives in skill `file-sops-core`; the POD in
 > `lib/File/SOPS.pm` is the contract.
 
@@ -188,7 +188,7 @@ file's directory**, not the absolute one. A rule carrying an encryption rule
 
 Two things the POD spells out and this sketch cannot: the search runs upward from
 the **file's** directory where sops searches from the **working directory** — a
-deliberate divergence, still open for confirmation (karr #55) — and `$SOPS_CONFIG`
+deliberate divergence, confirmed and recorded in ADR 0007 — and `$SOPS_CONFIG`
 is not read from the environment. Not supported: `key_groups`, `shamir_threshold`,
 and recipients for backends other than age (karr #39); all are refused rather than
 ignored.
