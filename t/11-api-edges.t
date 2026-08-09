@@ -26,6 +26,12 @@ use Crypt::Age;
 #   (d) undef became an empty string. sops leaves a null alone, in both formats.
 #   (e) setting $YAML::XS::Boolean at load time is a process-global side effect
 #       on whatever else in the program uses YAML::XS.
+#   (f) two things this distribution gets from the ORDER of its own use lines,
+#       neither of which this file can check in its own process because it
+#       loads JSON::MaybeXS itself at the top. Added with karr #49, which
+#       proposed deleting `use JSON::MaybeXS` from File/SOPS.pm as an unused
+#       import; it is not one. Both checks run in a fresh perl that loads
+#       nothing but File::SOPS.
 #
 # No sops binary needed; t/04-interop.t pins the reference behaviour these are
 # written against.
@@ -234,6 +240,81 @@ for my $format (qw(yaml json)) {
     like($text, qr/^t: true$/m, 'decrypt_file writes a boolean as a YAML boolean');
     unlike($text, qr/perl\/scalar/,
         'and not as a !!perl/scalar:JSON::PP::Boolean tag');
+}
+
+# ----------------------------------------------------------------------------
+# (f) what File::SOPS's use-line order buys, checked in a virgin process.
+# ----------------------------------------------------------------------------
+
+# Runs $code in a fresh perl with this process's @INC and returns its stdout.
+sub _in_a_fresh_perl {
+    my ($code, @args) = @_;
+    my @inc = map { "-I$_" } grep { !ref } @INC;
+    open my $p, '-|', $^X, @inc, '-e', $code, @args
+        or die "cannot fork a perl: $!";
+    my $out = do { local $/; <$p> };
+    close $p;
+    return defined $out ? $out : '';
+}
+
+# JSON::MaybeXS binds its backend ONCE, to whichever of Cpanel::JSON::XS and
+# JSON::XS is already in %INC when it is first loaded -- so whoever loads it
+# first in a process decides it. File::SOPS::Encrypted loads CryptX, which
+# loads JSON.pm and with it JSON::XS, so if File/SOPS.pm did not load
+# JSON::MaybeXS ahead of that, JSON::MaybeXS would never get to state its own
+# preference. That is not cosmetic: the two backends emit different bytes for
+# the same float (`1.0` vs `1` for an NV 1.0, `-0.0` vs `-0`), and that reaches
+# every JSON document with an unencrypted float in it, plus everything
+# decrypt_file and edit write. Which backend is the right one is karr #56; that
+# it must not change silently because someone tidied a use line is this test.
+{
+    my $alone = _in_a_fresh_perl('use JSON::MaybeXS; print JSON::MaybeXS::JSON()');
+    my $ours  = _in_a_fresh_perl('use File::SOPS; print JSON::MaybeXS::JSON()');
+
+    ok(length $alone, 'a fresh perl reports a JSON::MaybeXS backend')
+        or diag("got nothing back from the child perl");
+    is($ours, $alone,
+        'loading File::SOPS picks the same JSON backend JSON::MaybeXS would')
+        or diag("File::SOPS gets '$ours', JSON::MaybeXS on its own gets "
+              . "'$alone' -- File/SOPS.pm's use-line order let a dependency "
+              . "pre-empt the choice, which changes emitted JSON");
+}
+
+# And decrypt hands back real JSON::PP::Boolean objects to a caller who loaded
+# nothing but File::SOPS. The class comes from File::SOPS::Encrypted's own
+# `use JSON::MaybeXS` -- the same file as the JSON->true call that needs it --
+# so this holds however the use lines above it are reordered. The in-process
+# checks earlier in this file cannot show it: this .t loads JSON::MaybeXS at
+# the top.
+{
+    my $encrypted = File::SOPS->encrypt(
+        data       => { t => JSON->true, f => JSON->false },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    my $enc_file = "$tempdir/fresh-bool.enc.yaml";
+    my $key_file = "$tempdir/fresh-bool.key";
+    for ([$enc_file, $encrypted], [$key_file, $secret]) {
+        open my $fh, '>:raw', $_->[0] or die $!;
+        print $fh $_->[1];
+        close $fh;
+    }
+
+    my $out = _in_a_fresh_perl(<<'CHILD', $enc_file, $key_file);
+use File::SOPS;
+my ($enc_file, $key_file) = @ARGV;
+my $slurp = sub { open my $r, '<:raw', $_[0] or die $!; local $/; <$r> };
+my $back = File::SOPS->decrypt(
+    encrypted  => $slurp->($enc_file),
+    identities => [ $slurp->($key_file) ],
+);
+print join ',', ref($back->{t}), ref($back->{f}),
+    ($back->{t} ? 'truthy' : 'falsey'), ($back->{f} ? 'truthy' : 'falsey');
+CHILD
+
+    is($out, 'JSON::PP::Boolean,JSON::PP::Boolean,truthy,falsey',
+        'decrypt returns overloaded booleans to a process that loaded only File::SOPS')
+        or diag("child perl printed '$out'");
 }
 
 done_testing;

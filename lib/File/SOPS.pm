@@ -11,7 +11,24 @@ use File::Temp ();
 use Scalar::Util qw(blessed);
 use Text::ParseWords qw(shellwords);
 use Digest::SHA qw(sha512);
+# Nothing below calls encode_json, decode_json or JSON(), and namespace::clean
+# strips all three from this package -- but this is NOT an unused import. Loading
+# JSON::MaybeXS HERE, before File::SOPS::Encrypted pulls in CryptX (which loads
+# JSON.pm, and with it JSON::XS), is what decides the JSON backend for the whole
+# process: JSON::MaybeXS::_choose_json_module takes whichever of Cpanel::JSON::XS
+# and JSON::XS is ALREADY in %INC. The two do not emit the same bytes --
+# Cpanel::JSON::XS writes an NV 1.0 as `1.0` and -0.0 as `-0.0`, JSON::XS writes
+# `1` and `-0` -- so deleting this line moves every JSON document this module
+# writes that carries an unencrypted float, and everything decrypt_file and edit
+# hand back. That is a wire change in a cleanup's clothes.
+#
+# It is not a guarantee either: a caller who loaded JSON::XS before File::SOPS
+# gets JSON::XS regardless. karr #56 owns the decision and holds the
+# measurements, including what sops 3.13.3 itself writes for those two values --
+# `1` and `-0`, i.e. JSON::XS's rendering and not the one this line lands on.
 use JSON::MaybeXS;
+# Used directly by _load_creation_rules to read a .sops.yaml, which is a config
+# file rather than a SOPS document and so does not go through Format::YAML.
 use YAML::XS ();
 use YAML::PP;
 use YAML::PP::Common qw(PRESERVE_ORDER);
