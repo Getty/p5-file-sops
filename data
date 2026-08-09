@@ -1,0 +1,61 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:56:21Z
+id: 42
+priority: high
+status: done
+tags:
+- upstream
+- cryptx
+- bug
+title: Report the CryptX non-NUL-terminated PV defect upstream
+updated: 2026-08-09T04:41:47Z
+---
+
+Found while fixing #32. CryptX returns decrypted plaintext in an SV whose PV
+buffer is not NUL-terminated at SvCUR, violating the Perl PV invariant.
+
+Measured on CryptX 0.087, perl 5.36.0, x86_64 glibc. Affects at least
+Crypt::AuthEnc::GCM::decrypt_add and the functional gcm_decrypt_verify built on
+it; the same allocation pattern very likely affects the other AuthEnc modes and
+anything else in CryptX that sets a PV by length without terminating. NOT yet
+surveyed beyond GCM -- that survey is part of this ticket.
+
+Why it matters: Perl_sv_2nv falls through to Atof(SvPVX), a C string read with
+no length, for every value grok_number cannot settle as an integer inside a UV.
+So a numeric read of a CryptX-returned scalar can pick up heap bytes past the
+plaintext. Any consumer doing arithmetic on decrypted output is exposed. In
+File::SOPS this returned a stored 1e20 as 1e21 on ~4% of leaves.
+
+Minimal reproduction (no File::SOPS):
+
+  use Crypt::AuthEnc::GCM qw(gcm_encrypt_authenticate gcm_decrypt_verify);
+  # peek the returned SV via @_ aliasing so nothing copies it, read the byte at
+  # SvPVX[SvCUR] with unpack P, compare $_[0] + 0.0 against ("$_[0]") + 0.0.
+  # Devel::Peek shows CUR=21 LEN=23 and no trailing \0 where a Perl-made string
+  # of the same shape shows one.
+  # Working script: scratchpad cryptx_poison.pl / candidates.pl from the #32
+  # session; regenerate from the ticket notes if the scratchpad is gone.
+
+Our workaround is in File::SOPS::Encrypted::decrypt_bytes and does not depend on
+an upstream fix, so this is not blocking. Do it anyway: every other CPAN consumer
+of CryptX has the same exposure and no reason to suspect it.
+
+Do NOT open anything on the public GitHub tracker of this distribution for it --
+this belongs upstream at DCIT/perl-CryptX, and only on the maintainer's say-so.
+Report draft at refs/cryptx-pv-defect.md, awaiting maintainer sign-off before sending to bug-CryptX@rt.cpan.org
+Channel corrected: CryptX META.json names https://github.com/DCIT/perl-CryptX/issues as the bugtracker, so GitHub issues -- NOT bug-CryptX@rt.cpan.org, which the draft wrongly claimed was canonical on the grounds that CryptX had no GitHub issue list. It does. Checked 2026-08-09: issues enabled, 0 open, last push 2026-08-08 (active maintainer); no existing issue mentions NUL/SvCUR/SvPVX, so no duplicate. Draft in refs/cryptx-pv-defect.md updated, still awaiting sign-off.
+
+Two things a filing still needs, neither done: (1) does the defect still reproduce on CryptX 0.090? We measured 0.087, which is what is installed here; the cpanfile has no version bound on CryptX at all. (2) Whether to offer a pull request instead of only a report -- the repo is on GitHub and active, so a PR is realistic, but the fix is in the XS and nobody here has read that source yet.
+FILED: https://github.com/DCIT/perl-CryptX/issues/125 (2026-08-09), on the maintainer's explicit instruction.
+
+Both open points from the previous note are closed:
+
+1. 0.090 REPRODUCES. Installed into a throwaway lib dir and probed side by side with 0.087 -- identical behaviour, not fixed upstream in the interim. Our workaround stays needed.
+
+2. The survey the ticket asked for is done and is in the issue. gcm_decrypt_verify plaintext, gcm_encrypt_authenticate ciphertext and both chacha20poly1305 directions are non-terminated 100/100; tags, hmac and sha256 are clean 0/100. The split is by return SHAPE -- variable-length results built into a preallocated SV -- not by function.
+
+Trap worth keeping: Crypt::PRNG::random_bytes is length-dependent (4/16/21/32/64 non-terminated ~100/100, but 11 and 12 terminated 100/100), and peeking a return value through a sub call copies the SV so everything looks clean. Both of those made a first pass disagree with docs/adr/0004's table; the ADR is right.
+
+No PR offered. The fix is in the XS and nobody here has read that source; the issue asks for the invariant rather than for an implementation.
