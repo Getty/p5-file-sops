@@ -105,10 +105,15 @@ subtest 'Perl encrypt -> sops decrypt (YAML)' => sub {
 # Test 2: Perl encrypt -> sops decrypt (JSON)
 ###############################################################################
 subtest 'Perl encrypt -> sops decrypt (JSON)' => sub {
-    # Note: avoid bool-like strings as sops returns JSON bools which become 1/0 in Perl
+    # Used to avoid bool-like strings here because the old type ladder typed a
+    # string by matching its TEXT, so a quoted "true" was written as
+    # type:bool and came back changed. Fixed by karr #15 (ADR 0002) and
+    # pinned end-to-end in subtest 18/19 below; this is_deeply is what
+    # exercises the same case through this test's own path -- a real file on
+    # disk, decoded by sops itself, compared as a whole structure.
     my $data = {
         config => {
-            enabled => 'yes',
+            enabled => 'true',
             timeout => 30,
             name    => 'test-app',
         },
@@ -237,6 +242,7 @@ subtest 'Various data types' => sub {
         my $decrypted = Load($output);
         is($decrypted->{string}, $data->{string}, 'string preserved');
         is($decrypted->{integer}, $data->{integer}, 'integer preserved');
+        cmp_ok($decrypted->{float}, '==', $data->{float}, 'float preserved');
         is($decrypted->{empty}, $data->{empty}, 'empty string preserved');
         is($decrypted->{unicode}, $data->{unicode}, 'unicode preserved');
         is($decrypted->{special}, $data->{special}, 'special chars preserved');
@@ -373,9 +379,36 @@ subtest 'Roundtrip consistency' => sub {
     write_file($enc_file, $perl_enc);
 
     my $sops_dec = `$sops_bin -d $enc_file 2>&1`;
-    is($? >> 8, 0, 'sops decrypted Perl-encrypted file');
+    is($? >> 8, 0, 'sops decrypted Perl-encrypted file')
+        or diag("sops output: $sops_dec");
 
-    my $sops_enc = `$sops_bin -e --age $public $enc_file.dec 2>&1`;
+    # Close the loop instead of just decrypting twice: write what sops itself
+    # decrypted, have sops re-encrypt that, and require Perl to verify the
+    # result. This is the leg that was previously dead code -- it invoked
+    # `sops -e` against a `.dec` file nothing had ever written and never
+    # looked at the exit code, so it always ran against a nonexistent path
+    # and always passed regardless. The file needs a `.yaml` extension: sops
+    # picks its input format from the filename, and a `.dec` suffix is not
+    # one it recognises -- it falls back to wrapping the whole file as one
+    # opaque "binary" value, which silently discards the "app" key rather
+    # than failing loudly (measured while writing this fix).
+    my $dec_file = "$tempdir/roundtrip_dec.yaml";
+    write_file($dec_file, $sops_dec);
+
+    my $sops_enc = `$sops_bin -e --age $public $dec_file 2>&1`;
+    is($? >> 8, 0, 'sops re-encrypted its own decrypted output')
+        or diag("sops output: $sops_enc");
+
+    my $roundtripped = eval {
+        File::SOPS->decrypt(
+            encrypted  => $sops_enc,
+            identities => [$secret],
+        );
+    };
+    is($@, '', 'Perl verifies what sops re-encrypted from its own decryption')
+        or diag("died: $@");
+    is_deeply($roundtripped, $original, 'and the data survived the full Perl -> sops -> sops -> Perl loop')
+        if $roundtripped;
 
     # Just verify we can decrypt what we encrypted
     my $final = File::SOPS->decrypt(
@@ -1347,6 +1380,95 @@ YAML
         or diag("sops output: $output");
     is_deeply(Load($output), Load($source), 'and every value survives')
         if $? >> 8 == 0;
+};
+
+###############################################################################
+# Test 28: Unicode through the FILE API (decrypt_file), not just decrypt()
+#
+# karr #23. Every unicode assertion elsewhere in this suite goes through
+# decrypt(), which hands back a Perl data structure and never touches a
+# filehandle. decrypt_file is a distinct code path: it re-serializes that
+# structure with YAML::XS::Dump / JSON::MaybeXS(utf8=>1) and writes the
+# result through a raw filehandle -- a second encode step decrypt() never
+# exercises, and exactly the kind of second copy that ADR 0003 warns is where
+# this distribution's UTF-8 bugs have lived. The proof that the bytes
+# decrypt_file actually put on disk are the UTF-8 sops expects is handing
+# that OUTPUT FILE straight back to `sops -e`: a mis-encoded byte is refused
+# or corrupted there, not merely mismatched in a Perl string compare.
+###############################################################################
+subtest 'Unicode through decrypt_file (the file API, not just decrypt)' => sub {
+    my $unicode = 'äöü ñ 中文 🎉';
+
+    for my $format (qw(yaml json)) {
+        # sops encrypts a unicode plaintext document ...
+        my $plain_file = "$tempdir/unicode_file_src.$format";
+        my $plain_data = { greeting => $unicode, note_unencrypted => $unicode };
+        write_file($plain_file,
+            $format eq 'json' ? encode_json($plain_data) : Dump($plain_data));
+
+        my $sops_enc = `$sops_bin -e --age $public $plain_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops encrypts a unicode document")
+            or diag($sops_enc);
+
+        my $enc_file = "$tempdir/unicode_file_enc.$format";
+        write_file($enc_file, $sops_enc);
+
+        # ... and File::SOPS decrypts it through decrypt_file, to a file.
+        my $dec_file = "$tempdir/unicode_file_dec.$format";
+        File::SOPS->decrypt_file(
+            input      => $enc_file,
+            output     => $dec_file,
+            identities => [$secret],
+            format     => $format,
+        );
+        ok(-f $dec_file, "[$format] decrypt_file wrote an output file");
+
+        # The bytes actually on disk -- not a Perl string decrypt_file merely
+        # returned in memory (it doesn't; decrypt_file has no return value
+        # carrying the data). read_file here returns raw bytes, same as
+        # elsewhere in this suite when handing sops output to Load/decode_json.
+        my $dec_bytes = read_file($dec_file);
+
+        # Checked against the BMP portion only, not the trailing emoji:
+        # YAML::XS::Dump is free to write an astral-plane codepoint as a
+        # `\U0001F389` escape inside a double-quoted scalar rather than as raw
+        # UTF-8 bytes (measured -- it does, for this exact string), and that is
+        # still correct YAML sops reads back exactly right, proven below. The
+        # BMP text has no such escape hatch: if this library ever mis-encodes
+        # it as Latin-1 (the ADR 0003 bug class), the byte sequence below is
+        # what would go missing.
+        (my $bmp_part = $unicode) =~ s/\N{U+1F389}//;
+        utf8::encode($bmp_part);   # the reference: Perl core's own UTF-8 encoder
+        my $expect_re = qr/\Q$bmp_part\E/;
+        like($dec_bytes, $expect_re,
+            "[$format] decrypt_file wrote genuine UTF-8 bytes for the encrypted value, not mangled ones");
+        my $count = () = $dec_bytes =~ /$expect_re/g;
+        is($count, 2, "[$format] both the encrypted and unencrypted copies are correct UTF-8");
+        unlike($dec_bytes, qr/!!binary/,
+            "[$format] YAML::XS::Dump did not fall back to a binary tag")
+            if $format eq 'yaml';
+
+        # The strongest check: hand decrypt_file's OWN OUTPUT FILE back to the
+        # real binary, and require it to survive a further sops encrypt/decrypt
+        # cycle unchanged. This cannot pass by File::SOPS agreeing with itself
+        # -- sops is the one reading the bytes decrypt_file wrote.
+        my $reenc = `$sops_bin -e --age $public $dec_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops accepts decrypt_file's output file as valid input")
+            or diag($reenc);
+
+        my $reenc_file = "$tempdir/unicode_file_reenc.$format";
+        write_file($reenc_file, $reenc);
+
+        my $final = `$sops_bin -d $reenc_file 2>&1`;
+        is($? >> 8, 0, "[$format] sops decrypts what it re-encrypted from decrypt_file's output")
+            or diag($final);
+
+        my $final_data = $format eq 'json' ? decode_json($final) : Load($final);
+        is($final_data->{greeting}, $unicode,
+            "[$format] the encrypted unicode value survived decrypt_file -> sops -> sops -> Perl-read");
+        is($final_data->{note_unencrypted}, $unicode,
+            "[$format] and so did the unencrypted one");
+    }
 };
 
 done_testing;
