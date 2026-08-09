@@ -325,7 +325,29 @@ sub decrypt_bytes {
     my $plaintext = gcm_decrypt_verify('AES', $key, $self->iv, $aad, $self->data, $self->tag);
     croak "Authentication failed - data may be corrupted" unless defined $plaintext;
 
-    return $plaintext;
+    # The stringify is load-bearing, and `return $plaintext` is a silent
+    # data-corruption bug -- do not "simplify" it away.
+    #
+    # CryptX (measured on 0.087) hands back the plaintext in an SV whose PV
+    # buffer is NOT NUL-terminated at SvCUR. Perl's own string-to-number
+    # conversion depends on that terminator: sv_2nv only
+    # consults SvCUR through grok_number, and for anything grok_number cannot
+    # settle as an integer inside a UV -- every float, and every integer wider
+    # than 64 bits -- it falls through to Atof(SvPVX), a C string read with no
+    # length. So a numeric read of the raw scalar runs off the end of the
+    # plaintext into whatever the allocator left there, and when that byte is
+    # one of the ten digit characters it joins the number: the
+    # 100000000000000000000 Go writes for 1e20 came back as 1e21, on maybe one
+    # leaf in a hundred, with the ciphertext and the MAC both intact.
+    # Assignment through a stringify goes via sv_setpvn, which allocates a
+    # buffer Perl terminates itself.
+    #
+    # It belongs here rather than at the two conversions in _deserialize_value
+    # because this is the boundary the foreign scalar crosses: the type
+    # conversion, the MAC digest and any caller doing arithmetic on what this
+    # method returns are all downstream of it, and a fix at the conversions
+    # would have to be repeated at each new one. See t/18-decrypt-determinism.t.
+    return "$plaintext";
 }
 
 =method decrypt_bytes
