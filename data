@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-08-08T23:45:53Z
+claimed_by: file-sops-worker
+class: standard
+completed: 2026-08-08
+created: 2026-08-08T22:36:38Z
+id: 27
+priority: high
+started: 2026-08-08
+status: done
+tags:
+- bug
+- encoding
+- interop
+title: Value conversions have the same emitter-disagreement the AAD had
+updated: 2026-08-09T01:01:52Z
+---
+
+Found while fixing the AAD encoding, same shape, different conversion, deliberately left alone because the fix moves wire bytes. The value conversions guard their UTF-8 encode on the Perl UTF-8 flag, but the emitters encode a key or value to UTF-8 regardless of that flag: below U+0100 the flag is storage, not meaning. Measured consequences: an unencrypted value (via unencrypted_suffix) that is an unflagged Latin-1-range string is written by the emitter as UTF-8 while the MAC hashes the Latin-1 bytes, so our own document fails its own MAC. An encrypted value in that state is self-consistent but reaches the wire as Latin-1, and sops reads it back as a binary scalar instead of the text that was meant. Fixing means making both value conversions unconditional, which changes the wire bytes for callers who pass byte strings on purpose. Wants its own decision record alongside the fix.
+Fixed. Both cases reproduced first: (1) an unflagged Latin-1 value under unencrypted_suffix made our own document fail its own MAC, and sops rejects it too with a verbatim 'MAC mismatch'; (2) an encrypted one was self-consistent but came back from sops -d as '!!binary Y2Fm6Q==' instead of café. ADR 0003 written before the fix. Measured the premise rather than assuming it: BOTH emitters treat every scalar as characters and never read the UTF-8 flag, and they already double-encode a byte-string caller - so the guarantee the fix withdraws was only ever half true (a byte-string caller's unencrypted values already failed their own MAC today, verified). Fix: _utf8_bytes is now unconditional like _aad_bytes, with type:bytes exempt on the encode side to mirror _deserialize_value, which gives a byte-string caller something real to say. Confirmed the coordinator's hunch: after #15 there is exactly ONE value conversion left (_utf8_bytes, single caller), so the behavioural change is one removed conditional - stated in the ADR as the payoff of 0002's consolidation. Backward compat verified by hand: documents written by the pre-fix code still decrypt AND still verify, the value just returns as bytes. Interop RAN, did not skip - sops 3.13.3 at ~/bin/sops, new subtest 20 has 24 assertions across both directions and both formats, and the whole subtest fails on the pre-fix lib. prove -lr t/ 237 PASS, dzil test 243 PASS. Not committed. Constraint for #30 noted on that ticket: a per-leaf type override must reach the MAC path too, or a type:bytes leaf gets hashed encoded and encrypted raw.
+Fixed in 8c336d7. _utf8_bytes is unconditional; type => 'bytes' is the escape hatch for genuine byte strings and mirrors decrypt_value. ADR 0003 records the rejected alternatives, notably content-sniffing (rejected: makes the wire format depend on a heuristic). Both cases reproduced first, including sops reporting MAC mismatch on our own document. Interop ran, not skipped.
