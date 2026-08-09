@@ -646,6 +646,114 @@ rule L</encrypt_value> documents.
 
 =cut
 
+# Canonical texts that no emitter has an agreed wire form for, left exactly as
+# they are today. YAML's -0 resolves back to an integer zero, and JSON has no
+# representation for the non-finite values at all -- both are karr #62, with a
+# different answer per format, and folding them in here would move bytes for
+# values this walk is not about. See docs/adr/0006.
+my $NO_AGREED_FORM = qr/\A(?:NaN|[+-]Inf|-0)\z/;
+
+sub canonical_float_tree {
+    my ($class, $tree, %args) = @_;
+    my $roundtrips = $args{roundtrips} // croak "roundtrips callback required";
+    my $carrier    = $args{carrier}    // croak "carrier callback required";
+    my $reject     = $args{reject};
+
+    return _canonical_floats($tree, $roundtrips, $carrier, $reject);
+}
+
+sub _canonical_floats {
+    my ($node, $roundtrips, $carrier, $reject) = @_;
+
+    return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier, $reject) }
+                 keys %$node }
+        if ref $node eq 'HASH';
+    return [ map { _canonical_floats($_, $roundtrips, $carrier, $reject) } @$node ]
+        if ref $node eq 'ARRAY';
+
+    # Blessed leaves (JSON::PP::Boolean) and anything else with a reference are
+    # not floats and must reach the emitter untouched -- unless the caller's
+    # emitter says it cannot write this one faithfully.
+    if (ref $node) {
+        $reject->($node) if $reject;
+        return $node;
+    }
+    return $node unless defined $node;
+    return $node unless _sv_kind($node) eq 'float';
+
+    # THE one conversion. This is the same method, on the same scalar, that the
+    # MAC digest goes through -- not a second rendering that happens to agree
+    # today. Do not inline a copy of it here.
+    my $text = __PACKAGE__->value_to_bytes($node);
+    return $node if $text =~ $NO_AGREED_FORM;
+
+    # The emitter's own output already comes back as this number: leave the
+    # scalar alone, so the document keeps the bytes it has always had.
+    return $node if $roundtrips->($node, $text);
+
+    return $carrier->($node, $text);
+}
+
+=method canonical_float_tree
+
+    my $tree = File::SOPS::Encrypted->canonical_float_tree(
+        $data,
+        roundtrips => sub { my ($value, $text) = @_; ... },
+        carrier    => sub { my ($value, $text) = @_; ... },
+    );
+
+Class method. Returns a B<copy> of C<$data> in which every float leaf that the
+caller's emitter cannot write faithfully has been replaced by a carrier holding
+the canonical decimal from L</value_to_bytes> -- the same text the MAC digest
+covers.
+
+This exists because the digest and the document have to state the same number.
+L</value_to_bytes> writes a float as Go's
+C<strconv.FormatFloat($v, 'f', -1, 64)>, up to 17 significant digits, while
+every emitter in this distribution renders a double with 15. For a value that
+needs 16 or 17 the document said one number and the digest covered another, and
+the file failed its own MAC. See
+L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
+
+Two callbacks, both given the original scalar and its canonical text:
+
+=over 4
+
+=item * C<roundtrips> answers whether the emitter's own rendering of this value
+parses back to the same double. It must B<measure> that -- emit and reparse --
+rather than model it, which is what keeps this correct if an emitter changes.
+Returning true leaves the scalar untouched, so a value the emitter already
+writes faithfully keeps exactly the bytes it has today.
+
+=item * C<carrier> returns the replacement, and is format-specific: L<YAML::XS>
+emits a L<Scalar::Util/dualvar>'s string half verbatim and unquoted, while
+every JSON backend quotes it and needs a L<Math::BigFloat> under
+C<allow_bignum> instead.
+
+=item * C<reject> is optional and is called for every blessed or otherwise
+referenced leaf, so a handler can refuse one its emitter would write
+unfaithfully. It exists because enabling a carrier can widen what the emitter
+silently accepts: C<allow_bignum> also makes L<Cpanel::JSON::XS> write a
+B<caller-supplied> L<Math::BigFloat> as a bare number, where it used to refuse
+the document outright, and the digest hashes such a value as a string.
+
+=back
+
+The canonical text is B<not> recomputed by the caller and must not be: a second
+conversion is how the ciphertext and the digest came to disagree in the first
+place, and it is invisible from inside Perl because both sides are then
+consistently wrong.
+
+Call this at B<emit time, on a copy, after the digest has been taken>. A
+carrier is a blessed reference or a dualvar, so L</detect_type> would call it
+C<str> and the walk that computes the MAC must never see one.
+
+C<NaN>, C<+Inf>, C<-Inf> and C<-0> are returned unchanged. Those have no wire
+form both implementations agree on, the answer differs per format, and they are
+tracked separately.
+
+=cut
+
 # Which of Perl's three scalar shapes this is, read off the SV rather than off
 # its text. The PUBLIC IOK/NOK flags deliberately, not the private pIOK/pNOK
 # that JSON::PP's number heuristic uses: the private ones are set by merely

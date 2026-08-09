@@ -4,6 +4,8 @@ our $VERSION = '0.003';
 use Moo;
 use Carp qw(croak);
 use Cpanel::JSON::XS ();
+use Math::BigFloat ();
+use File::SOPS::Encrypted;
 use namespace::clean;
 
 # The only JSON encoder AND decoder in this distribution's document path, and
@@ -31,7 +33,24 @@ use namespace::clean;
 # Cpanel writes `1.0` and `-0.0` where sops writes `1` and `-0`; the first is
 # cosmetic (both digest as "1", sops -d accepts ours), the second is the point.
 # See docs/adr/0005. Do not "modernise" this back to JSON::MaybeXS.
-my $json = Cpanel::JSON::XS->new->utf8->pretty->canonical;
+#
+# TWO objects, ONE definition of the options, because allow_bignum is not
+# symmetric and must not be enabled on the decoder. On the way out it makes
+# Cpanel render a Math::BigFloat as a bare JSON number, which is the only way
+# measured to get a 17-digit double into JSON unquoted (docs/adr/0006). On the
+# way IN it would hand back Math::BigFloat and Math::BigInt OBJECTS for
+# ordinary literals -- measured, `0.30000000000000004` decodes to a
+# Math::BigFloat and `100000000000000000000` to a Math::BigInt -- and
+# detect_type calls a blessed leaf `str`, so every float in every document we
+# read would change type and digest.
+#
+# It has no effect on the way out for anything that is not one of those objects:
+# a sample of integers, NVs, strings, booleans, undef, arrays and -0.0 encodes
+# byte-identically with and without it.
+sub _configured_json { return Cpanel::JSON::XS->new->utf8->pretty->canonical }
+
+my $json    = _configured_json();                   # parse(): NEVER allow_bignum
+my $encoder = _configured_json()->allow_bignum;     # emit()
 
 =head1 SYNOPSIS
 
@@ -177,7 +196,85 @@ sub emit {
     my ($class, $data) = @_;
     croak "data required" unless defined $data;
 
-    return $json->encode($data);
+    return $encoder->encode(File::SOPS::Encrypted->canonical_float_tree(
+        $data,
+        roundtrips => \&_float_roundtrips,
+        carrier    => \&_float_carrier,
+        reject     => \&_reject_foreign_bignum,
+    ));
+}
+
+# allow_bignum is what lets _float_carrier reach the wire, but it whitelists the
+# two classes for EVERYONE, not just for us -- so a Math::BigFloat or
+# Math::BigInt the CALLER put in the tree, which the encoder used to refuse
+# outright ("encountered object ... neither allow_blessed, convert_blessed nor
+# allow_tags"), would now be written as a bare number without a word.
+#
+# That is not merely a laxer input rule. detect_type calls a blessed leaf `str`,
+# so the digest covers the object's stringification verbatim while the document
+# carries it as a JSON number that Go reparses as a float64 and re-derives:
+# Math::BigFloat->new('1.00000000000000000000000000001') digests as those 29
+# digits and reads back as 1. A document that fails its own MAC, produced
+# silently, which is exactly what this whole change exists to stop.
+#
+# Our own carriers are created below, after this has run on the caller's tree.
+sub _reject_foreign_bignum {
+    my ($node) = @_;
+
+    return unless ref($node) eq 'Math::BigFloat' || ref($node) eq 'Math::BigInt';
+
+    croak "cannot write a " . ref($node) . " to a SOPS document: the digest "
+        . "covers its stringification while the document would carry it as a "
+        . "JSON number, and the two disagree for any value a double cannot "
+        . "hold. Pass a plain Perl number, or a string to store the digits "
+        . "exactly";
+}
+
+# Does this emitter's own rendering of the float come back as the same double?
+#
+# Measured through the two objects the document itself goes through, so the
+# question asked is exactly "if I write this and read it back, do I get the
+# same number". Cpanel renders an NV through %.15g, so 0.1+0.2 comes back as
+# 0.3 -- a different double from the one value_to_bytes digested.
+#
+# Unlike YAML::XS, Cpanel keeps no PV, so a float PARSED from a JSON document
+# is a bare NV and fails this test too. That is why rotate on a legitimate
+# sops-written JSON file used to rewrite 0.30000000000000004 as 0.3.
+#
+# Equality via value_to_bytes on both sides, not ==, so it means what the digest
+# means; == cannot tell -0.0 from 0.0, and -0.0 is a case ADR 0005 paid for.
+sub _float_roundtrips {
+    my ($value, $text) = @_;
+
+    my $back = eval { $json->decode($encoder->encode({ v => $value }))->{v} };
+    return 0 unless defined $back;
+    return File::SOPS::Encrypted->value_to_bytes($back) eq $text ? 1 : 0;
+}
+
+# Math::BigFloat is the only carrier measured to survive into JSON as a bare
+# number: a dualvar, a plain string and a TO_JSON return are all quoted by every
+# backend, and Cpanel::JSON::XS::Type's JSON_TYPE_FLOAT still renders 0.3.
+#
+# The explicit `undef, undef` are the accuracy and precision arguments, and they
+# are load-bearing. Math::BigFloat->new otherwise applies CLASS-GLOBAL accuracy
+# and precision, so a caller who had set Math::BigFloat->accuracy(5) anywhere in
+# their program silently turned our text into 0.30000 -- the calling program
+# deciding our wire bytes again, which is the whole subject of ADR 0005. A
+# subclass would be immune to that, but allow_bignum matches the class name
+# exactly and refuses one.
+sub _float_carrier {
+    my ($value, $text) = @_;
+
+    my $big = Math::BigFloat->new($text, undef, undef);
+
+    # The bypass above is measured, but the failure it prevents is silent and
+    # produces a document that fails its own MAC, so it is asserted rather than
+    # trusted. No value in the message: it is the plaintext.
+    croak "Math::BigFloat did not render a float leaf at full precision. "
+        . "Check for a global Math::BigFloat->accuracy or ->precision setting."
+        unless "$big" eq $text;
+
+    return $big;
 }
 
 =method emit
@@ -198,6 +295,22 @@ same encoder rather than two copies of its options. Those options are not
 cosmetic -- C<canonical> is what makes key order sorted, which the MAC's encrypt
 side relies on -- so a change here moves the encrypted document as well as the
 plaintext one.
+
+B<Floats are written in a form that parses back to the same double.>
+L<Cpanel::JSON::XS> renders a float through C<%.15g>, while the MAC digest
+covers the shortest decimal that round-trips -- up to 17 significant digits. For
+a value needing 16 or 17 the document stated one number and the digest another,
+and the file failed its own verification; because this backend keeps no copy of
+the text it parsed, that applied to floats read out of a sops-written document
+as much as to computed ones, so C<rotate> could destroy a value the reference
+implementation had written correctly. This method now reparses its own output
+and substitutes the canonical decimal from
+L<File::SOPS::Encrypted/value_to_bytes> only where the value does not survive,
+carried as a L<Math::BigFloat> under C<allow_bignum> -- the only wrapper
+measured to reach JSON as a bare number instead of a quoted string. A float that
+already emitted faithfully keeps exactly the bytes it had, C<-0.0> included.
+C<NaN> and C<Inf> are unchanged. See
+L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
 
 =cut
 

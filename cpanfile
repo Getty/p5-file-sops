@@ -32,6 +32,11 @@ requires 'File::Spec';
 # over it, and File::SOPS::edit puts the decrypted document in a temporary
 # directory of its own -- see the edit method.
 requires 'File::Temp';
+# The carrier that gets a 16-17 digit double into JSON as a bare number.
+# Cpanel::JSON::XS renders an NV through %.15g and quotes every other wrapper
+# tried, so a Math::BigFloat under allow_bignum is the only measured way to
+# write the decimal the MAC digest covers. See docs/adr/0006.
+requires 'Math::BigFloat';
 requires 'MIME::Base64';
 requires 'POSIX';
 requires 'Scalar::Util';

@@ -3,7 +3,9 @@ package File::SOPS::Format::YAML;
 our $VERSION = '0.003';
 use Moo;
 use Carp qw(croak);
+use Scalar::Util qw(dualvar);
 use YAML::XS qw(Load Dump);
+use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
 use namespace::clean;
 
@@ -271,8 +273,43 @@ sub emit {
     croak "data required" unless defined $data;
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
-    return Dump($data);
+    return Dump(File::SOPS::Encrypted->canonical_float_tree(
+        $data,
+        roundtrips => \&_float_roundtrips,
+        carrier    => \&_float_carrier,
+    ));
 }
+
+# Does YAML::XS's own rendering of this float come back as the same double?
+#
+# Measured, not modelled: the value goes through the real Dump and the real
+# Load. YAML::XS renders a float by Perl stringification, which is ~15
+# significant digits, so 0.1+0.2 comes back as 0.3 -- a different number from
+# the one value_to_bytes digested, and a document that fails its own MAC.
+#
+# It answers YES far more often than that suggests, and that is the point:
+# YAML::XS retains the PV of every float it PARSES and emits it verbatim, so a
+# value read from a document round-trips by construction and keeps the exact
+# bytes it arrived with. Only floats that reach us as bare NVs -- computed by
+# the caller, or parsed out of JSON -- ever need the carrier.
+#
+# Equality is decided by value_to_bytes on both sides rather than by ==, so it
+# means the same thing the digest means. == cannot tell -0.0 from 0.0.
+sub _float_roundtrips {
+    my ($value, $text) = @_;
+
+    my $back = eval { Load(Dump({ v => $value }))->{v} };
+    return 0 unless defined $back;
+    return File::SOPS::Encrypted->value_to_bytes($back) eq $text ? 1 : 0;
+}
+
+# A dualvar's numeric half keeps the value a float for anything that looks at
+# the SV; YAML::XS writes the string half, unquoted, as a plain scalar.
+#
+# Note what this is: a raw-text primitive with no guard rail. YAML::XS emits
+# whatever the PV says -- dualvar(0.3, 'hello') writes `v: hello` -- so this is
+# safe only because $text came from value_to_bytes. Do not derive it here.
+sub _float_carrier { return dualvar($_[0], $_[1]) }
 
 =method emit
 
@@ -290,6 +327,19 @@ L</serialize> is this method plus the metadata section, so both go through the
 same emitter options rather than two copies of them. Those options are not
 cosmetic -- sorted key emission is what the MAC's encrypt side relies on -- so a
 change here moves the encrypted document as well as the plaintext one.
+
+B<Floats are written in a form that parses back to the same double.> L<YAML::XS>
+renders a float by Perl stringification, roughly 15 significant digits, while
+the MAC digest covers the shortest decimal that round-trips -- up to 17. For a
+value needing 16 or 17 the document stated one number and the digest another,
+and the file failed its own verification. This method now reparses its own
+output and substitutes the canonical decimal from
+L<File::SOPS::Encrypted/value_to_bytes> only where the value does not survive,
+so a float that already emitted faithfully keeps exactly the bytes it had. In
+practice that is most of them: YAML::XS retains the text of every float it
+parsed, so only bare NVs -- computed by the caller, or parsed out of JSON --
+are ever rewritten. C<NaN>, C<Inf> and C<-0.0> are unchanged. See
+L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
 
 =cut
 

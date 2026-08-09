@@ -801,8 +801,8 @@ See L</Character encoding>.
 It is written by the format handler's C<emit>
 (L<File::SOPS::Format::YAML/emit>, L<File::SOPS::Format::JSON/emit>) -- the
 same emitter the encrypted document goes through, minus the C<sops> section --
-so the plaintext and the encrypted file cannot disagree about quoting, booleans
-or key order.
+so the plaintext and the encrypted file cannot disagree about quoting, booleans,
+key order or float precision.
 
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
 It is nonetheless written atomically, since nothing stops it naming a file that
