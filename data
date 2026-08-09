@@ -1,0 +1,39 @@
+---
+claimed_at: 2026-08-09T05:02:53Z
+claimed_by: file-sops-format
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:20:30Z
+id: 35
+priority: low
+started: 2026-08-09
+status: done
+tags:
+- refactor
+- drift
+title: decrypt_file emits YAML itself instead of going through Format::YAML
+updated: 2026-08-09T05:06:41Z
+---
+
+Found while localising $YAML::XS::Boolean for karr #20e.
+
+File::SOPS::decrypt_file calls YAML::XS::Dump($data) directly rather than asking the format handler to emit. That made it depend on a side effect: Format::YAML set $YAML::XS::Boolean at load time, and without it Dump writes a JSON::PP::Boolean as "!!perl/scalar:JSON::PP::Boolean 1" instead of "true". Localising the variable inside Format::YAML alone would therefore have broken decrypt_file.
+
+Patched for now by localising it in decrypt_file too, from $File::SOPS::Format::YAML::BOOLEAN_MODE so the mode string still has one definition. But the emitter now exists in two places, which is the twin shape this distribution keeps getting bitten by - and the JSON branch of decrypt_file has its own JSON::MaybeXS->new(...) with hand-copied options (utf8/pretty/canonical) that must stay identical to Format::JSON s.
+
+Fix candidate: give both format handlers a plain "emit the data without a sops section" method and have decrypt_file call it. Note the canonical/sorted-key option is MAC-relevant, which is exactly why it should not be duplicated.
+Consolidated: new emit() on Format::YAML and Format::JSON emits a document with no sops section; serialize() is emit() plus the metadata section, and File::SOPS::_serialize_plaintext (decrypt_file + edit) is emit() on its own. The JSON encoder options and the YAML boolean-mode local each have exactly ONE definition now.
+
+MAC check first, as asked: the consolidation moves no digest. decrypt_file writes plaintext with no sops section and computes no MAC over it; edit's plaintext only reaches the editor, and the digest of the re-encrypted document is computed by encrypt() over the REPARSED tree via _sorted_leaves (sorted order) regardless of what the editor was shown. Proved byte-neutral rather than argued: fixed-input fingerprints of Format::YAML->serialize, Format::JSON->serialize and _serialize_plaintext for yaml/yml/json, plus the unknown-format croak, are sha256-identical before and after (5/5). Stayed in the format lane; nothing handed to file-sops-wire.
+
+The coupling did not disappear, it moved: emit() is now shared with serialize(), so a future change to what it emits DOES move the wire bytes. Stated in the comments and the POD of both handlers -- the plaintext emitter is no longer a safe place for a cosmetic change.
+
+Regression test t/20-plaintext-emitter.t, 7 subtests / 24 assertions. It does not assert that the two emitters agree (they always did); it replaces emit() and requires decrypt_file, edit and serialize to follow it, then pins the options on that one emit(). Measured red three ways:
+  * against HEAD edb7444: 3 of 4 assertions in subtest 1 fail, then the file dies on Can't locate object method 'emit', exit 255, 2/2 subtests failed;
+  * against the fix WITH a re-introduced private emitter carrying byte-identical options (the invisible twin): 4 assertions fail, 2 of 7 subtests -- this is the case nothing could catch before;
+  * against the fix with the boolean local dropped from YAML emit(): 3 assertions fail. Dropping canonical from the JSON encoder does not even reach the assertion: the round trip dies with a MAC mismatch, which is ADR 0001's coupling firing.
+
+Changes entry added under {{$NEXT}}. dzil build clean. Full suite WITH real interop: SOPS_BIN=~/bin/sops prove -lr t/ -> 21 files, 499 tests, PASS. t/04-interop.t RAN against sops 3.13.3 (28 subtests, 282 assertions, 0 skips) -- not skipped.
+
+Not committed, as instructed. Three tickets filed rather than scope creep: #48 (t/14 subtest 7 fails ~1.6% of runs, unanchored qr/data:x/ matching a random MAC payload -- hit once during this work, measured at 10/500), #49 (File::SOPS.pm still loads JSON::MaybeXS and YAML::XS with no code using them), #50 (the file-sops-format briefing still says decrypt_file calls YAML::XS::Dump directly -- configuration, so not edited here).
+Correction to the handoff note: t/20-plaintext-emitter.t is 7 subtests / 26 assertions (json 4+7+1, yaml 4+8+1, plus the $YAML::XS::Boolean localisation check), not 24.
