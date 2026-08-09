@@ -1,0 +1,138 @@
+---
+claimed_at: 2026-08-09T04:34:35Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:54:11Z
+id: 40
+priority: medium
+started: 2026-08-09
+status: done
+tags:
+- api
+- data-loss
+title: encrypt_file and rotate still write over a file non-atomically
+updated: 2026-08-09T04:49:37Z
+---
+
+Found while implementing encrypt_in_place (karr #4).
+
+encrypt_in_place and edit now write through File::SOPS::_replace_file: a temporary
+file in the same directory, then rename. A failure anywhere before the rename
+leaves the original exactly as it was. The two older write paths still do not:
+
+- encrypt_file with `output` omitted defaults to writing over its INPUT, and it
+  does so by opening it with `>:raw` -- the plaintext is truncated the moment the
+  handle is opened. This is the same hazard encrypt_in_place was built to close,
+  reachable through the older method.
+- rotate writes back to the same file the same way. A rotation interrupted at
+  that point leaves a truncated encrypted file whose data key was already
+  replaced, so the previous content is unrecoverable.
+
+The fix is one line each -- _replace_file($path, $content) -- and the helper
+already handles the case both need (the target exists, so its permissions are
+copied onto the replacement).
+
+Two consequences to write into the POD when it is done, because they are what
+makes this a decision rather than a cleanup: the file gets a NEW INODE, so hard
+links to it keep the old content, and _replace_file resolves a symlink so the
+target is replaced rather than the link. sops itself truncates and rewrites,
+keeping the inode; this distribution trades that for not destroying the file.
+
+Deliberately left out of #4 to keep that change reviewable.
+Scope decisions, both open questions in the ticket, decided rather than assumed:
+
+1. encrypt_file with an EXPLICIT output writes atomically too, not only the
+   defaulted in-place case. The hazard is not confined to the default: open ">"
+   truncates an existing output before the first byte and neither the print nor
+   the close was checked, so a short write left an empty file AND returned 1.
+   Branching on "is output the same file as input" would be a path-comparison
+   problem (x.yaml vs ./x.yaml vs a symlink to it) that silently falls back to
+   the unsafe path when it guesses wrong. One write path also means one set of
+   consequences to document and for a caller to remember.
+
+2. decrypt_file HAS the same defect and is fixed with it, though the ticket did
+   not name it. output being required removes the "defaults to the input"
+   hazard, not the "output names a file that matters" one -- a working copy
+   being refreshed, or the encrypted input itself. It writes plaintext, so a
+   silently truncated result is the worse half of the bug, and the fix is the
+   same line.
+
+3. Permissions deliberately NOT changed. _replace_file now applies 0666 & ~umask
+   when the target does not exist, because File::Temp creates 0600 and routing
+   these three methods through the helper would otherwise have smuggled a
+   permissions policy change into a data-loss fix. Measured (sops 3.13.3, umask
+   022): --output creates 0644 and leaves an existing file mode alone; we match
+   both. Whether decrypt_file SHOULD create 0600 is karr #45.
+
+4. Added: a target that exists and is NOT a regular file (/dev/stdout,
+   /dev/null, a fifo) is written through directly instead of temp+rename. Not
+   in the ticket, but required by it: File::Temp cannot create a temp in /dev,
+   so without this the fix would have broken anyone using output => /dev/stdout
+   -- which sops supports (measured: sops -e --output /dev/stdout works).
+
+Measured against sops 3.13.3 before choosing any of it:
+  -e -i            keeps the inode AND the mode (hard links follow along)
+  --output NEW     0644 under umask 022
+  --output EXISTS  inode and mode preserved
+  -e -i symlink    link left alone, target rewritten
+  -e -i 0444 file  REFUSES ("Could not open in-place file for writing") -> #46
+
+POD correction found on the way: encrypt_in_place listed the symlink behaviour
+as one of two ways it "differs from sops". It is not a difference -- sops
+resolves the symlink and rewrites the target too. Corrected, since the same
+paragraph was being rewritten for three more methods and shipping the false
+version on the fourth would have been worse.
+Done, NOT committed -- the main agent reviews and commits.
+
+Changed (3 files, all mine; see the warning at the end):
+  lib/File/SOPS.pm
+    - encrypt_file, decrypt_file and rotate now write through _replace_file
+      instead of open ">:raw" + unchecked print + unchecked close.
+    - _replace_file handles a target that does not exist (mode 0666 & ~umask,
+      what open ">" gave it, what sops --output gives it) and reports a
+      legible error naming the caller path when the temp file cannot be
+      created -- the old "Cannot open output file ..." had to stay findable.
+    - New _write_through for a target that exists and is not a regular file
+      (/dev/stdout, /dev/null, fifo); every step checked there too.
+    - POD: new shared "How a file is written" section carrying the atomicity
+      guarantee and the four consequences of rename (new inode / hard links,
+      directory-not-file write permission, symlink resolution, mode rules),
+      each measured against sops 3.13.3. encrypt_file, decrypt_file, rotate
+      and encrypt_in_place point at it; encrypt_in_place lost its now-false
+      claim that it is the only atomic one, and its incorrect claim that the
+      symlink behaviour diverges from sops.
+  Changes: DATA LOSS entry + the BEHAVIOUR CHANGE that follows from rename;
+      the encrypt_in_place entry amended so the release notes do not
+      contradict themselves; the test paragraph extended.
+  t/19-atomic-writes.t (new, 10 subtests).
+
+The regression test is a real discriminator, not a smoke test. It makes the
+write itself fail with RLIMIT_FSIZE 0 in a child process (SIGXFSZ ignored, so
+the failure is an errno rather than a dead process) and then looks at what is
+left -- which is the only way to tell the fix from the bug, since both leave a
+file behind. Verified in both directions: against the unfixed lib, 4 of 10
+subtests fail (9 assertions: encrypt_file loses the plaintext, rotate loses
+the document AND it no longer decrypts, decrypt_file loses the pre-existing
+output, all three report success while doing it, plus the inode/hard-link
+claim). Against the fixed lib all 10 pass. It skips itself, loudly, if the
+harness will not apply the limit.
+
+Tests: SOPS_BIN=$HOME/bin/sops prove -lr t/ -> 20 files, 456 tests, PASS.
+THE INTEROP RAN, it did not skip: t/04-interop.t executed all 28 subtests
+against sops 3.13.3, and grepping the verbose run for skips across the whole
+suite returns 0. dzil build is clean and the woven POD has no unresolved
+links.
+
+Scope decisions and the measurements behind them are in the note above.
+Spun off: karr #45 (should decrypt_file create a new plaintext output at 0600
+rather than umask) and #46 (temp+rename replaces a read-only file where sops
+refuses -- declared in Changes, open whether to add the check).
+
+WARNING for whoever commits: this working tree is shared. While I worked,
+another agent committed ee55f35 and f882f8a (Encrypted.pm, docs/adr/0004,
+refs/) and still has refs/cryptx-pv-defect.md modified in the tree. That file
+is NOT mine. Every hunk in lib/File/SOPS.pm is; I verified the diff hunk by
+hunk. Commit Changes, lib/File/SOPS.pm and t/19-atomic-writes.t; leave
+refs/cryptx-pv-defect.md to its owner.
+Committed as d5d23ec. encrypt_file, decrypt_file and rotate all route through _replace_file; non-regular targets written through directly. Counter-check done by the orchestrating agent: 4 of 10 subtests in t/19 fail against the unfixed lib. Full suite 456 tests, t/04-interop.t ran with 0 skips.
