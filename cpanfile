@@ -34,4 +34,6 @@ on test => sub {
     requires 'Test::More';
     requires 'File::Slurp';
     requires 'File::Temp';
+    # t/22-creation-rules.t builds .sops.yaml fixture trees several levels deep.
+    requires 'File::Path';
 };

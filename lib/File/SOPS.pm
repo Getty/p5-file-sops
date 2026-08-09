@@ -84,6 +84,10 @@ our $VERSION = '0.003';
         identities => ['AGE-SECRET-KEY-1...'],
     );
 
+    # Take the recipients and rules from the .sops.yaml governing a file
+    my %args = File::SOPS->creation_rules_for(file => 'secrets/prod.yaml');
+    File::SOPS->encrypt_in_place(file => 'secrets/prod.yaml', %args);
+
 =head1 DESCRIPTION
 
 File::SOPS is a pure Perl implementation of Mozilla SOPS (Secrets OPerationS),
@@ -1169,11 +1173,453 @@ verify re-signs whatever it contained, so prefer to fail.
 
 =cut
 
+# The config file, spelled exactly. Measured against sops 3.13.3: a .sops.yml
+# is NOT read, and is warned about -- `ignoring "../.sops.yml" when searching
+# for config file; the config file must be called ".sops.yaml"`.
+our $CONFIG_FILE_NAME = '.sops.yaml';
+
+# Creation-rule fields that name key material this distribution cannot produce.
+#
+# These are the CONFIG file's names, which are NOT the sops section's names:
+# `azure_keyvault` and `hc_vault_transit_uri` here against `azure_kv` and
+# `hc_vault` there. Measured against sops 3.13.3 by putting an unusable key in
+# each field of a matching rule -- these five make it try to wrap the data key
+# and fail on the key, while `aws_kms`, `azure_kv` and `hc_vault` in a creation
+# rule are ignored entirely. Taking the list from
+# @File::SOPS::Metadata::KEY_MATERIAL_FIELDS instead would therefore have let
+# azure_keyvault and hc_vault_transit_uri walk straight through the guard.
+#
+# key_groups and shamir_threshold are here for the same reason one step on:
+# both change how the data key is split and wrapped, sops writes
+# shamir_threshold into the document it produces (measured), and a document
+# this encrypted while ignoring them would be wrapped for age alone.
+my @UNIMPLEMENTED_RULE_FIELDS = qw(
+    pgp kms gcp_kms azure_keyvault hc_vault_transit_uri
+    key_groups shamir_threshold
+);
+
+sub creation_rules_for {
+    my ($class, %args) = @_;
+    my $file = $args{file} // croak "file required";
+
+    my $target = _clean_abs_path($file);
+
+    my $config = $args{config};
+    unless (defined $config) {
+        $config = _find_config_file($target);
+        croak "No $CONFIG_FILE_NAME found for '$file': looked in '"
+            . _dir_of($target) . "' and in every directory above it, up to the "
+            . "filesystem root. Pass recipients to encrypt yourself, or "
+            . "config => '/path/to/$CONFIG_FILE_NAME' to name one. (sops stops "
+            . "here too: \"config file not found, or has no creation rules, and "
+            . "no keys provided through command line options\".)"
+            unless defined $config;
+    }
+
+    my $rules   = _load_creation_rules($config);
+    my $subject = _rule_subject_path($target, $config);
+
+    my ($rule, $index) = _first_matching_rule($rules, $subject, $config);
+    croak "No creation rule in '$config' matches '$subject'. A rule matches "
+        . "when its path_regex matches that path -- which is '$file' resolved "
+        . "and taken relative to the directory holding the config file -- or "
+        . "when it has no path_regex at all, which is how a catch-all rule is "
+        . "written. (sops stops here too: \"error loading config: no matching "
+        . "creation rules found\".)"
+        unless $rule;
+
+    return _creation_rule_args($rule, $config, $index);
+}
+
+=method creation_rules_for
+
+    my %args = File::SOPS->creation_rules_for(file => 'secrets/prod.yaml');
+
+    File::SOPS->encrypt_in_place(
+        file => 'secrets/prod.yaml',
+        %args,
+    );
+
+Reads the C<.sops.yaml> that governs a file and returns the L</encrypt>
+arguments its first matching creation rule asks for: C<recipients>, plus
+whichever of the four encryption rules and C<mac_only_encrypted> that rule
+carries. The returned list is meant to be splatted straight into L</encrypt>,
+L</encrypt_file> or L</encrypt_in_place>, which is where the actual encrypting
+still happens -- this method decides B<for whom and under which rules>, and
+nothing else.
+
+Nothing here reads C<.sops.yaml> implicitly. C<encrypt> and friends still want
+their C<recipients> spelled out; this is the one method that will go and look.
+
+=head3 Finding the config file
+
+C<.sops.yaml> is looked for in the directory holding C<file> and then in every
+directory above it, up to the filesystem root, and the first one found is used.
+Nothing stops the walk earlier -- not a C<.git> directory, not C<$HOME> --
+which is what sops does as well (measured on 3.13.3). The name must be exactly
+C<.sops.yaml>: a C<.sops.yml> is ignored there and here.
+
+B<This is a deliberate deviation, and it is the one thing here that differs
+from the reference implementation.> sops walks up from the B<current working
+directory>, not from the file: measured on 3.13.3, C<sops -e a/b/c/secrets.yaml>
+run from the top of that tree does not see an C<a/b/.sops.yaml> at all, and
+C<sops -e /abs/path/secrets.yaml> run from an unrelated directory reports
+C<config file not found> however many config files sit above the file. That is
+a sensible rule for a command a person types in the directory they are working
+in, and a useless one for a library: the caller's working directory has nothing
+to do with the file it was handed, and a daemon whose cwd is C</> would find
+nothing at all. The two agree in the ordinary case -- one C<.sops.yaml> at the
+top of a repository, the file somewhere underneath it -- and differ only when
+config files are nested, where walking up from the file picks the nearer and
+more specific one.
+
+C<config> names a config file explicitly, and skips the search entirely. It is
+the equivalent of sops's C<--config>. Its value is B<not> taken from
+C<$SOPS_CONFIG>, which sops does honour: an environment variable that
+redirects which public keys a secret gets encrypted to is a reasonable thing
+for a user to set for a command they are running, and not a reasonable thing
+for a library to obey on behalf of a caller who never asked. Pass
+C<< config => $ENV{SOPS_CONFIG} >> if you want it.
+
+=head3 Which rule matches
+
+The rules are tried in order and B<the first match wins>; a rule with no
+C<path_regex> matches everything, which is how a catch-all is written at the
+end of the list. Both are sops's behaviour.
+
+B<C<path_regex> is not matched against the path you passed.> It is matched
+against that path made absolute and normalised, and then taken relative to the
+directory holding the config file -- so with a config at the top of a
+repository, a rule matches C<secrets/prod.yaml> whether the caller said
+C<secrets/prod.yaml>, C<./secrets//prod.yaml>, C<../repo/secrets/prod.yaml> or
+the full absolute path, and whether it is called from the top of the repository
+or from inside C<secrets/>. Symlinks are B<not> resolved, so a rule sees the
+link's path and not the target's. All of that is measured against sops 3.13.3,
+including the fallback: a file that is not under the config file's directory at
+all -- only reachable by passing C<config> here -- is matched as an absolute
+path instead of as a C<../..>-prefixed relative one.
+
+The regex is a B<Perl> regex, and nothing translates it. sops compiles the same
+string with Go's RE2, which is not the same dialect: C<(?i)> works in both, but
+a lookbehind compiles here and makes sops stop with C<error parsing regexp>
+(measured on 3.13.3). A C<path_regex> written in either dialect alone will
+therefore pick different rules -- or no rule -- depending on which of the two
+tools reads the config, and this does not warn about it. Keep a C<path_regex>
+to what both accept. One that will not compile at all is reported here naming
+the config file and the rule; sops reports it too.
+
+=head3 Rules this refuses rather than half-applies
+
+Each of these dies, naming the config file and which rule in it:
+
+=over 4
+
+=item * A rule naming B<key material for a backend other than age> --
+C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault>, C<hc_vault_transit_uri> -- or
+C<key_groups> or C<shamir_threshold>. sops wraps the data key for every backend
+the rule names; age is the only one implemented here, so honouring such a rule
+would write a document the config says several parties can read and only the
+age recipients actually can, and report success. This is the refusal
+L</rotate> makes for the same reason. Those are the config file's field names
+and not the C<sops> section's, which differ.
+
+=item * A rule carrying B<more than one encryption rule>. sops refuses the
+same config with C<cannot use more than one of encrypted_suffix,
+unencrypted_suffix, ... for the same rule>, and L<File::SOPS::Metadata> refuses
+the resulting document; catching it here names the config file instead of the
+document that could not be built.
+
+=item * A rule carrying C<unencrypted_comment_regex> or
+C<encrypted_comment_regex>. Neither parser here keeps comments, so every value
+would be classified wrongly -- the refusal L</encrypt> makes for a document
+carrying one.
+
+=item * A matching rule with B<no age recipient>, which leaves nothing to
+encrypt for. sops stops on the same rule with C<Could not generate data key:
+[empty key group provided]>.
+
+=back
+
+Not finding a config file at all, and finding one where no rule matches, die
+too rather than returning an empty list: both are what sops exits non-zero on,
+and a C<recipients> that quietly came back empty would be a document nobody can
+decrypt -- or, since L</encrypt> refuses an empty recipient list, an error
+naming neither the file nor the config that failed to produce one.
+
+=head3 The rule's own fields
+
+C<age> is a comma-separated list of recipients, or a YAML list of them, or a
+list whose entries are themselves comma-separated. Whitespace around each
+recipient is ignored, which is what makes the folded
+
+    age: >-
+      age1...,
+      age1...
+
+form work. Newlines are B<not> separators on their own: measured on 3.13.3, a
+literal block of recipients without commas is handed to age as one string and
+fails.
+
+C<unencrypted_suffix>, C<encrypted_suffix>, C<unencrypted_regex>,
+C<encrypted_regex> and C<mac_only_encrypted> are returned as the L</encrypt>
+arguments of the same names -- see L</Choosing what gets encrypted>. Fields
+this does not know are ignored, as sops ignores them.
+
+Note what the returned rules do B<not> do: nothing is applied here. A caller
+that drops the encryption rule out of C<%args> encrypts under the default
+instead, and a caller that adds one of its own alongside gets the refusal
+L<File::SOPS::Metadata/Encryption rules are mutually exclusive> gives any
+document carrying two.
+
+=cut
+
 # Internal helpers
 
 sub _format_class {
     my ($format) = @_;
     return $FORMATS{$format} // croak "Unknown format: $format";
+}
+
+# --- .sops.yaml creation rules -------------------------------------------
+#
+# Everything below is path arithmetic and a regex match. No wire bytes, no MAC,
+# no crypto: this decides which recipients and which encryption rule a file is
+# encrypted under, and then the ordinary encrypt path does the work.
+
+# An absolute path the way Go's filepath.Abs + Clean makes one: relative to the
+# current directory, with '.' and '..' resolved TEXTUALLY, and without touching
+# the filesystem. Cwd::abs_path is deliberately not used -- it resolves
+# symlinks, and sops does not: measured on 3.13.3, encrypting a symlink matches
+# a path_regex against the LINK's path, not the target's. It also requires the
+# file to exist, and a file about to be created still needs its rules.
+sub _clean_abs_path {
+    my ($path) = @_;
+
+    my ($vol, $dirs, $file) = File::Spec->splitpath(File::Spec->rel2abs($path));
+
+    my @parts;
+    for my $part (File::Spec->splitdir($dirs), $file) {
+        next if !length $part || $part eq File::Spec->curdir;
+        if ($part eq File::Spec->updir) { pop @parts; next }
+        push @parts, $part;
+    }
+
+    return File::Spec->catpath($vol,
+        File::Spec->catdir(File::Spec->rootdir, @parts), '');
+}
+
+sub _dir_of {
+    my ($abs) = @_;
+    my ($vol, $dirs) = File::Spec->splitpath($abs);
+    return File::Spec->canonpath(File::Spec->catpath($vol, $dirs, ''));
+}
+
+# The nearest .sops.yaml at or above the file's own directory, or undef.
+#
+# The search starts at the FILE, where sops starts it at the current working
+# directory (measured on 3.13.3; see creation_rules_for for why this deviates).
+# Nothing stops the walk short of the root -- not .git, not $HOME -- which is
+# what sops does.
+sub _find_config_file {
+    my ($target) = @_;
+
+    my ($vol, $dirs) = File::Spec->splitpath($target);
+    my @parts = grep { length } File::Spec->splitdir($dirs);
+
+    while (1) {
+        my $dir = File::Spec->catpath($vol,
+            File::Spec->catdir(File::Spec->rootdir, @parts), '');
+        my $candidate = File::Spec->catfile($dir, $CONFIG_FILE_NAME);
+        return $candidate if -f $candidate;
+        last unless @parts;
+        pop @parts;
+    }
+
+    return undef;
+}
+
+# The string path_regex is matched against: the file relative to the directory
+# holding the config file, or -- when it is not under that directory at all --
+# the absolute path. Measured on sops 3.13.3, both halves of it: a config at
+# the top of a tree matches `a/b/c/secrets.yaml` however the file was named and
+# from wherever sops was run, and a file outside the config's directory matches
+# `^/` rather than `^\.\./`.
+#
+# With the config found by walking up from the file, the second case cannot
+# arise -- the file is under the config's directory by construction. It is
+# reachable only through an explicit `config`.
+sub _rule_subject_path {
+    my ($target, $config) = @_;
+
+    my $rel = File::Spec->abs2rel($target, _dir_of(_clean_abs_path($config)));
+    my ($first) = File::Spec->splitdir($rel);
+
+    return $target if !length $rel || $first eq File::Spec->updir;
+    return $rel;
+}
+
+sub _load_creation_rules {
+    my ($config) = @_;
+
+    my $content = _read_file($config, 'config file');
+
+    # LIST context, as the format handlers use it: YAML::XS::Load in scalar
+    # context returns the LAST document of a multi-document stream, which for a
+    # config file would silently honour one half of it.
+    my @docs = eval { YAML::XS::Load($content) };
+    croak "Cannot parse config file '$config' (" . _reason($@) . "). sops "
+        . "stops on the same file with \"error loading config: Could not "
+        . "unmarshal config file\"."
+        if $@;
+
+    croak "Config file '$config' holds " . scalar(@docs) . " YAML documents; a "
+        . "$CONFIG_FILE_NAME is a single mapping"
+        if @docs > 1;
+
+    my $conf = @docs ? $docs[0] : undef;
+
+    croak "Config file '$config' has no creation_rules, so there is nothing "
+        . "in it that says who a file should be encrypted for. (sops reports "
+        . "\"config file not found, or has no creation rules, and no keys "
+        . "provided through command line options\".)"
+        if !defined $conf || (ref $conf eq 'HASH' && !defined $conf->{creation_rules});
+
+    croak "Config file '$config' is not a mapping" unless ref $conf eq 'HASH';
+
+    my $rules = $conf->{creation_rules};
+    croak "creation_rules in '$config' is not a list"
+        unless ref $rules eq 'ARRAY';
+
+    return $rules;
+}
+
+sub _first_matching_rule {
+    my ($rules, $subject, $config) = @_;
+
+    my $index = 0;
+    for my $rule (@$rules) {
+        $index++;
+
+        croak "Creation rule $index in '$config' is not a mapping"
+            unless ref $rule eq 'HASH';
+
+        my $regex = $rule->{path_regex};
+
+        # No path_regex is a catch-all, which is how the last rule in a
+        # .sops.yaml is usually written. Same in sops.
+        return ($rule, $index) unless defined $regex && length $regex;
+
+        my $matched = eval { $subject =~ /$regex/ ? 1 : 0 };
+        croak "Cannot use the path_regex of creation rule $index in '$config' "
+            . "as a regular expression (" . _reason($@) . "). It is compiled as "
+            . "a Perl regex here and with Go's RE2 by sops, which accept "
+            . "different things -- sops reports this one too, as \"error "
+            . "parsing regexp\"."
+            if $@;
+
+        return ($rule, $index) if $matched;
+    }
+
+    return;
+}
+
+# Is a creation rule's field set, in the sense Go's zero value gives it? An
+# empty string, an empty list and an absent key are all "not set".
+sub _rule_field_set {
+    my ($rule, $name) = @_;
+
+    my $value = $rule->{$name};
+    return 0 unless defined $value;
+    return scalar @$value       if ref $value eq 'ARRAY';
+    return scalar keys %$value  if ref $value eq 'HASH';
+    return length $value;
+}
+
+# A creation rule's `age`, as a list of recipients. Comma-separated, or a YAML
+# list, or a list of comma-separated strings; whitespace around each recipient
+# is dropped, which is what makes the folded `age: >-` form work. A NEWLINE is
+# not a separator: measured on sops 3.13.3, a literal block of recipients with
+# no commas reaches age as one string and fails to parse.
+sub _age_recipients {
+    my ($value, $config, $index) = @_;
+
+    return () unless defined $value;
+
+    my @out;
+    for my $entry (ref $value eq 'ARRAY' ? @$value : $value) {
+        croak "The age entry of creation rule $index in '$config' holds a "
+            . lc(ref $entry) . " reference; it takes a recipient, a "
+            . "comma-separated list of them, or a YAML list"
+            if ref $entry;
+        next unless defined $entry;
+
+        for my $recipient (split /,/, $entry) {
+            $recipient =~ s/\A\s+//;
+            $recipient =~ s/\s+\z//;
+            push @out, $recipient if length $recipient;
+        }
+    }
+
+    return @out;
+}
+
+sub _creation_rule_args {
+    my ($rule, $config, $index) = @_;
+
+    my @unimplemented = grep { _rule_field_set($rule, $_) }
+        @UNIMPLEMENTED_RULE_FIELDS;
+
+    croak "Refusing to encrypt under creation rule $index in '$config': it "
+        . "names key material this distribution cannot produce ("
+        . join(', ', @unimplemented) . ") -- age is the only backend "
+        . "implemented here. sops "
+        . "wraps the data key for every backend a rule names, so encrypting "
+        . "under this rule while ignoring those fields would write a document "
+        . "the config says several parties can read and only the age "
+        . "recipients actually can, and report success. Encrypt such a file "
+        . "with the sops CLI, or pass recipients to encrypt yourself."
+        if @unimplemented;
+
+    my @recipients = _age_recipients($rule->{age}, $config, $index);
+    croak "Creation rule $index in '$config' matches, but names no age "
+        . "recipient, so there is nobody to encrypt for. (sops stops on the "
+        . "same rule with \"Could not generate data key: [empty key group "
+        . "provided]\".)"
+        unless @recipients;
+
+    my %args = (recipients => \@recipients);
+
+    # The same mutual exclusion File::SOPS::Metadata enforces on a document,
+    # asked here so the message can name the config file rather than the
+    # document that could not be built out of it. sops refuses such a rule at
+    # config-load time too, listing the same six names.
+    my @rules = grep { _rule_field_set($rule, $_) }
+        @File::SOPS::Metadata::ENCRYPTION_RULES,
+        @File::SOPS::Metadata::UNSUPPORTED_ENCRYPTION_RULES;
+
+    croak "Creation rule $index in '$config' uses more than one of "
+        . join(', ', @File::SOPS::Metadata::ENCRYPTION_RULES,
+                     @File::SOPS::Metadata::UNSUPPORTED_ENCRYPTION_RULES)
+        . " (got " . join(' and ', @rules) . "); they select which values get "
+        . "encrypted and at most one may be given. sops refuses the same rule."
+        if @rules > 1;
+
+    if (my ($name) = @rules) {
+        croak "Refusing to encrypt under creation rule $index in '$config': "
+            . "'$name' selects values by their comment, and neither of this "
+            . "distribution's parsers keeps comments, so every value would be "
+            . "classified wrongly. Use the sops CLI for files that config "
+            . "covers."
+            if grep { $_ eq $name }
+                @File::SOPS::Metadata::UNSUPPORTED_ENCRYPTION_RULES;
+
+        $args{$name} = $rule->{$name};
+    }
+
+    $args{mac_only_encrypted} = $rule->{mac_only_encrypted} ? 1 : 0
+        if exists $rule->{mac_only_encrypted};
+
+    return %args;
 }
 
 sub _read_file {

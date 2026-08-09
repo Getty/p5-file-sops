@@ -426,6 +426,45 @@ Revision history for File-SOPS
     document is re-encrypted under a NEW data key rather than the
     existing one - so edit refuses the same files rotate refuses, and
     for the same reason.
+  - New method creation_rules_for: reads the .sops.yaml governing a
+    file and returns the encrypt arguments its first matching creation
+    rule asks for - recipients, plus whichever encryption rule and
+    mac_only_encrypted that rule carries - so that
+    `encrypt_in_place(file => $f, File::SOPS->creation_rules_for(file =>
+    $f))` encrypts a file the way the repository holding it has decided
+    its files are encrypted. Documented in the design notes since 0.001
+    and never implemented; until now recipients always had to be passed
+    explicitly and nothing here read a config file at all.
+    path_regex is matched the way sops matches it (measured on 3.13.3):
+    against the file made absolute and normalised and then taken
+    relative to the directory holding the config file - not against the
+    path as typed and not against the absolute path - so the same file
+    takes the same rule whichever directory the caller is in and
+    however it named it. Symlinks are not resolved, the first matching
+    rule wins, a rule without path_regex is a catch-all, and age takes
+    a comma-separated string or a YAML list.
+    ONE DELIBERATE DIFFERENCE: the search for .sops.yaml walks up from
+    the FILE, where sops walks up from the current working directory.
+    sops finds no config at all for an absolute path when it is run
+    from elsewhere, and skips a .sops.yaml that sits between its
+    working directory and the file; neither is a sensible contract for
+    a library, whose caller's working directory has nothing to do with
+    the file it was handed. The two agree in the ordinary case of one
+    .sops.yaml at the top of a repository. $SOPS_CONFIG is likewise not
+    read from the environment - pass config => $ENV{SOPS_CONFIG} to opt
+    in - because a variable that redirects which public keys a secret
+    is encrypted to should not be obeyed on behalf of a caller who
+    never asked.
+    A rule naming key material this distribution cannot produce (pgp,
+    kms, gcp_kms, azure_keyvault, hc_vault_transit_uri, key_groups,
+    shamir_threshold) is REFUSED rather than half-applied, as rotate
+    refuses such a document: sops wraps the data key for every backend
+    a rule names, so honouring the age half alone would write a file
+    the config says several parties can read and only some can, and
+    report success. So are a rule carrying two encryption rules, a
+    comment-based rule, a matching rule with no age recipient, no
+    config file, and a config where no rule matches - all of which sops
+    exits non-zero on too.
   - edit's two refusals for what comes back from the editor stay apart:
     a top-level 'sops' entry of the caller's own is reported as the
     reserved key it is, and text that will not parse as a parse failure.

@@ -1506,4 +1506,137 @@ subtest 'Unicode through decrypt_file (the file API, not just decrypt)' => sub {
     }
 };
 
+###############################################################################
+# Test: .sops.yaml creation rules -- the same config in front of both
+#
+# creation_rules_for decides who a file is encrypted for and under which rule.
+# Nothing about it touches the wire, so the unit tests in t/22 can pin the
+# arithmetic; what they cannot pin is whether the rule this PICKS is the rule
+# sops picks out of the same file. That is what this does: one .sops.yaml, one
+# tree, and the answers compared rule by rule.
+#
+# The rules are tagged twice over -- a recipient of their own and an
+# encrypted_suffix of their own -- so "which rule fired" is readable straight
+# out of the document sops writes.
+###############################################################################
+subtest '.sops.yaml creation rules agree with sops' => sub {
+    my ($pub1) = Crypt::Age->generate_keypair();
+    my ($pub2) = Crypt::Age->generate_keypair();
+    my ($pub3) = Crypt::Age->generate_keypair();
+
+    my $root = "$tempdir/creation-rules";
+    for my $sub ('', '/secrets', '/other', '/a', '/a/b') {
+        mkdir "$root$sub" or die "mkdir $root$sub: $!";
+    }
+
+    # $public rides along in every rule so that sops can decrypt whatever this
+    # library writes below; the per-rule key is what identifies the rule.
+    write_file("$root/.sops.yaml", <<"YAML");
+creation_rules:
+  - path_regex: ^secrets/.*\\.yaml\$
+    age: $pub1,$public
+    encrypted_suffix: _one
+  - path_regex: b/deep\\.yaml\$
+    age: $pub2,$public
+    encrypted_suffix: _two
+  - age: $pub3,$public
+    encrypted_suffix: _three
+YAML
+
+    write_file("$root/secrets/prod.yaml", "plain: hello\nkeep_one: a\n");
+    write_file("$root/other/dev.yaml",    "plain: hello\nkeep_three: a\n");
+    write_file("$root/a/b/deep.yaml",     "plain: hello\nkeep_two: a\n");
+
+    # What sops made of a file: the recipients it wrapped for and the
+    # encryption rule it recorded. Run with the working directory set to the
+    # file's own, which is where sops's config search (from the cwd) and this
+    # library's (from the file) look in the same place.
+    sub sops_chose {
+        my ($bin, $dir, $name) = @_;
+        my $out = `cd $dir && $bin -e $name 2>/dev/null`;
+        return { error => "sops exited " . ($? >> 8) } if $? != 0;
+        my $doc = Load($out);
+        return {
+            recipients => [ sort map { $_->{recipient} } @{ $doc->{sops}{age} } ],
+            suffix     => $doc->{sops}{encrypted_suffix},
+        };
+    }
+
+    my @cases = (
+        [ "$root/secrets", 'prod.yaml', '_one',   $pub1 ],
+        [ "$root/a/b",     'deep.yaml', '_two',   $pub2 ],
+        [ "$root/other",   'dev.yaml',  '_three', $pub3 ],
+    );
+
+    for my $case (@cases) {
+        my ($dir, $name, $tag, $key) = @$case;
+
+        my $theirs = sops_chose($sops_bin, $dir, $name);
+        is($theirs->{error}, undef, "sops encrypted $name")
+            or next;
+
+        my %ours = File::SOPS->creation_rules_for(file => "$dir/$name");
+
+        is_deeply([ sort @{ $ours{recipients} } ], $theirs->{recipients},
+            "$name: same recipients as sops chose");
+        is($ours{encrypted_suffix}, $theirs->{suffix},
+            "$name: same encryption rule as sops chose");
+
+        # Belt and braces: the tags this test wrote, so that "both agree"
+        # cannot pass by both being wrong in the same way.
+        is($theirs->{suffix}, $tag, "$name: and it is the rule this test meant");
+        ok(scalar(grep { $_ eq $key } @{ $ours{recipients} }),
+            "$name: with that rule's own recipient");
+    }
+
+    # The rules this library returns produce a document the real binary reads.
+    my $file = "$root/secrets/prod.yaml";
+    my %args = File::SOPS->creation_rules_for(file => $file);
+    File::SOPS->encrypt_in_place(file => $file, %args);
+
+    my $written = read_file($file);
+    # encrypted_suffix: _one, so keep_one is the one that gets encrypted and
+    # everything else stays readable -- the rule came out of the config file,
+    # not out of any argument this test passed.
+    like($written, qr/^keep_one: ENC\[/m,
+        'the key carrying the config rule suffix was encrypted');
+    like($written, qr/^plain: hello$/m,
+        'and the one without it was left alone');
+    like($written, qr/^\s+encrypted_suffix: _one$/m,
+        'the config rule is recorded in the document');
+
+    my $back = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops decrypts what was encrypted under the config rules')
+        or diag($back);
+    is_deeply(Load($back), { plain => 'hello', keep_one => 'a' },
+        'and gets the values back unchanged');
+
+    # THE DEVIATION, measured rather than assumed. sops searches for
+    # .sops.yaml upward from the CURRENT WORKING DIRECTORY; this library
+    # searches upward from the FILE. With a config between the two they
+    # disagree, and this pins that they do -- so that the note in
+    # File::SOPS/creation_rules_for stops being true out loud rather than
+    # quietly, should a later sops change its mind.
+    mkdir "$root/a/b/nested" or die "mkdir: $!";
+    write_file("$root/a/b/nested/.sops.yaml", <<"YAML");
+creation_rules:
+  - age: $pub3,$public
+    encrypted_suffix: _nested
+YAML
+    write_file("$root/a/b/nested/s.yaml", "plain: hello\n");
+
+    my $from_above = sops_chose($sops_bin, $root, 'a/b/nested/s.yaml');
+    is($from_above->{suffix}, '_three',
+        'sops run from above the nested config uses the OUTER one (cwd-based search)');
+
+    my %from_file = File::SOPS->creation_rules_for(
+        file => "$root/a/b/nested/s.yaml");
+    is($from_file{encrypted_suffix}, '_nested',
+        'creation_rules_for uses the nested one, whatever the working directory');
+
+    my $from_inside = sops_chose($sops_bin, "$root/a/b/nested", 's.yaml');
+    is($from_inside->{suffix}, '_nested',
+        'and sops agrees once its working directory is the file\'s own');
+};
+
 done_testing;
