@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T06:46:03Z
+id: 60
+priority: high
+status: done
+tags:
+- release
+- dist.ini
+title: dzil build ships refs/cryptx-pv-defect.md in the CPAN tarball
+updated: 2026-08-09T06:49:06Z
+---
+
+f882f8a committed refs/cryptx-pv-defect.md (an unsent upstream bug-report draft -- commit message: "nothing goes to bug-CryptX@rt.cpan.org without the maintainer's word") as a tracked file. dist.ini only gather_excludes ^\.claude/, ^docs/ and ^CLAUDE\.md$ -- there is no exclude for ^refs/. Verified: `dzil build` (File-SOPS-0.003.tar.gz) ships File-SOPS-0.003/refs/cryptx-pv-defect.md. The refs/ directory did not exist in the tree at 3de5ee0 (last known-good commit before tonight), so this is new tonight, not a pre-existing decision.
+
+Fix: add `gather_exclude_match = ^refs/` to dist.ini next to the other three, per the release-checker lane (file-sops-release-checker audits only, does not fix -- this is for whoever owns dist.ini, likely the orchestrating agent or file-sops-api).
+
+Note for whoever picks this up: confirm refs/ is not needed for anything else that ships (karr board itself lives in git refs, refs/karr/*, which is unrelated and NOT a working-tree file -- only refs/cryptx-pv-defect.md is a real tracked path today).
+Fixed by the orchestrating agent (dist.ini is build configuration, not a worker lane -- and it was its own mistake in f882f8a). Verified by building: tarball now has 0 refs/ entries, 50 files. Comment added distinguishing refs/ in the working tree from refs/karr/* the board.
