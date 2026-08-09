@@ -3,10 +3,12 @@
 Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
 > **Status of this file:** it is the original *design document*, kept as the roadmap.
-> What still does not exist: **ENV and INI format handlers** (karr #36, #37),
-> **`.sops.yaml` creation rules** (karr #38) and **every backend beyond age** — PGP,
-> AWS KMS, GCP KMS, Azure KV, Vault (karr #39; their metadata fields already round-trip,
-> only the wrapping is missing). Implemented since: `encrypt_in_place` and `edit`.
+> What still does not exist: **ENV and INI format handlers** (karr #36, #37) and
+> **every backend beyond age** — PGP, AWS KMS, GCP KMS, Azure KV, Vault (karr #39;
+> their metadata fields already round-trip, only the wrapping is missing).
+> Implemented since: `encrypt_in_place`, `edit`, and `.sops.yaml` creation rules
+> (`creation_rules_for`, karr #38 — with one deliberate divergence from sops that
+> is still open for confirmation, karr #55).
 > The description of what exists lives in skill `file-sops-core`; the POD in
 > `lib/File/SOPS.pm` is the contract.
 
@@ -159,9 +161,15 @@ File::SOPS->rotate(
 );
 ```
 
-## Config File (.sops.yaml) — not implemented (karr #38)
+## Config File (.sops.yaml)
 
-Recipients are always passed explicitly today; nothing reads a config file.
+Read by `creation_rules_for`, which returns arguments for the encrypt path rather
+than encrypting anything itself:
+
+```perl
+my %args = File::SOPS->creation_rules_for(file => $file);
+File::SOPS->encrypt_in_place(file => $file, %args);
+```
 
 ```yaml
 creation_rules:
@@ -172,6 +180,18 @@ creation_rules:
       age1...,
       age1...
 ```
+
+First matching rule wins; a rule without `path_regex` is the catch-all. `age`
+also takes a YAML list. `path_regex` matches the path **relative to the config
+file's directory**, not the absolute one. A rule carrying an encryption rule
+(`encrypted_suffix` and friends) has it returned too.
+
+Two things the POD spells out and this sketch cannot: the search runs upward from
+the **file's** directory where sops searches from the **working directory** — a
+deliberate divergence, still open for confirmation (karr #55) — and `$SOPS_CONFIG`
+is not read from the environment. Not supported: `key_groups`, `shamir_threshold`,
+and recipients for backends other than age (karr #39); all are refused rather than
+ignored.
 
 ## Dependencies
 

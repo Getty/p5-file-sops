@@ -190,11 +190,19 @@ claims.
 ## Deliberate gaps
 
 `CLAUDE.md` is the original design document and describes more than exists. Not
-implemented today: the ENV and INI format handlers (karr #36, #37), the `.sops.yaml`
-creation-rules config (karr #38), and every backend other than age — PGP, KMS,
-GCP KMS, Azure KV, Vault (karr #39; the metadata fields for them exist and
-round-trip, the encryption does not). Treat that file as a roadmap, not as a
-description of the code.
+implemented today: the ENV and INI format handlers (karr #36, #37), and every
+backend other than age — PGP, KMS, GCP KMS, Azure KV, Vault (karr #39; the
+metadata fields for them exist and round-trip, the encryption does not). Treat
+that file as a roadmap, not as a description of the code.
+
+`.sops.yaml` creation rules **do** exist now (`creation_rules_for`, karr #38). Two
+things about them are easy to get wrong: `path_regex` matches the path relative to
+the **config file's directory**, not the absolute path, and the search for the
+config runs upward from the **file's** directory where sops searches upward from
+the **working directory**. The second is a deliberate divergence and the only one
+in this distribution that can change *who can read a secret* — it is pinned in
+`t/04-interop.t`, which asserts both behaviours side by side, and is open for the
+maintainer to confirm or revert (karr #55).
 
 `encrypt_in_place` and `edit` do exist. **Every** method that writes a file now goes
 through `_replace_file` — temp file next to the target, then `rename` — so a failure
