@@ -39,9 +39,17 @@ Depends on whether the Agent/Task tool is available to you.
 
   | Task | Agent |
   |---|---|
-  | Implement / refactor / debug behavior-relevant code | `file-sops-worker` (default) |
+  | Value types, encoding, AES-GCM, MAC/AAD, backends | `file-sops-wire` |
+  | Public API, guards, error behaviour, rule policy | `file-sops-api` |
+  | Parsers, emitters, quoting, the order-preserving reparse | `file-sops-format` |
   | Write/extend tests, reproduce interop bugs | `file-sops-test-writer` |
   | Pre-release audit | `file-sops-release-checker` |
+
+  Pick the lane by what the change *moves*, not by which file it starts in: a two-line
+  edit in `Format/YAML.pm` that changes what gets hashed belongs to `file-sops-wire`.
+  When a ticket spans lanes, run them in sequence and let each report what it handed
+  on — parallel workers in the same file overwrite each other, since only isolated
+  worktrees give them separate copies.
 
 - **You cannot spawn subagents** (you ARE a `file-sops-*` agent): The delegation lock
   does not apply — implement, refactor, debug, and test per these rules.

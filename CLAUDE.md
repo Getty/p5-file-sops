@@ -12,11 +12,24 @@ Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 Delegate behavior-relevant code to the right agent instead of touching it yourself —
 principle and lane are in `.claude/rules/file-sops-rules.md`.
 
-| Task | Agent |
-|---|---|
-| Implement / refactor / debug behavior-relevant code | `file-sops-worker` (default) |
-| Write/extend tests, reproduce interop bugs | `file-sops-test-writer` |
-| Pre-release audit (Changes, cpanfile, dist.ini, interop proof) | `file-sops-release-checker` |
+| Task | Agent | Owns |
+|---|---|---|
+| Value types, encoding, AES-GCM, MAC/AAD, backends | `file-sops-wire` | `Encrypted.pm`, `Backend/`, the MAC paths in `SOPS.pm` |
+| Public API, guards, error behaviour, rule policy | `file-sops-api` | `SOPS.pm`, `Metadata.pm` |
+| Parsers, emitters, quoting, the order-preserving reparse | `file-sops-format` | `Format/*.pm` |
+| Write/extend tests, reproduce interop bugs | `file-sops-test-writer` | `t/` |
+| Pre-release audit (Changes, cpanfile, dist.ini, interop proof) | `file-sops-release-checker` | reports only |
+
+The first three replaced a single `file-sops-worker`. Splitting them let each briefing
+carry its own traps instead of one agent holding all of them: the wire lane needs the
+ADRs and the SV-flag rules, the API lane needs the compatibility and fail-loud rules,
+the format lane needs the parser/emitter specifics.
+
+**The lanes are not equally clean.** `file-sops-format`'s boundary cuts through a
+load-bearing coupling — ADR 0001 records that the emitter and the MAC are one mechanism
+— so its briefing requires it to hand a change to `file-sops-wire` whenever parsing or
+emitting could move the digest. Same rule in the other direction for `file-sops-api`:
+an argument is its own, but what that argument makes the document look like is not.
 
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
