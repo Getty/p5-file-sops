@@ -109,7 +109,7 @@ has type => (is => 'ro', default => 'str');
 Original value type for deserialization. One of C<str>, C<int>, C<float>,
 C<bool>, C<bytes>, C<time> or C<comment> -- the seven the reference
 implementation writes. Anything else makes L</decrypt_value> die with
-C<Unknown datatype>, as Go does; until 0.004 it silently returned the raw
+C<Unknown datatype>, as Go does; until 0.003 it silently returned the raw
 plaintext, so a document this module could not actually interpret looked like
 it had been read.
 
@@ -308,7 +308,7 @@ Dies if the value's plaintext is B<empty> (which includes C<undef>). GCM
 ciphertext is the length of its plaintext, so the result would be an
 C<ENC[AES256_GCM,data:,...]> that neither L</parse> nor sops accepts -- sops
 stops with C<Input string ENC[...] does not match sops' data format>. Until
-0.004 such a string was built and returned. Empty values belong in the document
+0.003 such a string was built and returned. Empty values belong in the document
 unencrypted, which is what sops does with them and what L<File::SOPS/encrypt>
 does before calling this.
 
@@ -388,7 +388,7 @@ Also dies, rather than guessing, on a plaintext that does not match its label:
 =over 4
 
 =item * a C<type:int> plaintext that is not a decimal integer, or is one Go's
-C<strconv.Atoi> would refuse -- that is, outside C<int64>. Until 0.004 that
+C<strconv.Atoi> would refuse -- that is, outside C<int64>. Until 0.003 that
 went through Perl's C<int()>, which is exact up to C<2**64-1> on a 64-bit Perl
 and silently rounds above it, so the same document produced one answer here and
 C<value out of range> in sops.

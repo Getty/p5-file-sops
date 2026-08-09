@@ -110,7 +110,7 @@ The C<data> parameter must be a HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
 
 Dies if C<data> has a top-level C<sops> key: that is where the metadata section
-is written, so the value would be overwritten. Until 0.004 it was, silently,
+is written, so the value would be overwritten. Until 0.003 it was, silently,
 and the resulting document failed its own MAC because the digest had already
 covered the discarded value.
 

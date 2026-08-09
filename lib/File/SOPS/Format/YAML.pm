@@ -54,8 +54,51 @@ C<false> rather than degrading to C<1> / C<0> on the next write.
 
 The mode is set with C<local> around this module's own C<Load> and C<Dump>
 calls. C<$YAML::XS::Boolean> is a process global that changes what L<YAML::XS>
-does for every other user of it in the same interpreter, so before 0.004 merely
+does for every other user of it in the same interpreter, so before 0.003 merely
 loading File::SOPS changed how unrelated code parsed YAML.
+
+=head2 Multi-document YAML
+
+B<A YAML stream with more than one document is refused.> L</parse> dies rather
+than returning part of it.
+
+This is a restriction, not a preference: it replaces silent data loss. Until
+0.003 the stream was loaded in scalar context, which yields only the B<last>
+document, so C<a: 1\n---\nb: 2> parsed to C<{b =E<gt> 2}> and
+L<File::SOPS/encrypt_file> wrote that back as the entire file. Every document
+but the last disappeared with no error.
+
+sops itself does support multi-document YAML, so this is a gap to close rather
+than a rule to keep. Its model, measured against sops 3.13.3, is not "several
+independent files in one":
+
+=over 4
+
+=item * One metadata section for the whole stream, written into B<every>
+document -- the same age blob, C<lastmodified> and C<mac> byte for byte. On
+read it is taken from the B<first> document; a stream carrying it only in a
+later document is rejected with C<sops metadata not found>.
+
+=item * B<One MAC spanning all documents, in order.> Removing a document or
+swapping two of them fails verification.
+
+=item * The AAD carries B<no> document index. A given key path has the same
+AAD in every document, so a value encrypted in one document decrypts in
+another document's slot at that path.
+
+=item * Documents are joined by C<--->; a B<leading> separator is dropped,
+while a trailing one is preserved as a real (empty) document. An empty document
+anywhere is a document: it gets its own metadata block and reads back as C<{}>.
+
+=item * Every document must be a mapping. sops rejects a top-level sequence or
+scalar itself (C<YAML documents that are sequences are not supported>), which
+is the same rule as the HashRef check in L</parse>.
+
+=back
+
+Supporting that means one tree of N branches with a shared metadata and a
+digest spanning all of them, which reaches into encryption, MAC computation and
+the shape of the public API -- not this parser alone.
 
 =cut
 
@@ -64,7 +107,26 @@ sub parse {
     croak "content required" unless defined $content;
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
-    my $data = Load($content);
+
+    # LIST context is load-bearing. YAML::XS::Load in SCALAR context returns
+    # only the LAST document of a multi-document stream, so `a: 1\n---\nb: 2`
+    # used to parse to just {b=>2} -- and encrypt_file then wrote that back as
+    # the whole file. Silent data loss on a write path, with no error.
+    #
+    # sops does support multi-document YAML, but not as "several files in one":
+    # it is ONE tree with N branches, carrying ONE metadata section (written
+    # into every document) and ONE MAC spanning all documents in order.
+    # Reproducing that is a data-model change well beyond this parser, so until
+    # it exists the input is refused rather than quietly truncated.
+    my @docs = Load($content);
+    croak sprintf(
+        "YAML input has %d documents; File::SOPS handles one document per "
+        . "file. Multi-document YAML is not supported yet -- it used to be "
+        . "accepted and silently reduced to the last document.",
+        scalar @docs
+    ) if @docs > 1;
+
+    my $data = $docs[0];
     croak "YAML did not parse to a hash" unless ref $data eq 'HASH';
 
     my $metadata;
@@ -91,7 +153,8 @@ Returns a two-element list:
 
 =back
 
-Dies if the YAML is invalid or doesn't parse to a HashRef.
+Dies if the YAML is invalid, doesn't parse to a HashRef, or contains more
+than one document. See L</Multi-document YAML>.
 
 =cut
 
@@ -172,7 +235,7 @@ The C<data> parameter must be a HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
 
 Dies if C<data> has a top-level C<sops> key: that is where the metadata section
-is written, so the value would be overwritten. Until 0.004 it was, silently,
+is written, so the value would be overwritten. Until 0.003 it was, silently,
 and the resulting document failed its own MAC because the digest had already
 covered the discarded value.
 

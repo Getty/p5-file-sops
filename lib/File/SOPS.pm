@@ -238,6 +238,17 @@ value out of range>, and C<type:float> -- what sops's own JSON store falls back
 to -- silently drops digits. Pass such a value as a B<string>; that is
 C<type:str>, written verbatim, and it survives both implementations intact.
 See L<File::SOPS::Encrypted/assert_representable>.
+=head2 Multi-document YAML
+
+B<Not supported, and refused rather than truncated.> A YAML file holding more
+than one document (separated by C<--->) makes L</encrypt_file>, L</decrypt>,
+L</extract> and L</rotate> die.
+
+Until 0.003 such a file was accepted and silently reduced to its B<last>
+document, so encrypting a two-document file wrote one document back and
+discarded the other without an error. sops does support multi-document YAML;
+what its model is, and why matching it is more than a parser change, is in
+L<File::SOPS::Format::YAML/Multi-document YAML>.
 
 =cut
 
@@ -313,7 +324,7 @@ with C<age1...>).
 
 B<Dies if C<data> has a top-level C<sops> key.> That name is reserved for the
 metadata section; there is nowhere else to put the metadata, so a document
-using it cannot be encrypted. Until 0.004 the user's value was silently
+using it cannot be encrypted. Until 0.003 the user's value was silently
 replaced by the metadata -- and since the digest had already covered it, the
 resulting document failed its own MAC on the next read. sops refuses such a
 file too, with exit code 203, and its advice applies here: rename the entry.
@@ -469,7 +480,7 @@ in-place (overwrites the input file).
 The input is read as UTF-8; see L</Character encoding>.
 
 B<Dies if the input already has a top-level C<sops> entry> -- which is what an
-already-encrypted file looks like. Until 0.004 there was no such check, and the
+already-encrypted file looks like. Until 0.003 there was no such check, and the
 result destroyed data: parsing split the C<sops> section off before L</encrypt>
 ever saw it, so the C<ENC[...]> strings were encrypted a second time under a
 B<new> data key while the old section -- holding the key they were encrypted
@@ -614,7 +625,7 @@ Path can be specified in two formats:
 =back
 
 For array indices, use a bare number: C<["items"][0]> or C<items.0>. Before
-0.004 the bracket parser only recognised double-quoted components, so
+0.003 the bracket parser only recognised double-quoted components, so
 C<["items"][0]> matched C<items> alone and returned the whole ArrayRef.
 
 The whole file is decrypted and MAC-verified either way. C<extract> saves you
@@ -630,7 +641,7 @@ ArrayRef for a branch -- C<extract(path =E<gt> '["database"]')> returns the
 whole subtree, as C<sops --extract> does.
 
 B<Dies if the path does not exist>, at any depth, naming the component that was
-not found. Before 0.004 a missing B<top-level> key returned C<undef> while a
+not found. Before 0.003 a missing B<top-level> key returned C<undef> while a
 missing nested one died, so the same mistake was silent or loud depending on
 where it was made -- and C<undef> was indistinguishable from a key whose value
 really is null. sops reports C<component ['nope'] not found> at every level.
@@ -1160,8 +1171,17 @@ sub _parse_in_document_order {
     my $text = $content;
     utf8::decode($text) unless utf8::is_utf8($text);
 
-    my $doc = eval { $ORDERED_LOADER->load_string($text) };
-    return unless ref $doc eq 'HASH';
+    # LIST context, and exactly one document -- the same one-document rule the
+    # format handlers enforce, held here independently rather than assumed.
+    # The two parsers disagree in scalar context on a multi-document stream:
+    # YAML::PP->load_string returns the FIRST document, YAML::XS::Load the
+    # LAST. This walk takes its order from one and its values from the other,
+    # so on such a stream it would pair up two different documents. Refusing
+    # it means falling back to sorted order, which can only make verification
+    # fail, never wrongly succeed.
+    my @docs = eval { $ORDERED_LOADER->load_string($text) };
+    return unless @docs == 1 && ref $docs[0] eq 'HASH';
+    my $doc = $docs[0];
 
     # The metadata MAC lives here and must not hash itself. It is dropped the
     # same way the format handlers drop it -- by removing the whole sops

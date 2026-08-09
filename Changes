@@ -262,6 +262,23 @@ Revision history for File-SOPS
     The digests themselves are deliberately not printed, unlike sops:
     a SHA-512 over the concatenated plaintexts is an oracle for a
     document with one short secret in it.
+  - Fix multi-document YAML being silently reduced to its last document.
+    The stream was loaded in scalar context, which returns only that one,
+    so encrypting a two-document file wrote a single document back and
+    discarded the rest without an error - data loss on a write path, and
+    unrecoverable when encrypting in place. Such input is now refused.
+    sops does support multi-document YAML, but as one tree of several
+    branches: one metadata section copied into every document and one MAC
+    spanning all of them in order. Matching that is a data-model change
+    and is not in this release, so the file is rejected rather than
+    truncated, and reading a multi-document sops file now says so instead
+    of reporting a MAC mismatch. The measured behaviour of the reference
+    implementation is recorded under "Multi-document YAML" in
+    File::SOPS::Format::YAML. The MAC's order-preserving reparse now holds
+    the same one-document rule on its own: YAML::PP and YAML::XS pick
+    opposite ends of a multi-document stream in scalar context, so a
+    reparse that accepted one would have taken its key order from a
+    different document than its values.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without
