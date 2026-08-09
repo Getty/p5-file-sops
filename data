@@ -1,0 +1,54 @@
+---
+claimed_at: 2026-08-09T06:11:34Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T05:01:53Z
+id: 49
+priority: low
+started: 2026-08-09
+status: done
+tags:
+- refactor
+- drift
+title: File::SOPS.pm still loads JSON::MaybeXS and YAML::XS with no code left that
+  uses them
+updated: 2026-08-09T06:13:03Z
+---
+
+After karr #35 moved the plaintext emitter into the format handlers, lib/File/SOPS.pm has no code left that touches either module:
+
+    use JSON::MaybeXS;   # line 14
+    use YAML::XS ();     # line 15
+
+The only remaining mentions are POD examples (JSON->true) and comments. Both modules are still loaded transitively -- Format::JSON and Encrypted.pm use JSON::MaybeXS, Format::YAML uses YAML::XS -- so removing the two lines is a no-op at runtime, but leaving them says File::SOPS.pm emits YAML and JSON itself, which is exactly the impression #35 removed.
+
+Left alone deliberately in #35 rather than folded into a change that had to be provably byte-neutral. cpanfile keeps both as direct prerequisites either way (they are, via the handlers).
+Half stale as of karr #38: File::SOPS.pm now DOES use YAML::XS - _load_creation_rules calls YAML::XS::Load to read a .sops.yaml (a config file, not a SOPS document, so it does not go through the format handlers). JSON::MaybeXS is still loaded with nothing using it. Re-check both before acting.
+Premise checked and it does not hold. Nothing removed; both use lines stay, each now carrying a comment saying why.
+
+`use YAML::XS ()` (line 15): live since karr #38 -- _load_creation_rules calls YAML::XS::Load on a .sops.yaml, which is a config file and so does not go through Format::YAML. Already noted on this ticket; confirmed.
+
+`use JSON::MaybeXS` (line 14): no code in File/SOPS.pm calls encode_json, decode_json or JSON(), and nothing is re-exported -- `use namespace::clean` strips all three (`perl -Ilib -MFile::SOPS -e "print defined &File::SOPS::JSON ? 1 : 0"` prints 0). Nor is it what guarantees JSON::PP::Boolean for decrypt: that comes from File::SOPS::Encrypted, whose own `use JSON::MaybeXS` sits in the same file as the JSON->true call that needs it, and which works with File/SOPS.pm never loaded at all.
+
+What the line actually does is decide the JSON backend. JSON::MaybeXS binds once, to whichever of Cpanel::JSON::XS / JSON::XS is already in %INC; File::SOPS::Encrypted loads CryptX, which loads JSON.pm and with it JSON::XS. So the line being ABOVE `use File::SOPS::Encrypted` is what lets JSON::MaybeXS state its own preference:
+
+    perl -Ilib -MFile::SOPS -e "print JSON::MaybeXS::JSON()"   # Cpanel::JSON::XS
+    ... with line 14 deleted                                   # JSON::XS
+
+and the two do not emit the same bytes. Measured end to end through encrypt(format => json, unencrypted_suffix => _unencrypted):
+
+    with line 14      "ratio_unencrypted" : 1.0
+    without line 14   "ratio_unencrypted" : 1
+
+Same for -0.0 vs -0, and the same difference reaches Format::JSON->emit, i.e. what decrypt_file and edit write. Deleting the line is a wire change, not a cleanup -- API lane hands it on rather than doing it.
+
+sops 3.13.3 accepts both (sops -d exits 0, MAC verifies, because Encrypted::value_to_bytes already hashes NV 1.0 as "1"), but writes `1` and `-0` itself -- JSON::XS rendering, not the one we land on. That plus the fact that the ordering is not even a guarantee (a caller who loads JSON::XS before File::SOPS gets JSON::XS) is now karr #56, for the wire lane.
+
+Left behind: t/11-api-edges.t section (f), two checks in a fresh perl that loads only File::SOPS -- one asserts File::SOPS picks the same backend JSON::MaybeXS would on its own (goes red exactly on this deletion, verified against a tree with line 14 removed), one asserts decrypt still returns overloaded JSON::PP::Boolean there (stays green with the line removed, which is the point: the boolean guarantee is Encrypted.pms, not this lines).
+
+Also found: karr #57, the POD boolean examples use JSON->true and never say the caller needs JSON::MaybeXS; they only work today because CryptX drags JSON.pm in.
+
+No Changes entry: nothing caller-visible changed. Suite: SOPS_BIN=$HOME/bin/sops prove -lr t/ -- 536 tests, all pass, t/04-interop.t RAN against sops 3.13.3 (not skipped).
+Premise does not hold: neither use line is dead. YAML::XS is used by _load_creation_rules (karr #38); JSON::MaybeXS is what pins the JSON backend, and deleting it changes emitted JSON bytes (1.0 -> 1, -0.0 -> -0) for unencrypted floats and for everything decrypt_file/edit write -- a wire change, handed to the wire lane as karr #56. Both lines kept, each commented with why. Guard test added in t/11-api-edges.t (f), verified red against a tree with the line removed. Full suite green including t/04-interop.t against sops 3.13.3. Not committed.
+Closed without removing anything: the premise was wrong in both halves. YAML::XS live since b8c8c50; JSON::MaybeXS decides the process-wide JSON backend by load order, and removing it changes emitted bytes. Comments added at both lines, backend pinned by a test in t/11. Real finding split out as #56.
