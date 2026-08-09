@@ -1,0 +1,48 @@
+---
+class: standard
+completed: 2026-08-09
+created: 2026-08-09T00:14:22Z
+id: 33
+priority: high
+status: done
+tags:
+- bug
+- data-integrity
+title: decrypt intermittently returns a wrong number for a large float
+updated: 2026-08-09T00:16:26Z
+---
+
+File::SOPS->decrypt returns 1e21 for a value sops/we stored as 1e20, for roughly 1-4% of documents, non-deterministically. Decrypting the SAME document string a second time in the same process returns the correct 1e20, so the file is intact and only the returned value is wrong. No error is raised and MAC verification passes, so a caller cannot tell.
+
+Reproduction (800 iterations, fails ~10-30 times):
+
+  use YAML::XS (); use File::SOPS; use Crypt::Age;
+  my ($pub,$sec) = Crypt::Age->generate_keypair();
+  for (1..800) {
+    my $n = YAML::XS::Load("c: 1e20\n");
+    my $y = File::SOPS->encrypt(data => $n, recipients => [$pub], format => "yaml");
+    my $out = File::SOPS->decrypt(encrypted => $y, identities => [$sec]);
+    warn "corrupted: $out->{c}" unless $out->{c} == 1e20;
+  }
+
+Measured on 8c336d7 and on a branch based on 5f7b502: same rate in both, so it predates the encryption-rule work (karr #17/#13/#16) and the value-encoding work (karr #27). It is what makes t/07-mac.t subtest "lossy values survive a File::SOPS round trip" assertion "bare 1e20 survives" fail every ~20-40 runs of the file - a flake that has been read as noise.
+
+What was ruled out by measurement:
+  * the document: re-decrypting the identical string returns 1e20
+  * the ciphertext: 21 bytes, and a standalone decrypt_bytes on the same
+    ENC value returns exactly "100000000000000000000" with clean SV flags
+    (POK only, no IOK/NOK) which converts to 1e20
+  * the encrypt side: value_to_bytes produces the correct 21-byte
+    canonical form every time
+  * MAC verification: happens with ignore_mac => 1 as well
+
+So the wrong value appears somewhere between gcm_decrypt_verify returning
+the plaintext and Encrypted::_deserialize_value returning $data + 0.0.
+Prime suspect is a numeric flag on the XS-returned scalar making + 0.0 read
+a stale NV rather than the PV; if so the fix is to force the string, and the
+same question applies to the int branch. Worth checking whether the CryptX
+version matters before concluding it is ours.
+
+Severity: this is a silent wrong value handed to a caller by a library whose
+job is to return exactly what was stored.
+Duplicate of #32 - the findings have been folded in there. Closing this one; work #32.
