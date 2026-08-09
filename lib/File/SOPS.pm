@@ -211,6 +211,38 @@ where Perl's flags can be contaminated by the caller are in
 L<File::SOPS::Encrypted/detect_type> and
 L<File::SOPS::Encrypted/value_to_bytes>.
 
+=head3 Saying what a value is
+
+There is no per-leaf type argument to L</encrypt>, and none is needed: the
+scalar is the type, so you say what a value is by handing over the scalar that
+says it.
+
+    $data->{port}  = "$data->{port}";   # type:str
+    $data->{port}  = 0 + $data->{port}; # type:int
+    $data->{ratio} = 0.0 + $data->{ratio};  # type:float
+    $data->{flag}  = JSON->true;        # type:bool
+
+The case that makes this worth spelling out is the one
+L<File::SOPS::Encrypted/detect_type> warns about. Perl marks a string as
+numeric B<in place> the first time it is read in numeric context, so
+
+    if ($cfg->{port} > 1024) { ... }    # $cfg->{port} is now an int
+
+turns a later C<< encrypt(data => $cfg) >> into C<type:int>. Reading a scalar
+numerically sets the numeric flag but B<leaves the string alone>, so
+C<< $cfg->{port} = "$cfg->{port}" >> puts it back exactly -- type C<str> and
+the original text, padding and trailing zeros included.
+
+What that idiom cannot undo is a numeric B<assignment>:
+
+    $cfg->{ratio} += 0;                 # '1.50' is now the number 1.5
+    $cfg->{ratio} = "$cfg->{ratio}";    # type:str, but the text is '1.5'
+
+Here the scalar's string really was replaced, by your code, before this module
+saw it. No argument to C<encrypt> could recover C<1.50> either -- a type
+override would write the same C<1.5> under a different label -- so the value
+has to be re-read from wherever it came from.
+
 =cut
 
 my %FORMATS = (

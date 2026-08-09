@@ -120,6 +120,16 @@ Revision history for File-SOPS
     came back as mojibake. decrypt, decrypt_file and extract now return
     characters. The bytes written to the file are unchanged. See the new
     "Character encoding" section in File::SOPS for the boundary rule.
+  - Document how a caller says what a value is, in the new "Saying what
+    a value is" section of File::SOPS. A scalar read in numeric context
+    is retyped in place, so `if ($cfg->{port} > 1024)` before
+    encrypting writes type:int; reading a scalar numerically leaves its
+    string intact, so $cfg->{port} = "$cfg->{port}" restores both the
+    type and the original text, and 0 + $x / 0.0 + $x ask for the other
+    direction. No per-leaf type argument was added to encrypt: the
+    scalar is the channel, and the one case the idiom cannot fix (a
+    numeric ASSIGNMENT, which replaces the string before this module
+    sees it) is one no argument could fix either.
   - Fix the encryption rules being applied one level at a time instead
     of to a value's whole key path. sops encrypts a leaf as soon as
     SOME component of its path matches, and the tree walk asked about
