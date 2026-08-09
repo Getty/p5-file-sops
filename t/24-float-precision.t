@@ -7,6 +7,8 @@ use File::Slurp qw(read_file write_file);
 use JSON::MaybeXS qw(decode_json);
 use YAML::XS qw(Load);
 use POSIX qw(signbit);
+use Math::BigFloat;
+use Math::BigInt;
 
 use File::SOPS;
 use Crypt::Age;
@@ -332,6 +334,307 @@ PERL
     # by default as "0.3".
     cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
         'and the untouched field is still the value it started as, not silently rounded');
+};
+
+###############################################################################
+# 5. karr #64 point 1 (the most important gap): THE FOREIGN-BIGNUM GUARD.
+#
+#    Format::JSON::emit needs allow_bignum so its OWN Math::BigFloat carrier
+#    (see _float_carrier) reaches the wire as a bare JSON number instead of a
+#    quoted string. But allow_bignum whitelists the class for EVERY value
+#    Cpanel::JSON::XS is asked to encode, not just the carrier this module
+#    creates -- so a Math::BigFloat or Math::BigInt the CALLER put in the tree,
+#    which the encoder used to refuse outright, would now be written as a bare
+#    number too. detect_type calls a blessed leaf 'str', so the MAC digest
+#    covers the object's stringification while the document would carry it as
+#    a JSON number Go reparses as a float64 -- a document that fails its own
+#    MAC, produced silently. Measured in karr #58:
+#    Math::BigFloat->new('1.00000000000000000000000000001') digests as 29
+#    digits and reads back as 1.
+#
+#    _reject_foreign_bignum is the fix: it croaks on any Math::BigFloat or
+#    Math::BigInt reaching the emitter that is NOT its own carrier. Entirely
+#    new behaviour as of karr #58 -- until now, not one line of test.
+#
+#    No sops binary needed for these -- the assertion is that File::SOPS
+#    refuses to produce a document at all, which is a Perl-level guarantee.
+#    Kept in this file anyway (skip_all and all) because the ticket asks for
+#    it here, next to the rest of the float-precision coverage it protects.
+###############################################################################
+
+subtest 'a caller-supplied Math::BigFloat as an unencrypted JSON leaf is refused' => sub {
+    my $poison = Math::BigFloat->new('1.00000000000000000000000000001');
+
+    my $encrypted = eval {
+        File::SOPS->encrypt(
+            data       => { ratio_unencrypted => $poison, secret => 'shh' },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+
+    ok(!defined $encrypted, 'encrypt() does not return a document');
+    like($@, qr/cannot write a Math::BigFloat to a SOPS document/,
+        'and dies with the foreign-bignum guard message, not a generic JSON encoder error');
+};
+
+subtest 'a caller-supplied Math::BigInt as an unencrypted JSON leaf is refused' => sub {
+    # allow_bignum whitelists BOTH Math::BigFloat and Math::BigInt (Cpanel::
+    # JSON::XS decodes an over-int64 JSON number to the latter), so the guard
+    # has to name both classes. Same corruption shape: an integer literal that
+    # is not exactly representable in a JSON number digests as its exact
+    # decimal string but would be written -- and re-derived by Go -- as a
+    # float64.
+    my $poison = Math::BigInt->new('123456789012345678901234567890');
+
+    my $encrypted = eval {
+        File::SOPS->encrypt(
+            data       => { count_unencrypted => $poison, secret => 'shh' },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+
+    ok(!defined $encrypted, 'encrypt() does not return a document');
+    like($@, qr/cannot write a Math::BigInt to a SOPS document/,
+        'and dies with the foreign-bignum guard message');
+};
+
+subtest 'the guard reaches a foreign bignum nested inside a hash and inside an array' => sub {
+    # canonical_float_tree's walk is recursive (see section 7 below for the
+    # legitimate-float side of that), and the reject callback is invoked from
+    # the same recursion, at the same leaf branch. A guard that only fired at
+    # the top level would let a nested poison leaf straight through.
+    my $nested = eval {
+        File::SOPS->encrypt(
+            data       => {
+                outer_unencrypted => {
+                    inner_unencrypted => Math::BigFloat->new('1.00000000000000000000000000001'),
+                },
+                secret => 'shh',
+            },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+    ok(!defined $nested, 'a bignum nested inside a hash is refused');
+    like($@, qr/cannot write a Math::BigFloat to a SOPS document/, 'with the guard message');
+
+    my $in_array = eval {
+        File::SOPS->encrypt(
+            data       => {
+                list_unencrypted => [ 1, 2, Math::BigInt->new('123456789012345678901234567890') ],
+                secret            => 'shh',
+            },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+    ok(!defined $in_array, 'a bignum inside an array is refused');
+    like($@, qr/cannot write a Math::BigInt to a SOPS document/, 'with the guard message');
+};
+
+###############################################################################
+# 6. karr #64 point 2: a CLASS-GLOBAL Math::BigFloat->accuracy/precision must
+#    not corrupt the carrier. _float_carrier calls
+#    Math::BigFloat->new($text, undef, undef) -- the explicit undef, undef
+#    overriding whatever global setting is in effect -- and asserts the result
+#    stringifies back to $text exactly. Without that assertion a global
+#    accuracy(5) left set by unrelated code anywhere in the same process would
+#    silently truncate a 16/17-digit float to 5 significant digits.
+#
+#    Restoration is via `local` on the two package variables Math::BigFloat's
+#    accuracy()/precision() accessors read and write
+#    ($Math::BigFloat::accuracy / ::precision) -- scoped to the subtest's
+#    anonymous sub, so it unwinds when that sub returns for ANY reason,
+#    including a die from a failed assertion partway through. Checked
+#    explicitly below as well, once execution is back outside the subtest, as
+#    the belt to local's suspenders the ticket asked for.
+###############################################################################
+
+my $accuracy_before_all  = Math::BigFloat->accuracy();
+my $precision_before_all = Math::BigFloat->precision();
+
+subtest '[json] a global Math::BigFloat->accuracy/precision does not corrupt the float carrier' => sub {
+    local $Math::BigFloat::accuracy  = 5;
+    local $Math::BigFloat::precision = -2;
+
+    my $value = 1 / 3;   # needs 16 digits
+
+    my $encrypted = File::SOPS->encrypt(
+        data       => { ratio_unencrypted => $value, secret => 'shh' },
+        recipients => [$public],
+        format     => 'json',
+    );
+
+    my $self = eval {
+        File::SOPS->decrypt(encrypted => $encrypted, identities => [$secret], format => 'json');
+    };
+    is($@, '', 'self-MAC holds even with a global BigFloat accuracy/precision set')
+        or diag("died: $@");
+    cmp_ok($self->{ratio_unencrypted}, '==', $value,
+        'and decrypts back to the value at full precision')
+        if $self;
+
+    my $file = scratch_file('json');
+    write_file($file, $encrypted);
+    my $out = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops -d accepts the document despite the global accuracy/precision')
+        or diag("sops output: $out");
+};
+
+is(Math::BigFloat->accuracy(), $accuracy_before_all,
+    'global Math::BigFloat->accuracy is back to what it was before the subtest');
+is(Math::BigFloat->precision(), $precision_before_all,
+    'global Math::BigFloat->precision is back to what it was before the subtest');
+
+###############################################################################
+# 7. karr #64 point 3: NESTED and ARRAY float leaves. canonical_float_tree's
+#    walk is recursive, but until now only a top-level key was ever exercised.
+#    A mix of values that need the carrier and values that already round-trip,
+#    at two levels of hash nesting and inside an array, in both formats.
+###############################################################################
+
+for my $format (qw(yaml json)) {
+    subtest "[$format] nested and array float leaves also reach full precision" => sub {
+        my $needs_digits_1 = 0.1 + 0.2;   # needs 17
+        my $needs_digits_2 = 1 / 3;        # needs 16
+
+        my $data = {
+            outer_unencrypted => {
+                inner_unencrypted => $needs_digits_1,
+            },
+            list_unencrypted => [ $needs_digits_2, $needs_digits_1, 3.14 ],
+            secret           => 'shh',
+        };
+
+        my $encrypted = File::SOPS->encrypt(
+            data       => $data,
+            recipients => [$public],
+            format     => $format,
+        );
+
+        my $self = eval {
+            File::SOPS->decrypt(encrypted => $encrypted, identities => [$secret], format => $format);
+        };
+        is($@, '', 'self-MAC holds') or diag("died: $@");
+        if ($self) {
+            cmp_ok($self->{outer_unencrypted}{inner_unencrypted}, '==', $needs_digits_1,
+                'nested (two levels deep) value keeps full precision');
+            cmp_ok($self->{list_unencrypted}[0], '==', $needs_digits_2,
+                'array element 0 keeps full precision');
+            cmp_ok($self->{list_unencrypted}[1], '==', $needs_digits_1,
+                'array element 1 keeps full precision');
+            cmp_ok($self->{list_unencrypted}[2], '==', 3.14,
+                'array element 2 (already healthy at 15 digits) is untouched');
+        }
+
+        my $file = scratch_file($format);
+        write_file($file, $encrypted);
+        my $out       = `$sops_bin -d $file 2>&1`;
+        my $exit_code = $? >> 8;
+        is($exit_code, 0, 'sops -d accepts the document') or diag("sops output: $out");
+
+        if ($exit_code == 0) {
+            my $decoded = $format eq 'json' ? decode_json($out) : Load($out);
+            cmp_ok($decoded->{outer_unencrypted}{inner_unencrypted}, '==', $needs_digits_1,
+                'and sops itself reads the nested value back at full precision');
+            cmp_ok($decoded->{list_unencrypted}[0], '==', $needs_digits_2,
+                'and the array value at full precision too');
+        }
+    };
+}
+
+###############################################################################
+# 8. karr #64 point 4: CROSS-FORMAT conversion, and decrypt_file's plaintext
+#    against what `sops -d` itself writes. Both were "fixed as a side effect"
+#    per the karr #58 report, and both were, until now, unverified.
+#
+#    The fixture is a document the REAL sops wrote (not one this module
+#    produced), carrying an unencrypted float that needs full precision --
+#    exactly the shape where the pre-fix bug bit hardest: Cpanel::JSON::XS
+#    hands back a bare NV with no memory of the text it was parsed from
+#    (karr #58 section 1a), so JSON is the format where this had to be
+#    fixed for the value to survive at all.
+###############################################################################
+
+subtest '[json -> yaml] a float that arrived as a bare NV from JSON survives re-emission as YAML' => sub {
+    my $plain = scratch_file('json');
+    write_file($plain,
+        qq({\n  "ratio_unencrypted": $full_precision_text,\n  "secret": "shh"\n}\n));
+
+    my $enc_file = scratch_file('json');
+    system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+    is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+    # Decrypting via JSON hands back a bare NV for the float -- Cpanel::
+    # JSON::XS keeps no parsed text, unlike YAML::XS (karr #58 section 1a).
+    my $content = read_file($enc_file);
+    my $data = File::SOPS->decrypt(
+        encrypted => $content, identities => [$secret], format => 'json',
+    );
+    cmp_ok($data->{ratio_unencrypted}, '==', $full_precision_value,
+        'decrypted value is correct before any re-emission');
+
+    # The cross-format step: the SAME in-memory tree, with its bare NV, is
+    # now encrypted as YAML -- a different emitter than the one that produced
+    # the bare NV in the first place.
+    my $yaml_encrypted = File::SOPS->encrypt(
+        data       => $data,
+        recipients => [$public],
+        format     => 'yaml',
+    );
+
+    my $yaml_file = scratch_file('yaml');
+    write_file($yaml_file, $yaml_encrypted);
+    my $out       = `$sops_bin -d $yaml_file 2>&1`;
+    my $exit_code = $? >> 8;
+    is($exit_code, 0, 'sops -d accepts the cross-format YAML document')
+        or diag("sops output (measured before the fix: MAC mismatch, exit 51): $out");
+
+    if ($exit_code == 0) {
+        my $decoded = Load($out);
+        cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+            'and sops reads the cross-format value back at full precision');
+    }
+};
+
+subtest 'decrypt_file on a sops-written JSON document matches what sops -d itself prints' => sub {
+    my $plain = scratch_file('json');
+    write_file($plain,
+        qq({\n  "ratio_unencrypted": $full_precision_text,\n  "secret": "shh"\n}\n));
+
+    my $enc_file = scratch_file('json');
+    system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+    is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+    my $sops_plain_out = `$sops_bin -d $enc_file 2>&1`;
+    is($? >> 8, 0, 'sops -d on the fixture itself exits 0') or return;
+
+    my $our_output = scratch_file('json');
+    File::SOPS->decrypt_file(
+        input      => $enc_file,
+        output     => $our_output,
+        identities => [$secret],
+        format     => 'json',
+    );
+    my $our_content = read_file($our_output);
+
+    # Not a byte-for-byte comparison of the two documents: sops's plaintext
+    # writer uses tabs and different key spacing (a pretty-printing choice,
+    # not a wire-format one), so the two texts differ even for values that
+    # were never broken. What must agree is the NUMBER -- both as a decoded
+    # value and, since the whole point of karr #58 was which literal digits
+    # get written, as the literal text on the wire.
+    my $sops_decoded = decode_json($sops_plain_out);
+    my $our_decoded  = decode_json($our_content);
+    cmp_ok($our_decoded->{ratio_unencrypted}, '==', $sops_decoded->{ratio_unencrypted},
+        'decrypt_file and sops -d decode to the same double');
+    cmp_ok($our_decoded->{ratio_unencrypted}, '==', $full_precision_value,
+        'and that double is the full-precision value, not the 15-digit truncation');
+    like($our_content, qr/\Q$full_precision_text\E/,
+        'decrypt_file writes the same literal digits sops -d does, not a truncated form')
+        or diag("our decrypt_file output:\n$our_content");
 };
 
 done_testing;
