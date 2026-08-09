@@ -45,6 +45,16 @@ Revision history for File-SOPS
     * A null value was written as an empty string, so a key whose value
       was null came back as '' and reached sops as '' too. Repairable
       by re-encrypting from the plaintext.
+    * READING was affected too, whoever wrote the file: decrypt could
+      hand back a type:float an order of magnitude out - a stored
+      100000000000000000000 returned as 1e21 - roughly one leaf in a
+      hundred, with no error, with the MAC verifying, and NOT
+      reproducibly, so the same file read twice could give two answers.
+      The stored documents are intact and this release reads them
+      correctly; what may be wrong is anything DERIVED from a value read
+      with 0.001 or 0.002 - a number copied into another system, written
+      to a second file, or used in a calculation whose result was kept.
+      Nothing in the encrypted file needs repairing; the destinations do.
   Re-encrypt affected documents from their ORIGINAL PLAINTEXT, not from
   the stored ciphertext. Where a value gated access or behaviour, verify
   it by hand: a wrong value may have been in effect since it was written.
@@ -132,6 +142,22 @@ Revision history for File-SOPS
     so '007' was hashed as 007 when written and 7 when read, and the
     expanded 100000000000000000000 that sops writes for 1e20 came back
     as 1e+20. It now hashes the authenticated plaintext.
+  - Fix decrypt being non-deterministic on identical input. A type:float
+    value came back an order of magnitude out on roughly one leaf in a
+    hundred, while the ciphertext, the MAC and the document were all
+    intact - which is why this looked like a test flake for two releases
+    rather than the wrong-value bug it was. The cause is upstream:
+    CryptX (measured on 0.087) returns the decrypted plaintext in a
+    scalar whose string buffer is not NUL-terminated, and Perl's
+    string-to-number conversion reads that buffer as a C string for
+    every float and for every integer wider than 64 bits. So + 0.0 ran
+    off the end of the plaintext into whatever byte the allocator had
+    left there, and when that byte was one of the ten digit characters
+    it joined the number: 100000000000000000000 read as 1e21. The
+    plaintext is now normalised where it crosses out of CryptX, in
+    decrypt_bytes, so the type conversion, the MAC digest and any caller
+    doing arithmetic on what that method returns are all covered.
+    t/18-decrypt-determinism.t pins it.
   - Fix MAC verification of documents with a key ending in "mac". The
     skip that kept the metadata MAC out of its own digest matched any
     key containing "mac:", so hmac and webmac values were dropped from
@@ -339,6 +365,35 @@ Revision history for File-SOPS
     it ignores what it does not recognise.
   - New File::SOPS::Metadata attribute extra and methods policy_args
     and rule_value.
+  - New method encrypt_in_place, documented in the design notes since
+    0.001 and never implemented. It is encrypt_file over a single file,
+    with the write made ATOMIC: the document goes to a temporary file
+    in the same directory and is renamed over the original, so a
+    failure part-way through leaves the plaintext intact rather than
+    truncated. encrypt_file writing over its input opens the file for
+    writing before it encrypts anything, which is fine for a copy and
+    not fine for the only copy. Permissions are preserved and a symlink
+    is followed; hard links to the file are not, since the inode
+    changes. An already-encrypted file is refused exactly as
+    encrypt_file refuses it.
+  - New method edit: decrypt, open $EDITOR, re-encrypt. The decrypted
+    document goes to a 0600 file in a 0700 temporary directory of its
+    own, as sops does, and is removed on every way out - returning,
+    dying, or being signalled (SIGTERM/SIGHUP are caught, the directory
+    removed, and the signal re-raised; Ctrl-C reaches the editor
+    instead, because perl's system() ignores SIGINT while a child
+    runs). Returns 0 without touching the file when the editor changed
+    nothing, and dies with the file untouched when the editor fails,
+    the result does not parse, or it carries a top-level sops entry of
+    its own. Two deliberate differences from sops edit: there is no
+    fallback to vim/nano/vi when EDITOR is unset (a library that opens
+    an interactive editor unasked hangs an unattended script), and the
+    document is re-encrypted under a NEW data key rather than the
+    existing one - so edit refuses the same files rotate refuses, and
+    for the same reason.
+  - The message for an already-encrypted input now points at edit as
+    well as rotate, as sops's own exit-203 message points at its editor
+    mode.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without
@@ -350,7 +405,10 @@ Revision history for File-SOPS
     range, the API edges above and the diagnostics, and the interop
     suite gained the Go half of each: the exit-203 refusal, sops's own
     int64 boundary in both formats, nulls in both directions, and a real
-    sops document containing timestamps and comments.
+    sops document containing timestamps and comments. encrypt_in_place
+    and edit have a file of their own covering what each does when it
+    goes wrong - the plaintext left on disk, the file left half
+    written - and both check the result against sops -d.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

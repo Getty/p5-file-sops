@@ -67,6 +67,27 @@ be implemented.
   a key that decrypts nothing, and dropping it revokes their access while reporting
   success. Both are wrong; refusing is not.
 
+## sops is the reference for the format, not for the ergonomics of a CLI
+
+Measure what `sops` does before choosing an argument shape or an error — but a
+measurement is not automatically a mandate. `sops` is a program with a human at a
+terminal; this is a library called from code that may have neither. Where those differ,
+diverging is the right answer: no editor fallback guessing at `vim`, no re-prompt loop
+after a failed parse, no interactive recovery. **Deviation is allowed, silent deviation
+is not** — measure what the binary does, decide deliberately, and say in the POD what
+you did instead and why.
+
+The line stays where the wire is: the *file* must be what sops would accept. How a
+caller is led to produce it is ours.
+
+## Writing a file in place goes through `_replace_file`
+
+Any method that replaces an existing file writes to a temp file in the same directory,
+carries the original's mode over, and renames. A half-written secrets file is a
+destroyed secrets file, and the failure modes here are real: karr #18 exists because
+re-encrypting in place made values unrecoverable. Do not open the target with `>` and
+hope — that is how the third and fourth non-atomic write path got added.
+
 ## POD moves with the signature
 
 Public attributes and methods carry inline `=attr` / `=method` in the same file. Change

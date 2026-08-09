@@ -2,10 +2,13 @@
 
 Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
-> **Status of this file:** it is the original *design document*. Parts of it describe
-> intent that is not implemented (ENV/INI formats, `.sops.yaml` creation rules,
-> `encrypt_in_place`, `edit`, every backend beyond age). Read it as the roadmap; the
-> description of what exists lives in skill `file-sops-core`.
+> **Status of this file:** it is the original *design document*, kept as the roadmap.
+> What still does not exist: **ENV and INI format handlers** (karr #36, #37),
+> **`.sops.yaml` creation rules** (karr #38) and **every backend beyond age** — PGP,
+> AWS KMS, GCP KMS, Azure KV, Vault (karr #39; their metadata fields already round-trip,
+> only the wrapping is missing). Implemented since: `encrypt_in_place` and `edit`.
+> The description of what exists lives in skill `file-sops-core`; the POD in
+> `lib/File/SOPS.pm` is the contract.
 
 ## Delegation
 
@@ -96,6 +99,10 @@ sops:
 
 ## API Design
 
+Everything below except the `format => 'env' | 'ini'` note exists today, with named
+arguments throughout — `encrypt_in_place` and `edit` take `file => ...` like `rotate`
+and `extract`, not a leading positional filename as this document first sketched.
+
 ```perl
 use File::SOPS;
 
@@ -103,7 +110,7 @@ use File::SOPS;
 my $encrypted = File::SOPS->encrypt(
     data       => { password => 'secret', user => 'admin' },
     recipients => ['age1...'],  # age public keys
-    format     => 'yaml',       # yaml, json, env, ini
+    format     => 'yaml',       # yaml, json; env and ini are roadmap
 );
 
 # Decrypt
@@ -125,11 +132,18 @@ File::SOPS->decrypt_file(
     identities => \@identities,
 );
 
-# In-place encryption
-File::SOPS->encrypt_in_place('secrets.yaml', recipients => \@recipients);
+# In-place encryption (atomic: temp file + rename, permissions preserved)
+File::SOPS->encrypt_in_place(
+    file       => 'secrets.yaml',
+    recipients => \@recipients,
+);
 
-# Edit (decrypt, edit, re-encrypt)
-File::SOPS->edit('secrets.enc.yaml', identities => \@identities);
+# Edit (decrypt, $EDITOR, re-encrypt). Returns 0 if nothing changed.
+File::SOPS->edit(
+    file       => 'secrets.enc.yaml',
+    identities => \@identities,
+    editor     => 'vim',   # optional, defaults to $ENV{EDITOR}, no vi fallback
+);
 
 # Extract single value
 my $password = File::SOPS->extract(
@@ -139,10 +153,15 @@ my $password = File::SOPS->extract(
 );
 
 # Rotate data key
-File::SOPS->rotate('secrets.enc.yaml', identities => \@identities);
+File::SOPS->rotate(
+    file       => 'secrets.enc.yaml',
+    identities => \@identities,
+);
 ```
 
-## Config File (.sops.yaml)
+## Config File (.sops.yaml) — not implemented (karr #38)
+
+Recipients are always passed explicitly today; nothing reads a config file.
 
 ```yaml
 creation_rules:
@@ -156,6 +175,10 @@ creation_rules:
 
 ## Dependencies
 
+Sketch only — `cpanfile` is the truth, and it is longer (YAML::PP for the
+order-preserving reparse, the core modules declared explicitly because there is no
+AutoPrereqs).
+
 ```perl
 requires 'Crypt::Age';        # age encryption backend
 requires 'CryptX';            # AES-GCM for value encryption
@@ -163,18 +186,23 @@ requires 'YAML::XS';          # YAML parsing
 requires 'JSON::MaybeXS';     # JSON parsing
 ```
 
-## Encryption Backends (Phase 1)
+## Encryption Backends
 
-Start with **age only**:
+**age only** — that is still Phase 1, and everything below is roadmap (karr #39):
 - Uses `Crypt::Age` for data key encryption
 - Most common for local/team use
 
-Later phases:
+Not implemented:
 - PGP (via Crypt::OpenPGP or gpg CLI)
 - AWS KMS
 - GCP KMS
 - Azure Key Vault
 - HashiCorp Vault
+
+Their `sops`-section fields are modelled and round-trip untouched, so a document shared
+with such a recipient can be *read* here through its age entry. Anything that generates
+a new data key — `rotate`, `edit` — refuses such a document rather than dropping the
+entries it cannot re-wrap.
 
 ## Cryptographic Operations
 
@@ -189,7 +217,11 @@ Later phases:
 - `_unencrypted` suffix: Values not encrypted but included in MAC
 - `sops` key: Metadata, always unencrypted
 
-## Files to Create
+## Files
+
+`ENV.pm` and `INI.pm` do not exist (karr #36, #37); everything else under `lib/` does.
+The `t/` layout below was the sketch — the real suite is 18 files and is listed by
+`ls t/`, with `t/04-interop.t` the only one that talks to the sops binary.
 
 ```
 lib/
@@ -201,16 +233,10 @@ lib/
 │       ├── Format/
 │       │   ├── YAML.pm
 │       │   ├── JSON.pm
-│       │   ├── ENV.pm
-│       │   └── INI.pm
+│       │   ├── ENV.pm          # roadmap
+│       │   └── INI.pm          # roadmap
 │       └── Backend/
 │           └── Age.pm          # age encryption backend
-t/
-├── 00-load.t
-├── 01-encrypt-decrypt.t
-├── 02-yaml.t
-├── 03-json.t
-└── 04-interop.t                # Test with sops CLI
 ```
 
 ## References

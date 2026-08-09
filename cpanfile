@@ -15,10 +15,20 @@ requires 'namespace::clean';
 # is determined -- see File::SOPS::Encrypted::detect_type and docs/adr/0002.
 requires 'B';
 requires 'Carp';
+requires 'Cwd';
 requires 'Digest::SHA';
+requires 'Fcntl';
+requires 'File::Basename';
+requires 'File::Spec';
+# In-place writes go to a temporary file next to the target and are renamed
+# over it, and File::SOPS::edit puts the decrypted document in a temporary
+# directory of its own -- see the edit method.
+requires 'File::Temp';
 requires 'MIME::Base64';
 requires 'POSIX';
 requires 'Scalar::Util';
+# $EDITOR is split into words the way a shell would, as sops splits it too.
+requires 'Text::ParseWords';
 
 on test => sub {
     requires 'Test::More';

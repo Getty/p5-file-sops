@@ -190,7 +190,15 @@ claims.
 ## Deliberate gaps
 
 `CLAUDE.md` is the original design document and describes more than exists. Not
-implemented today: the ENV and INI format handlers, the `.sops.yaml` creation-rules
-config, `encrypt_in_place`, `edit`, and every backend other than age (PGP, KMS,
-GCP KMS, Azure KV, Vault — the metadata fields for them exist and round-trip, the
-encryption does not). Treat that file as a roadmap, not as a description of the code.
+implemented today: the ENV and INI format handlers (karr #36, #37), the `.sops.yaml`
+creation-rules config (karr #38), and every backend other than age — PGP, KMS,
+GCP KMS, Azure KV, Vault (karr #39; the metadata fields for them exist and
+round-trip, the encryption does not). Treat that file as a roadmap, not as a
+description of the code.
+
+`encrypt_in_place` and `edit` do exist. Both write through `_replace_file` — temp
+file next to the target, then `rename` — so a failure part-way leaves the original
+intact; `encrypt_file` and `rotate` still write over a file the old way (karr #40).
+`edit` re-encrypts under a **new data key**, where `sops edit` keeps the existing one
+(karr #41), which is why it refuses the same foreign-key-material documents `rotate`
+refuses.

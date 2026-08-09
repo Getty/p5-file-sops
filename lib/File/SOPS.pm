@@ -3,7 +3,13 @@ package File::SOPS;
 
 use Moo;
 use Carp qw(croak);
+use Cwd ();
+use Fcntl qw(O_CREAT O_EXCL O_WRONLY);
+use File::Basename qw(basename);
+use File::Spec;
+use File::Temp ();
 use Scalar::Util qw(blessed);
+use Text::ParseWords qw(shellwords);
 use Digest::SHA qw(sha512);
 use JSON::MaybeXS;
 use YAML::XS ();
@@ -50,6 +56,18 @@ our $VERSION = '0.003';
     File::SOPS->decrypt_file(
         input      => 'secrets.enc.yaml',
         output     => 'secrets.yaml',
+        identities => ['AGE-SECRET-KEY-1...'],
+    );
+
+    # Encrypt a file over itself, atomically
+    File::SOPS->encrypt_in_place(
+        file       => 'secrets.yaml',
+        recipients => ['age1...'],
+    );
+
+    # Decrypt, open $EDITOR, re-encrypt
+    File::SOPS->edit(
+        file       => 'secrets.enc.yaml',
         identities => ['AGE-SECRET-KEY-1...'],
     );
 
@@ -517,11 +535,7 @@ sub encrypt_file {
     # Auto-detect format from filename
     $format //= _detect_format_from_filename($input);
 
-    # Read input file
-    open my $fh, '<:raw', $input
-        or croak "Cannot open input file '$input': $!";
-    my $content = do { local $/; <$fh> };
-    close $fh;
+    my $content = _read_file($input, 'input file');
 
     # Parse to get data structure.
     #
@@ -530,8 +544,7 @@ sub encrypt_file {
     # tree of ENC[...] strings -- which encrypt would happily wrap a second
     # time. $metadata being defined is exactly "the input had a top-level sops
     # entry", which is the condition sops itself refuses on.
-    my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
-    my ($data, $metadata) = $format_class->parse($content);
+    my ($data, $metadata) = _format_class($format)->parse($content);
     croak _sops_key_reserved("input file '$input'") if $metadata;
 
     # Encrypt
@@ -589,6 +602,78 @@ Returns true on success.
 
 =cut
 
+sub encrypt_in_place {
+    my ($class, %args) = @_;
+    my $file       = $args{file}       // croak "file required";
+    my $recipients = $args{recipients} // croak "recipients required";
+    my $format     = $args{format} // _detect_format_from_filename($file);
+
+    my $content = _read_file($file, 'file');
+
+    # Same guard as encrypt_file, and it matters more here: there is no
+    # separate output file to inspect afterwards, so an unnoticed double
+    # encryption would have overwritten the only copy.
+    my ($data, $metadata) = _format_class($format)->parse($content);
+    croak _sops_key_reserved("file '$file'") if $metadata;
+
+    my $encrypted = $class->encrypt(
+        data       => $data,
+        recipients => $recipients,
+        format     => $format,
+        _encryption_options(\%args),
+    );
+
+    _replace_file($file, $encrypted);
+
+    return 1;
+}
+
+=method encrypt_in_place
+
+    File::SOPS->encrypt_in_place(
+        file       => 'secrets.yaml',
+        recipients => \@age_public_keys,
+        format     => 'yaml',   # optional, auto-detected from filename
+    );
+
+Encrypts a plaintext file over itself.
+
+This is L</encrypt_file> with C<output> omitted, with one difference that is
+the whole point of having it: B<the write is atomic>. The encrypted document is
+written to a temporary file in the same directory and C<rename>d over the
+original, so a failure part-way through -- a full disk, a signal, a croak from
+the cipher -- leaves the plaintext file exactly as it was rather than truncated
+or half-encrypted. L</encrypt_file> writing over its input opens the file for
+writing first and encrypts afterwards, which is fine for a copy and not fine
+for the only copy.
+
+The file's permissions are preserved. Two consequences of C<rename> are worth
+knowing, and they are where this differs from sops, which rewrites the file in
+place:
+
+=over 4
+
+=item * The file gets a new inode, so B<hard links> to it keep the old,
+unencrypted content.
+
+=item * A B<symlink> is followed: the target is replaced and the symlink itself
+is left alone.
+
+=back
+
+C<mac_only_encrypted>, the four encryption rules and C<metadata> are passed
+through to L</encrypt>; see L</Choosing what gets encrypted>.
+
+B<Dies if the file is already encrypted>, i.e. has a top-level C<sops> entry,
+for the reasons in L</encrypt_file>. There is deliberately no "encrypt it
+again" mode: to re-key an encrypted file use L</rotate>, to change its contents
+use L</edit>. sops answers the same call the same way, with exit code 203 and
+the same advice.
+
+Returns true on success.
+
+=cut
+
 sub decrypt_file {
     my ($class, %args) = @_;
     my $input      = $args{input}      // croak "input required";
@@ -598,11 +683,7 @@ sub decrypt_file {
 
     $format //= _detect_format_from_filename($input);
 
-    # Read encrypted file
-    open my $fh, '<:raw', $input
-        or croak "Cannot open input file '$input': $!";
-    my $content = do { local $/; <$fh> };
-    close $fh;
+    my $content = _read_file($input, 'input file');
 
     # Decrypt
     my $data = $class->decrypt(
@@ -612,24 +693,7 @@ sub decrypt_file {
         ignore_mac => $args{ignore_mac},
     );
 
-    # Serialize decrypted data
-    my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
-
-    my $decrypted;
-    if ($format eq 'json') {
-        # canonical => 1 keeps key order sorted; the MAC depends on it
-        $decrypted = JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1)
-            ->encode($data);
-    } else {
-        # Same boolean mode File::SOPS::Format::YAML dumps under, and localised
-        # for the same reason: without it a JSON::PP::Boolean comes out as
-        # `!!perl/scalar:JSON::PP::Boolean 1` instead of `true`. This used to
-        # work only because Format::YAML set the variable process-wide at load
-        # time -- an action-at-a-distance dependency, on a global that is not
-        # ours to set.
-        local $YAML::XS::Boolean = $File::SOPS::Format::YAML::BOOLEAN_MODE;
-        $decrypted = YAML::XS::Dump($data);
-    }
+    my $decrypted = _serialize_plaintext($data, $format);
 
     # Write output
     open my $out_fh, '>:raw', $output
@@ -676,11 +740,7 @@ sub extract {
 
     $format //= _detect_format_from_filename($file);
 
-    # Read and decrypt
-    open my $fh, '<:raw', $file
-        or croak "Cannot open file '$file': $!";
-    my $content = do { local $/; <$fh> };
-    close $fh;
+    my $content = _read_file($file, 'file');
 
     my $data = $class->decrypt(
         encrypted  => $content,
@@ -747,17 +807,12 @@ sub rotate {
 
     $format //= _detect_format_from_filename($file);
 
-    # Read encrypted file
-    open my $fh, '<:raw', $file
-        or croak "Cannot open file '$file': $!";
-    my $content = do { local $/; <$fh> };
-    close $fh;
+    my $content = _read_file($file, 'file');
 
-    my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
-    my (undef, $metadata) = $format_class->parse($content);
+    my (undef, $metadata) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
-    _assert_rotatable($metadata, $file);
+    _assert_rekeyable($metadata, $file, verb => 'rotate', noun => 'Rotation');
 
     # Get current recipients if not specified
     unless ($recipients) {
@@ -853,7 +908,359 @@ Returns true on success.
 
 =cut
 
+sub edit {
+    my ($class, %args) = @_;
+    my $file       = $args{file}       // croak "file required";
+    my $identities = $args{identities} // croak "identities required";
+    my $format     = $args{format} // _detect_format_from_filename($file);
+
+    # Resolved BEFORE anything is decrypted: an unusable editor must not be
+    # discovered with a plaintext copy of the document already on disk.
+    my @editor = _editor_command($args{editor});
+
+    my $content = _read_file($file, 'file');
+
+    my (undef, $metadata) = _format_class($format)->parse($content);
+    croak "No SOPS metadata found in '$file'" unless $metadata;
+
+    # Re-encryption here generates a NEW data key, exactly as rotate does, so
+    # it inherits rotate's refusal: a document also wrapped for pgp or a KMS
+    # would come back out with those recipients silently dropped.
+    _assert_rekeyable($metadata, $file, verb => 'edit', noun => 'Editing');
+
+    my $data = $class->decrypt(
+        encrypted  => $content,
+        identities => $identities,
+        format     => $format,
+        ignore_mac => $args{ignore_mac},
+    );
+
+    my $before = _serialize_plaintext($data, $format);
+    my $after  = _edit_text($before, $file, \@editor);
+
+    # Nothing was changed: leave the file alone entirely rather than rewriting
+    # an identical document under a new data key, MAC and lastmodified. sops
+    # stops here too ("File has not changed, exiting.", exit code 200).
+    return 0 unless defined $after;
+
+    my ($edited, $edited_metadata) = do {
+        my @parsed = eval { _format_class($format)->parse($after) };
+        croak "The edited document does not parse (" . _reason($@) . "). "
+            . "'$file' is unchanged, and the edited text has been discarded "
+            . "together with the temporary file it was in -- there is no copy "
+            . "of it left. sops keeps the editor open until the document "
+            . "parses; this method cannot, because it may have no terminal to "
+            . "return to."
+            if $@;
+        @parsed;
+    };
+
+    croak "The edited document has a top-level 'sops' entry. That name is "
+        . "reserved for the metadata section, which is written back "
+        . "automatically -- remove it and edit again. '$file' is unchanged."
+        if $edited_metadata;
+
+    my $encrypted = $class->encrypt(
+        data       => $edited,
+        recipients => [ map { $_->{recipient} } @{ $metadata->age } ],
+        format     => $format,
+        metadata   => $metadata,
+    );
+
+    _replace_file($file, $encrypted);
+
+    return 1;
+}
+
+=method edit
+
+    File::SOPS->edit(
+        file       => 'secrets.enc.yaml',
+        identities => \@age_secret_keys,
+        editor     => 'vim',   # optional, defaults to $ENV{EDITOR}
+        format     => 'yaml',  # optional, auto-detected from filename
+    );
+
+Decrypts a file, opens it in an editor, and re-encrypts what comes back.
+
+The decrypted document is written to a fresh temporary directory (mode C<0700>)
+as a file (mode C<0600>) with the same basename as the original, the editor is
+run on it, and the result is parsed and encrypted back over the original --
+atomically, as L</encrypt_in_place> does, and for the same reason.
+
+That is the same shape sops uses, and it has the same caveat: B<the plaintext
+touches the filesystem>. Point C<TMPDIR> at a C<tmpfs> if that matters to you.
+
+B<The decrypted copy is removed on every way out of this method>, which is
+three of them:
+
+=over 4
+
+=item * Returning, or dying anywhere -- including from the editor failing, the
+result not parsing, or the re-encryption refusing. The directory belongs to a
+L<File::Temp> object scoped to the call, so unwinding removes it.
+
+=item * C<SIGTERM> and C<SIGHUP>, which are caught for the duration of the
+call, remove the directory and are then re-raised with the default disposition,
+so the process still dies of the signal it was sent. Perl defers a signal that
+arrives while the editor is running until the editor exits, so this happens on
+the way back rather than immediately.
+
+=item * C<Ctrl-C>, which does not reach here at all: Perl's C<system> ignores
+C<SIGINT> for the duration of the child, so the interrupt goes to the editor.
+The editor dying of it is an editor that exited non-zero, which is the first
+case again -- reported as C<was killed by signal 2> with the file unchanged.
+
+=back
+
+Returns 1 if the file was rewritten, and B<0 if the editor left the content
+byte-identical> -- in which case the file is not touched at all, so its
+C<lastmodified>, MAC and wrapped data keys stay as they were. sops reports the
+same situation as C<File has not changed, exiting.> with exit code 200.
+
+=head3 The editor
+
+C<editor> may be a string, which is split into words the way a shell would
+(C<< editor => 'code --wait' >>), or an ArrayRef, which is used as it stands.
+It defaults to C<$ENV{EDITOR}>, and the temporary file's path is appended as
+the final argument. The editor is run without a shell.
+
+B<Dies if neither is set.> sops falls back to C<vim>, C<nano> or C<vi> here;
+this method does not, because a library that opens an interactive editor
+nobody asked for hangs an unattended script rather than failing it.
+
+B<Dies if the editor exits non-zero>, naming the status or the signal, and
+leaves the file unchanged -- an editor that refused to start or was killed
+has not produced an edit worth encrypting. sops behaves the same way
+(C<Could not run editor: exit status 3>, exit code 201).
+
+=head3 What comes back is checked before anything is written
+
+The edited text must parse, as one document, to a mapping, and must not carry
+a top-level C<sops> entry of its own. Any of those dies with the original file
+untouched.
+
+B<A document that does not parse is lost.> The temporary file is removed on the
+way out, so the only copy of what was typed is whatever the editor still has in
+its buffer. This is the one place where sops does better: it reopens the editor
+on the same file until the document parses, which needs a terminal to return
+to and an interactive user in front of it -- neither of which a library method
+can assume.
+
+=head3 Editing re-keys the file
+
+Unlike C<sops edit>, which keeps the document's data key and only rewrites the
+values, this method decrypts and encrypts, so the file comes back with a
+B<new data key> -- the wrapped copies in the C<sops> section change on every
+edit, and so does the diff. Nothing is lost by it: the age recipients and the
+encryption policy (the rules, C<mac_only_encrypted>, and any C<sops> field this
+distribution does not model) are carried over exactly as L</rotate> carries
+them.
+
+What it does mean is that C<edit> refuses the same files L</rotate> refuses: a
+document whose C<sops> section also holds C<pgp>, C<kms>, C<gcp_kms>,
+C<azure_kv>, C<hc_vault> or C<key_groups> material cannot be re-encrypted for
+those recipients here, and dropping them silently would revoke their access
+while reporting success. See L</Files rotate refuses>.
+
+Key B<order> is not preserved either: the plaintext handed to the editor is
+emitted from a Perl hash, so it comes out sorted whatever order the encrypted
+file had. That is the same emitter L</decrypt_file> uses, and it is the order
+this distribution writes documents in anyway, so it does not affect the MAC.
+
+C<ignore_mac> is passed through to L</decrypt>; editing a file you could not
+verify re-signs whatever it contained, so prefer to fail.
+
+=cut
+
 # Internal helpers
+
+sub _format_class {
+    my ($format) = @_;
+    return $FORMATS{$format} // croak "Unknown format: $format";
+}
+
+sub _read_file {
+    my ($path, $what) = @_;
+
+    open my $fh, '<:raw', $path
+        or croak "Cannot open $what '$path': $!";
+    my $content = do { local $/; <$fh> };
+    close $fh;
+
+    return $content;
+}
+
+# The plaintext form of a decrypted tree: what decrypt_file writes out and what
+# edit hands to the editor. Both have to agree, because edit compares the text
+# it wrote with the text it gets back to decide whether anything changed.
+#
+# This is a second emitter, not the one File::SOPS::Format::* uses, and that is
+# a known wart (karr #35) rather than a design: it exists because the format
+# handlers serialize a document WITH its sops section and there is none here.
+sub _serialize_plaintext {
+    my ($data, $format) = @_;
+
+    _format_class($format);   # reject an unknown format before writing anything
+
+    if ($format eq 'json') {
+        # canonical => 1 keeps key order sorted; the MAC depends on it
+        return JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1)
+            ->encode($data);
+    }
+
+    # Same boolean mode File::SOPS::Format::YAML dumps under, and localised
+    # for the same reason: without it a JSON::PP::Boolean comes out as
+    # `!!perl/scalar:JSON::PP::Boolean 1` instead of `true`. This used to
+    # work only because Format::YAML set the variable process-wide at load
+    # time -- an action-at-a-distance dependency, on a global that is not
+    # ours to set.
+    local $YAML::XS::Boolean = $File::SOPS::Format::YAML::BOOLEAN_MODE;
+    return YAML::XS::Dump($data);
+}
+
+# Replace an existing file with new content, atomically: write a temporary file
+# in the SAME directory (so the rename cannot cross a filesystem) and rename it
+# over the target. Nothing observes a partial write, and a failure anywhere
+# before the rename leaves the original untouched.
+#
+# This is where in-place operations differ from sops, which truncates and
+# rewrites the file itself. Truncate-and-rewrite keeps the inode -- hard links
+# and the open handle someone else holds see the new content -- at the price of
+# destroying the file if the write stops half way. On a file whose only copy is
+# about to be replaced by a re-encryption of itself, that trade goes the other
+# way round.
+#
+# A symlink is resolved first, so the target is replaced rather than the link.
+# Hard links to the target are NOT preserved; they keep the old content, and
+# that is documented on the methods that call this.
+sub _replace_file {
+    my ($path, $content) = @_;
+
+    my $target = -l $path ? (Cwd::abs_path($path) // $path) : $path;
+    my $mode   = (stat $target)[2];
+
+    my ($vol, $dir, $base) = File::Spec->splitpath($target);
+    $dir = File::Spec->curdir unless length $dir;
+
+    my ($fh, $tmp) = File::Temp::tempfile(
+        ".$base.sops-XXXXXXXX",
+        DIR    => File::Spec->catpath($vol, $dir, ''),
+        UNLINK => 0,
+    );
+
+    my $ok = eval {
+        binmode $fh, ':raw';
+        print {$fh} $content
+            or croak "Cannot write to temporary file '$tmp': $!";
+        close $fh
+            or croak "Cannot write to temporary file '$tmp': $!";
+
+        # Keep the permissions the file already had; File::Temp creates 0600,
+        # which would quietly tighten a deliberately group-readable file.
+        if (defined $mode) {
+            chmod $mode & 07777, $tmp
+                or croak "Cannot set permissions on '$tmp': $!";
+        }
+
+        rename $tmp, $target
+            or croak "Cannot replace '$target' with '$tmp': $!";
+        1;
+    };
+
+    unless ($ok) {
+        my $err = $@;
+        close $fh;
+        unlink $tmp;
+        croak $err;
+    }
+
+    return 1;
+}
+
+# The editor to run, as a list, without a shell in between. A string is split
+# the way a shell would split it -- `EDITOR="code --wait"` is a command with an
+# argument, not a program with a space in its name -- which is what sops does
+# with $EDITOR as well.
+sub _editor_command {
+    my ($editor) = @_;
+
+    $editor //= $ENV{EDITOR};
+
+    croak "No editor to run: pass editor => 'vim' to edit, or set the EDITOR "
+        . "environment variable. (sops falls back to vim, nano or vi when "
+        . "EDITOR is unset; this does not, because a library that opens an "
+        . "interactive editor nobody asked for hangs an unattended script "
+        . "instead of failing it.)"
+        unless defined $editor && length $editor;
+
+    my @command = ref $editor eq 'ARRAY' ? @$editor : shellwords($editor);
+    croak "The editor command '" . (ref $editor eq 'ARRAY' ? join(' ', @$editor) : $editor)
+        . "' is empty once split into words"
+        unless @command;
+
+    return @command;
+}
+
+# Put $text in front of the editor and return what came back, or undef if it
+# was left byte for byte identical.
+#
+# The plaintext lives in a directory of its own for as long as this call, and
+# no longer. File::Temp's object removes the tree when $tmpdir goes out of
+# scope, which covers returning and dying alike; the handlers below cover being
+# signalled, where the default disposition would terminate the process without
+# running a destructor.
+#
+# SIGINT is deliberately in that list even though Ctrl-C during the editor does
+# not arrive here: perl's system() ignores SIGINT for the duration of the child
+# (perlfunc), so the interrupt reaches the EDITOR and comes back as a non-zero
+# wait status, which the croak below turns into ordinary unwinding. The handler
+# is for a SIGINT arriving in the rest of this call.
+sub _edit_text {
+    my ($text, $file, $editor) = @_;
+
+    my $tmpdir = File::Temp->newdir(TEMPLATE => 'file-sops-edit-XXXXXXXX',
+                                    TMPDIR   => 1);
+
+    my $on_signal = sub {
+        my ($signal) = @_;
+        undef $tmpdir;              # removes the plaintext, now
+        $SIG{$signal} = 'DEFAULT';  # and then die of the signal we were sent
+        kill $signal, $$;
+    };
+    local $SIG{INT}  = $on_signal;
+    local $SIG{TERM} = $on_signal;
+    local $SIG{HUP}  = $on_signal;
+
+    # Same basename as the original, so the editor's filetype detection sees
+    # the extension it expects. sops does this too.
+    my $path = File::Spec->catfile("$tmpdir", basename($file));
+
+    sysopen my $fh, $path, O_WRONLY | O_CREAT | O_EXCL, 0600
+        or croak "Cannot create temporary file '$path': $!";
+    binmode $fh, ':raw';
+    print {$fh} $text or croak "Cannot write temporary file '$path': $!";
+    close $fh         or croak "Cannot write temporary file '$path': $!";
+
+    my $status = system(@$editor, $path);
+    croak "Editor (" . join(' ', @$editor) . ") " . _wait_status($status)
+        . "; '$file' is unchanged"
+        if $status != 0;
+
+    my $edited = _read_file($path, 'edited file');
+
+    return undef if $edited eq $text;
+    return $edited;
+}
+
+# What system() reported, in words. $? is the wait status, not an exit code.
+sub _wait_status {
+    my ($status) = @_;
+
+    return "could not be run: $!"      if $status == -1;
+    return "was killed by signal " . ($status & 127) if $status & 127;
+    return "exited with status " . ($status >> 8);
+}
 
 # The top-level `sops` key is reserved for the metadata section, and there is
 # no way to encrypt a document that already uses it: serialization assigns the
@@ -877,9 +1284,10 @@ sub _sops_key_reserved {
         "$what contains a top-level 'sops' entry, which is reserved for the "
       . "SOPS metadata section. Encrypting would overwrite it and produce a "
       . "document that fails its own MAC verification. This usually means the "
-      . "input is already encrypted -- use rotate to re-key it, or decrypt it "
-      . "first. If it really is plaintext, rename the entry. (sops refuses "
-      . "such a file too, with exit code 203.)";
+      . "input is already encrypted -- use edit to change its contents or "
+      . "rotate to re-key it, or decrypt it first. If it really is plaintext, "
+      . "rename the entry. (sops refuses such a file too, with exit code 203, "
+      . "and points at its editor mode for the same reason.)";
 }
 
 # Say WHERE something went wrong. A generic failure in a document of a hundred
@@ -961,23 +1369,26 @@ sub _assert_rules_supported {
 }
 
 # age is the only backend implemented here, so a document holding key material
-# for another one cannot be rotated: the new data key can be wrapped for its
+# for another one cannot be re-keyed: the new data key can be wrapped for its
 # age recipients and for nobody else. Both ways out of that are wrong, and the
 # quiet one is the worse -- dropping the entries revokes those recipients'
 # access while reporting success, and keeping them leaves a wrapped copy of a
 # key that no longer decrypts anything, which fails later and further away.
-sub _assert_rotatable {
-    my ($metadata, $file) = @_;
+#
+# Every operation that generates a new data key has to ask this, which is
+# rotate and edit; the wording differs only in the verb.
+sub _assert_rekeyable {
+    my ($metadata, $file, %words) = @_;
 
     my @foreign = grep { $_ ne 'age' } $metadata->key_material_fields;
     return 1 unless @foreign;
 
-    croak "Refusing to rotate '$file': its sops section holds key material "
+    croak "Refusing to $words{verb} '$file': its sops section holds key material "
         . "this distribution cannot re-encrypt (" . join(', ', @foreign) . "). "
-        . "Rotation generates a new data key, so those entries would be "
+        . "$words{noun} generates a new data key, so those entries would be "
         . "silently dropped and the recipients behind them would lose access. "
-        . "Rotate this file with the sops CLI, or, if losing them is what you "
-        . "want, say so explicitly with decrypt followed by encrypt.";
+        . "\u$words{verb} this file with the sops CLI, or, if losing them is "
+        . "what you want, say so explicitly with decrypt followed by encrypt.";
 }
 
 sub _encryption_options {
