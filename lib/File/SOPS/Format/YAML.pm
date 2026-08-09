@@ -180,8 +180,9 @@ sub serialize {
     my %output = %$data;
     $output{sops} = $metadata->to_hash;
 
-    local $YAML::XS::Boolean = $BOOLEAN_MODE;
-    return _quote_sops_timestamp(Dump(\%output));
+    # The timestamp fixup applies to the metadata section only, so it sits here
+    # rather than in emit -- a plaintext document has no `sops:` block to fix.
+    return _quote_sops_timestamp($class->emit(\%output));
 }
 
 # YAML::XS emits plain (unquoted) scalars for anything its resolver does not
@@ -246,6 +247,49 @@ and the resulting document failed its own MAC because the digest had already
 covered the discarded value.
 
 Returns a YAML string with the C<sops> section appended.
+
+=cut
+
+# The one place this distribution turns a Perl tree into YAML. serialize() is
+# this plus the metadata section, and File::SOPS::_serialize_plaintext (what
+# decrypt_file writes and what edit hands the editor) is this on its own.
+#
+# It stays ONE sub because the emitter options are not local taste: the MAC's
+# encrypt side walks the tree in sorted order and is correct only because this
+# emitter writes keys sorted, and the boolean mode decides whether a
+# JSON::PP::Boolean reaches the file as `true` or as
+# `!!perl/scalar:JSON::PP::Boolean 1`. A second copy of those options is a
+# second answer to a question that has one -- which is what karr #35 found: the
+# plaintext emitter used to work only because this module set
+# $YAML::XS::Boolean process-wide at load time.
+#
+# Consequence, deliberately accepted: this sub is on the wire path. Changing
+# what it emits changes the encrypted document too, so it is not a plaintext
+# formatting knob.
+sub emit {
+    my ($class, $data) = @_;
+    croak "data required" unless defined $data;
+
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
+    return Dump($data);
+}
+
+=method emit
+
+    my $yaml = File::SOPS::Format::YAML->emit(\%data);
+
+Class method to emit a data structure as YAML, with no C<sops> section and no
+metadata of any kind -- a plain document. This is what L<File::SOPS/decrypt_file>
+writes and what L<File::SOPS/edit> hands to the editor.
+
+Returns UTF-8 encoded bytes, unconditionally: L<YAML::XS> encodes regardless of
+whether the strings it is given carry Perl's UTF-8 flag. See
+L<File::SOPS/Character encoding>.
+
+L</serialize> is this method plus the metadata section, so both go through the
+same emitter options rather than two copies of them. Those options are not
+cosmetic -- sorted key emission is what the MAC's encrypt side relies on -- so a
+change here moves the encrypted document as well as the plaintext one.
 
 =cut
 

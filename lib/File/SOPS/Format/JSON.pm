@@ -6,6 +6,11 @@ use Carp qw(croak);
 use JSON::MaybeXS qw(decode_json);
 use namespace::clean;
 
+# The only JSON encoder in this distribution's write path, and the only
+# definition of its options. utf8 makes it emit encoded bytes whatever Perl's
+# UTF-8 flag says, canonical makes it emit keys sorted -- which the MAC's
+# encrypt side depends on, since that walk hashes in sorted order. emit() below
+# is the single entry point to it.
 my $json = JSON::MaybeXS->new(
     utf8      => 1,
     pretty    => 1,
@@ -100,7 +105,7 @@ sub serialize {
     my %output = %$data;
     $output{sops} = $metadata->to_hash;
 
-    return $json->encode(\%output);
+    return $class->emit(\%output);
 }
 
 =method serialize
@@ -122,6 +127,48 @@ covered the discarded value.
 
 Returns a pretty-printed, canonically-ordered JSON string with the C<sops>
 section included.
+
+=cut
+
+# The one place this distribution turns a Perl tree into JSON. serialize() is
+# this plus the metadata section, and File::SOPS::_serialize_plaintext (what
+# decrypt_file writes and what edit hands the editor) is this on its own.
+#
+# It stays ONE sub because the options above have to be identical in both, and
+# until karr #35 they were kept identical by hand: decrypt_file built its own
+# JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1) with the values
+# copied across. canonical in particular is not a formatting preference -- the
+# MAC's encrypt side hashes in sorted key order, and that is only the document's
+# own order because this emitter sorts.
+#
+# Consequence, deliberately accepted: this sub is on the wire path. Changing
+# what it emits changes the encrypted document too, so it is not a plaintext
+# formatting knob.
+sub emit {
+    my ($class, $data) = @_;
+    croak "data required" unless defined $data;
+
+    return $json->encode($data);
+}
+
+=method emit
+
+    my $json = File::SOPS::Format::JSON->emit(\%data);
+
+Class method to emit a data structure as JSON, with no C<sops> section and no
+metadata of any kind -- a plain document. This is what L<File::SOPS/decrypt_file>
+writes and what L<File::SOPS/edit> hands to the editor.
+
+Returns UTF-8 encoded bytes, unconditionally (the encoder is built with
+C<utf8 =E<gt> 1>, which encodes regardless of whether the strings carry Perl's
+UTF-8 flag), pretty-printed and canonically ordered. See
+L<File::SOPS/Character encoding>.
+
+L</serialize> is this method plus the metadata section, so both go through the
+same encoder rather than two copies of its options. Those options are not
+cosmetic -- C<canonical> is what makes key order sorted, which the MAC's encrypt
+side relies on -- so a change here moves the encrypted document as well as the
+plaintext one.
 
 =cut
 

@@ -772,6 +772,12 @@ The output is UTF-8 encoded, so a file round-tripped through L</encrypt_file>
 and back is byte-identical in its non-ASCII content rather than double-encoded.
 See L</Character encoding>.
 
+It is written by the format handler's C<emit>
+(L<File::SOPS::Format::YAML/emit>, L<File::SOPS::Format::JSON/emit>) -- the
+same emitter the encrypted document goes through, minus the C<sops> section --
+so the plaintext and the encrypted file cannot disagree about quoting, booleans
+or key order.
+
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
 It is nonetheless written atomically, since nothing stops it naming a file that
 matters -- the encrypted input itself, or a working copy being refreshed. Until
@@ -1124,8 +1130,10 @@ while reporting success. See L</Files rotate refuses>.
 
 Key B<order> is not preserved either: the plaintext handed to the editor is
 emitted from a Perl hash, so it comes out sorted whatever order the encrypted
-file had. That is the same emitter L</decrypt_file> uses, and it is the order
-this distribution writes documents in anyway, so it does not affect the MAC.
+file had. That is the same emitter L</decrypt_file> uses -- the format
+handler's C<emit>, which is also what the encrypted document is written with --
+and it is the order this distribution writes documents in anyway, so it does
+not affect the MAC.
 
 C<ignore_mac> is passed through to L</decrypt>; editing a file you could not
 verify re-signs whatever it contained, so prefer to fail.
@@ -1154,28 +1162,20 @@ sub _read_file {
 # edit hands to the editor. Both have to agree, because edit compares the text
 # it wrote with the text it gets back to decide whether anything changed.
 #
-# This is a second emitter, not the one File::SOPS::Format::* uses, and that is
-# a known wart (karr #35) rather than a design: it exists because the format
-# handlers serialize a document WITH its sops section and there is none here.
+# It is the format handler's own emitter, with no metadata section -- the same
+# sub the handler's serialize() dumps through. Until karr #35 this WAS a second
+# emitter, because the handlers only offered "serialize a document WITH its sops
+# section", and it kept its options in sync with theirs by hand: a copy of
+# JSON::MaybeXS->new(utf8/pretty/canonical) for JSON, and for YAML a boolean
+# mode that at first was not set here at all and worked only because loading
+# File::SOPS::Format::YAML assigned $YAML::XS::Boolean process-wide. Those
+# options decide sorted key order, which the MAC's encrypt side depends on, so
+# the twin was one edit away from a document that fails its own digest.
 sub _serialize_plaintext {
     my ($data, $format) = @_;
 
-    _format_class($format);   # reject an unknown format before writing anything
-
-    if ($format eq 'json') {
-        # canonical => 1 keeps key order sorted; the MAC depends on it
-        return JSON::MaybeXS->new(utf8 => 1, pretty => 1, canonical => 1)
-            ->encode($data);
-    }
-
-    # Same boolean mode File::SOPS::Format::YAML dumps under, and localised
-    # for the same reason: without it a JSON::PP::Boolean comes out as
-    # `!!perl/scalar:JSON::PP::Boolean 1` instead of `true`. This used to
-    # work only because Format::YAML set the variable process-wide at load
-    # time -- an action-at-a-distance dependency, on a global that is not
-    # ours to set.
-    local $YAML::XS::Boolean = $File::SOPS::Format::YAML::BOOLEAN_MODE;
-    return YAML::XS::Dump($data);
+    # _format_class croaks on an unknown format, before anything is written.
+    return _format_class($format)->emit($data);
 }
 
 # Write $content to $path, atomically: the content goes to a temporary file in

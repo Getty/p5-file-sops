@@ -437,6 +437,24 @@ Revision history for File-SOPS
   - The message for an already-encrypted input now points at edit as
     well as rotate, as sops's own exit-203 message points at its editor
     mode.
+  - New method emit on File::SOPS::Format::YAML and
+    File::SOPS::Format::JSON, emitting a document with no sops section -
+    and decrypt_file and edit now write their plaintext through it
+    instead of through an emitter of their own. That copy had to stay
+    byte-identical to the handlers' and nothing checked that it did: for
+    JSON it was a second JSON::MaybeXS encoder with utf8, pretty and
+    canonical typed out again, and for YAML a dump that wrote `true`
+    rather than `!!perl/scalar:JSON::PP::Boolean 1` only because loading
+    File::SOPS::Format::YAML assigned $YAML::XS::Boolean process-wide.
+    Neither option is cosmetic - canonical is what makes the emitted key
+    order sorted, and the MAC's encrypt side hashes in sorted order - so
+    a drift between the two would have shown up as a document failing
+    its own digest. Nothing about the output moves: emit is the code
+    serialize was already dumping through, and both formats write the
+    same bytes as before, plaintext and encrypted alike.
+    t/20-plaintext-emitter.t pins that there is one emitter and not two
+    that happen to agree: it replaces emit and requires decrypt_file,
+    edit and serialize to follow it.
   - Tests: the interop suite is no longer the only compatibility
     coverage. New regression tests pin the wire format, the serializers'
     key ordering, every MAC rule above and the encoding boundary without
