@@ -304,6 +304,61 @@ discarded the other without an error. sops does support multi-document YAML;
 what its model is, and why matching it is more than a parser change, is in
 L<File::SOPS::Format::YAML/Multi-document YAML>.
 
+=head2 How a file is written
+
+B<Every method here that writes a file writes it atomically.> The document goes
+to a temporary file in the same directory, which is then C<rename>d over the
+target. Nothing ever observes a half-written document, and a failure anywhere
+before the rename -- a full disk, a signal, an error from the cipher -- leaves
+the file that was there exactly as it was. This holds for L</encrypt_file>,
+L</decrypt_file>, L</encrypt_in_place>, L</edit> and L</rotate> alike, whether
+the target already exists or not.
+
+Until 0.003 only C<encrypt_in_place> and C<edit> did that. The other three
+opened the target with C<< '>' >>, which truncates it before the first byte is
+written, and then checked neither the C<print> nor the C<close> -- so a write
+that ran out of disk left an empty file B<and reported success>. C<encrypt_file>
+defaults C<output> to C<input> and C<rotate> always writes back over the file it
+read, so in both cases the file that was destroyed was the only copy: for
+C<rotate>, one whose data key had already been replaced.
+
+=head3 What C<rename> costs
+
+sops truncates the file and rewrites it in place. Keeping the inode is the one
+thing that buys, and it costs the file if the write stops half way; on a secrets
+file being replaced by a re-encryption of itself, that trade goes the other way
+round. The differences that follow from it are all visible from outside:
+
+=over 4
+
+=item * The file gets a B<new inode>. B<Hard links to it keep the old content>
+-- where sops, which rewrites the same inode, updates every link at once. A
+file with C<n> links comes back with one link and the other C<n-1> still
+pointing at the previous content.
+
+=item * Replacing a file needs write permission on its B<directory>, not on the
+file. A read-only file in a writable directory is replaced anyway, where
+C<sops -e -i> stops with C<Could not open in-place file for writing: permission
+denied>. C<chmod 0444> is not a guard against these methods.
+
+=item * A B<symlink> is resolved: the link is left alone and the file it points
+at is replaced. sops does the same (measured, 3.13.3) -- what differs is only
+that the target picks up a new inode.
+
+=item * An existing file keeps its B<mode>; a file that has to be created gets
+the mode C<< open '>' >> would have given it, C<0666> against the process
+umask. That is what sops's C<--output> does as well, so a decrypted file this
+writes is no more and no less protected than before -- if that is too open for
+plaintext, set the umask or the mode yourself.
+
+=back
+
+A target that exists and is B<not a regular file> -- C</dev/stdout>,
+C</dev/null>, a fifo -- is written through directly instead. There is nothing
+there to protect, and renaming over it would replace the device itself with an
+ordinary file. C<sops --output /dev/stdout> works, and so does passing that as
+C<output> here.
+
 =cut
 
 my %FORMATS = (
@@ -555,11 +610,7 @@ sub encrypt_file {
         _encryption_options(\%args),
     );
 
-    # Write output
-    open my $out_fh, '>:raw', $output
-        or croak "Cannot open output file '$output': $!";
-    print $out_fh $encrypted;
-    close $out_fh;
+    _replace_file($output, $encrypted);
 
     return 1;
 }
@@ -577,7 +628,14 @@ Encrypts a file.
 
 Reads the input file, encrypts it for the specified recipients, and writes the
 encrypted content to the output file. If C<output> is not specified, encrypts
-in-place (overwrites the input file).
+in-place (overwrites the input file) -- which is what L</encrypt_in_place>
+spells out.
+
+The output is written atomically, whether it is the input file, another file
+that already exists, or a new one: the plaintext input, or whatever the output
+file held before, survives a write that cannot finish. Until 0.003 it did not,
+and the consequences of the C<rename> that fixed it -- a new inode, so hard
+links keep the old content -- are in L</How a file is written>.
 
 The input is read as UTF-8; see L</Character encoding>.
 
@@ -638,28 +696,16 @@ sub encrypt_in_place {
 
 Encrypts a plaintext file over itself.
 
-This is L</encrypt_file> with C<output> omitted, with one difference that is
-the whole point of having it: B<the write is atomic>. The encrypted document is
-written to a temporary file in the same directory and C<rename>d over the
-original, so a failure part-way through -- a full disk, a signal, a croak from
-the cipher -- leaves the plaintext file exactly as it was rather than truncated
-or half-encrypted. L</encrypt_file> writing over its input opens the file for
-writing first and encrypts afterwards, which is fine for a copy and not fine
-for the only copy.
+This is L</encrypt_file> with C<output> omitted, said in one argument instead
+of two. There is nothing C<encrypt_file> will not do for you here -- since
+0.003 both write atomically, so neither can leave the plaintext truncated or
+half-encrypted (L</How a file is written>) -- but C<file> cannot be got wrong
+the way an C<input>/C<output> pair can, and it is the same shape L</edit> and
+L</rotate> take for the same job.
 
-The file's permissions are preserved. Two consequences of C<rename> are worth
-knowing, and they are where this differs from sops, which rewrites the file in
-place:
-
-=over 4
-
-=item * The file gets a new inode, so B<hard links> to it keep the old,
-unencrypted content.
-
-=item * A B<symlink> is followed: the target is replaced and the symlink itself
-is left alone.
-
-=back
+The file's permissions are preserved, it comes back with a B<new inode> so hard
+links keep the old plaintext, and a symlink is resolved rather than replaced.
+All three, and where they differ from sops, are in L</How a file is written>.
 
 C<mac_only_encrypted>, the four encryption rules and C<metadata> are passed
 through to L</encrypt>; see L</Choosing what gets encrypted>.
@@ -695,11 +741,7 @@ sub decrypt_file {
 
     my $decrypted = _serialize_plaintext($data, $format);
 
-    # Write output
-    open my $out_fh, '>:raw', $output
-        or croak "Cannot open output file '$output': $!";
-    print $out_fh $decrypted;
-    close $out_fh;
+    _replace_file($output, $decrypted);
 
     return 1;
 }
@@ -723,6 +765,12 @@ and back is byte-identical in its non-ASCII content rather than double-encoded.
 See L</Character encoding>.
 
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
+It is nonetheless written atomically, since nothing stops it naming a file that
+matters -- the encrypted input itself, or a working copy being refreshed. Until
+0.003 an output that already existed was truncated before the plaintext was
+written and a failing write was not reported, so a full disk replaced that file
+with an empty one and C<decrypt_file> still returned true. See L</How a file is
+written>, which also covers what mode the output file gets.
 
 C<ignore_mac> is passed through to L</decrypt>; read the warning there before
 using it.
@@ -835,11 +883,7 @@ sub rotate {
         metadata   => $metadata,
     );
 
-    # Write back
-    open my $out_fh, '>:raw', $file
-        or croak "Cannot write file '$file': $!";
-    print $out_fh $encrypted;
-    close $out_fh;
+    _replace_file($file, $encrypted);
 
     return 1;
 }
@@ -870,6 +914,13 @@ This operation:
 =item 5. Writes back to the same file
 
 =back
+
+Step 5 is atomic: the rotated document is written next to the file and renamed
+over it, so an interrupted rotation leaves the file readable under its old data
+key rather than truncated. Until 0.003 the file was opened with C<< '>' >>
+first, which is the worst moment to lose it -- the new data key exists only in
+the buffer being written, so a file truncated there is not recoverable with any
+identity. L</How a file is written> has the consequences of the C<rename>.
 
 Key rotation is recommended periodically for security, or when removing
 a recipient's access.
@@ -1119,35 +1170,63 @@ sub _serialize_plaintext {
     return YAML::XS::Dump($data);
 }
 
-# Replace an existing file with new content, atomically: write a temporary file
-# in the SAME directory (so the rename cannot cross a filesystem) and rename it
-# over the target. Nothing observes a partial write, and a failure anywhere
-# before the rename leaves the original untouched.
+# Write $content to $path, atomically: the content goes to a temporary file in
+# the SAME directory (so the rename cannot cross a filesystem) and that file is
+# renamed over the target. Nothing observes a partial write, and a failure
+# anywhere before the rename leaves whatever was there untouched.
 #
-# This is where in-place operations differ from sops, which truncates and
-# rewrites the file itself. Truncate-and-rewrite keeps the inode -- hard links
-# and the open handle someone else holds see the new content -- at the price of
+# EVERY method here that writes a file goes through this, whether the target
+# exists or not. Until 0.003 only encrypt_in_place and edit did: encrypt_file,
+# decrypt_file and rotate opened the target with '>', which truncates it before
+# the first byte is written, and then checked neither the print nor the close --
+# so a write that ran out of disk left an empty file and returned success.
+# encrypt_file defaults output to input and rotate always writes back over the
+# file it read, so what that destroyed was the only copy.
+#
+# This is where this distribution differs from sops, which truncates the file
+# and rewrites it. Truncate-and-rewrite keeps the inode -- hard links and the
+# open handle someone else holds see the new content -- at the price of
 # destroying the file if the write stops half way. On a file whose only copy is
 # about to be replaced by a re-encryption of itself, that trade goes the other
 # way round.
 #
-# A symlink is resolved first, so the target is replaced rather than the link.
-# Hard links to the target are NOT preserved; they keep the old content, and
-# that is documented on the methods that call this.
+# A symlink is resolved first, so the target is replaced rather than the link;
+# measured against sops 3.13.3, `sops -e -i` on a symlink leaves the link alone
+# and rewrites the target too. Hard links to the target are NOT preserved; they
+# keep the old content, and that is documented on the methods that call this.
 sub _replace_file {
     my ($path, $content) = @_;
 
     my $target = -l $path ? (Cwd::abs_path($path) // $path) : $path;
-    my $mode   = (stat $target)[2];
+
+    return _write_through($target, $content) if -e $target && !-f $target;
+
+    # The mode to end up with: the one the file already has, or -- when there
+    # is no file yet -- the one open '>' would have given it. File::Temp
+    # creates 0600, so without this, preserving a deliberately group-readable
+    # file would quietly tighten it and routing a write path through here would
+    # be a permissions change as well as an atomicity one. sops's --output
+    # creates at 0666 against the umask as well (measured: 0644 under umask
+    # 022), and leaves an existing file's mode alone.
+    my $existing = (stat $target)[2];
+    my $mode = defined $existing ? $existing & 07777 : 0666 & ~umask;
 
     my ($vol, $dir, $base) = File::Spec->splitpath($target);
     $dir = File::Spec->curdir unless length $dir;
 
-    my ($fh, $tmp) = File::Temp::tempfile(
-        ".$base.sops-XXXXXXXX",
-        DIR    => File::Spec->catpath($vol, $dir, ''),
-        UNLINK => 0,
-    );
+    # tempfile() croaks with its own wording when the directory is missing or
+    # unwritable. That used to be "Cannot open output file '...': $!" and has
+    # to stay something that names the file the caller asked for.
+    my ($fh, $tmp) = eval {
+        File::Temp::tempfile(
+            ".$base.sops-XXXXXXXX",
+            DIR    => File::Spec->catpath($vol, $dir, ''),
+            UNLINK => 0,
+        );
+    };
+    croak "Cannot create a temporary file next to '$target' to write it "
+        . "atomically (" . _reason($@) . ")"
+        unless defined $fh;
 
     my $ok = eval {
         binmode $fh, ':raw';
@@ -1156,12 +1235,8 @@ sub _replace_file {
         close $fh
             or croak "Cannot write to temporary file '$tmp': $!";
 
-        # Keep the permissions the file already had; File::Temp creates 0600,
-        # which would quietly tighten a deliberately group-readable file.
-        if (defined $mode) {
-            chmod $mode & 07777, $tmp
-                or croak "Cannot set permissions on '$tmp': $!";
-        }
+        chmod $mode, $tmp
+            or croak "Cannot set permissions on '$tmp': $!";
 
         rename $tmp, $target
             or croak "Cannot replace '$target' with '$tmp': $!";
@@ -1174,6 +1249,27 @@ sub _replace_file {
         unlink $tmp;
         croak $err;
     }
+
+    return 1;
+}
+
+# The one target temp-file-and-rename cannot serve: something that exists and
+# is not a regular file -- /dev/stdout, /dev/null, a fifo. There is no previous
+# content to protect there, and renaming over it would replace the device or
+# the fifo itself with an ordinary file. `sops --output /dev/stdout` works, so
+# this has to keep working.
+#
+# Every step is checked, unlike the open/print/close this replaced elsewhere:
+# an unreported short write was half of what made that path dangerous.
+sub _write_through {
+    my ($path, $content) = @_;
+
+    open my $fh, '>:raw', $path
+        or croak "Cannot open output file '$path': $!";
+    print {$fh} $content
+        or do { my $err = $!; close $fh; croak "Cannot write to '$path': $err" };
+    close $fh
+        or croak "Cannot write to '$path': $!";
 
     return 1;
 }

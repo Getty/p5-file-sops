@@ -367,15 +367,12 @@ Revision history for File-SOPS
     and rule_value.
   - New method encrypt_in_place, documented in the design notes since
     0.001 and never implemented. It is encrypt_file over a single file,
-    with the write made ATOMIC: the document goes to a temporary file
-    in the same directory and is renamed over the original, so a
-    failure part-way through leaves the plaintext intact rather than
-    truncated. encrypt_file writing over its input opens the file for
-    writing before it encrypts anything, which is fine for a copy and
-    not fine for the only copy. Permissions are preserved and a symlink
-    is followed; hard links to the file are not, since the inode
-    changes. An already-encrypted file is refused exactly as
-    encrypt_file refuses it.
+    said in one argument instead of two, so the input/output pair
+    cannot be got wrong and it takes the same shape as edit and rotate.
+    The write is ATOMIC, as it now is everywhere (see below).
+    Permissions are preserved and a symlink is followed; hard links to
+    the file are not, since the inode changes. An already-encrypted
+    file is refused exactly as encrypt_file refuses it.
   - New method edit: decrypt, open $EDITOR, re-encrypt. The decrypted
     document goes to a 0600 file in a 0700 temporary directory of its
     own, as sops does, and is removed on every way out - returning,
@@ -391,6 +388,32 @@ Revision history for File-SOPS
     document is re-encrypted under a NEW data key rather than the
     existing one - so edit refuses the same files rotate refuses, and
     for the same reason.
+  - DATA LOSS - encrypt_file, decrypt_file and rotate now write their
+    output atomically, as encrypt_in_place and edit already did. All
+    three opened the target with '>', which truncates it before the
+    first byte is written, and then checked neither the print nor the
+    close - so a write that could not complete left an EMPTY file and
+    still returned true. encrypt_file defaults output to input and
+    rotate always writes back over the file it read, so what was
+    emptied was the only copy; for rotate it was a file whose data key
+    had already been replaced in memory, which no identity can recover.
+    The document now goes to a temporary file next to the target and is
+    renamed over it, so a write that cannot finish leaves the previous
+    file exactly as it was, and a write that fails is reported instead
+    of swallowed.
+  - BEHAVIOUR CHANGE that follows from it - a file written by any of
+    those methods comes back with a NEW INODE, so hard links to it keep
+    the old content, and replacing a file needs write permission on its
+    DIRECTORY rather than on the file (a read-only file in a writable
+    directory is replaced, where sops -e -i refuses). sops keeps the
+    inode and updates every hard link; this trades that for not
+    destroying the file. Nothing else moves: an existing target keeps
+    its mode, a target that has to be created still gets 0666 against
+    the umask, and a symlink is still resolved to its target - as sops
+    does in all three cases. An output that is not a regular file
+    (/dev/null, /dev/stdout, a fifo) is written through directly and
+    keeps working. Documented under "How a file is written" in
+    File::SOPS.
   - The message for an already-encrypted input now points at edit as
     well as rotate, as sops's own exit-203 message points at its editor
     mode.
@@ -408,7 +431,11 @@ Revision history for File-SOPS
     sops document containing timestamps and comments. encrypt_in_place
     and edit have a file of their own covering what each does when it
     goes wrong - the plaintext left on disk, the file left half
-    written - and both check the result against sops -d.
+    written - and both check the result against sops -d. A further file
+    pins the atomic write for encrypt_file, decrypt_file and rotate by
+    making the write itself fail under RLIMIT_FSIZE 0 and looking at
+    what is left, which is the only way to tell the fix from the bug:
+    both leave a file behind.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0
