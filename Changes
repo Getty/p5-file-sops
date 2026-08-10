@@ -1,6 +1,21 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Refuse a data key from Crypt::Age that is not 32 bytes long, in
+    File::SOPS::Backend::Age::decrypt_data_key. The data key the SOPS
+    data path consumes is exactly the 32-byte AES-256 key every value
+    in the document is encrypted under, and a 16- or 24-byte return
+    would be silently accepted by CryptX as a working AES-128 or
+    AES-192 key -- the encrypt-side CSPRNG checks (File::SOPS::Encrypted
+    ::_random_bytes) close the same defect class on the *generator* side
+    and this is its symmetric pair on the *consumer* side. The check
+    names the length received and the length expected; it never names
+    the key material. Crypt::Age 0.001 returns 32 bytes, and we cannot
+    rely on that -- the data key crosses an opaque CSPRNG boundary we
+    cannot see. Pinned by t/21-random-bytes.t (three new subtests: the
+    refusal covers 16/24/31/33/40, the error carries lengths not key
+    material, and a real round-trip with a 32-byte data key still
+    works). See karr #52.
   - POD: tell callers that JSON->true / JSON->false need
     `use JSON::MaybeXS qw(JSON);` in the calling code. The example used
     to work under a bare `use File::SOPS;` by accident (CryptX loads

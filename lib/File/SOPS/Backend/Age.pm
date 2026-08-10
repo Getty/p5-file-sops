@@ -106,6 +106,17 @@ sub decrypt_data_key {
     croak "age_keys must be an array ref" unless ref($age_keys) eq 'ARRAY';
     croak "identities must be an array ref" unless ref($identities) eq 'ARRAY';
 
+    # The data key the SOPS data path consumes is exactly 32 bytes -- the
+    # AES-256 key every value in the document is encrypted under. A short
+    # return is silently accepted by CryptX as a working AES-128/192 key
+    # (karr #52, the same defect class as the data-key / IV checks in
+    # Encrypted::_random_bytes); a long return is not a valid AES key and
+    # dies inside CryptX, attributed to gcm and naming neither the CSPRNG
+    # nor the age layer. Crypt::Age 0.001 happens to return 32 bytes; we
+    # cannot rely on that, and we cannot see the inner values (file key,
+    # nonce, ephemeral key) that produced the result.
+    my $EXPECTED_DATA_KEY_LEN = 32;
+
     for my $key_info (@$age_keys) {
         my $encrypted = $key_info->{enc};
         next unless defined $encrypted;
@@ -120,7 +131,15 @@ sub decrypt_data_key {
             );
         };
 
-        return $data_key if defined $data_key;
+        next unless defined $data_key;
+
+        croak sprintf(
+            "Crypt::Age returned a data key of %d bytes, expected %d",
+            length($data_key),
+            $EXPECTED_DATA_KEY_LEN,
+        ) if length($data_key) != $EXPECTED_DATA_KEY_LEN;
+
+        return $data_key;
     }
 
     croak "Could not decrypt data key with any of the provided identities";

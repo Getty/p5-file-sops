@@ -5,6 +5,7 @@ use Test::More;
 
 use File::SOPS;
 use File::SOPS::Encrypted;
+use File::SOPS::Backend::Age;
 use Crypt::Age;
 use Crypt::PRNG ();
 use MIME::Base64 qw(decode_base64);
@@ -198,6 +199,84 @@ subtest 'the checked helper still produces what the wire format needs' => sub {
         { password => 'plaintext-that-must-not-be-written' },
         'the document round-trips',
     );
+};
+
+# ----------------------------------------------------------------------------
+# Crypt::Age's own CSPRNG calls (file key, nonce, ephemeral key) live inside
+# Crypt::Age and we cannot see them from here -- karr #52 notes this is fixed
+# upstream, not here. What we *can* check is the one byte sequence Crypt::Age
+# hands back across our boundary: the data key itself, in decrypt_data_key.
+# A 16-byte (AES-128) or 24-byte (AES-192) data key is silently accepted by
+# CryptX; a 32-byte one is AES-256 and the only length the reference impl
+# generates. This is the same defect class as the data-key / IV checks above.
+# ----------------------------------------------------------------------------
+
+subtest 'a wrong-length data key from Crypt::Age is refused' => sub {
+    # Encrypt a real document so we have an age stanza to feed back in.
+    my $doc = encrypt_a_document();
+
+    # Recover the armored age stanza from the document and feed it back to
+    # decrypt_data_key under a mocked Crypt::Age::decrypt. The mock returns
+    # exactly the requested length, bypassing the real ChaCha20-Poly1305 path.
+    my ($armored) = $doc =~ /(-----BEGIN AGE ENCRYPTED FILE-----.*?-----END AGE ENCRYPTED FILE-----)/s;
+    ok defined $armored, 'extracted an armored age stanza from the document';
+    my $fake_age_keys = [{ recipient => $public, enc => $armored }];
+
+    # The dangerous lengths are 16 and 24: both are valid AES key sizes, so
+    # CryptX accepts them and the document encrypts under a weakened key.
+    # 31 and 33 fail inside CryptX as "Invalid key size", unattributed.
+    for my $len (16, 24, 31, 33, 40) {
+        no warnings 'redefine';
+        local *Crypt::Age::decrypt = sub { return 'K' x $len };
+
+        my $dk = eval {
+            File::SOPS::Backend::Age->decrypt_data_key(
+                age_keys   => $fake_age_keys,
+                identities => [$secret],
+            );
+        };
+        my $err = $@;
+        is $dk, undef, "decrypt_data_key refuses a $len-byte data key";
+        like $err, qr/data key of \Q$len\E bytes/,
+            "  ... and names the length it received ($len)";
+        like $err, qr/expected 32/,
+            '  ... and names the length it expected';
+    }
+};
+
+subtest 'the refusal does not leak the (mocked) data key bytes' => sub {
+    my $doc = encrypt_a_document();
+    my ($armored) = $doc =~ /(-----BEGIN AGE ENCRYPTED FILE-----.*?-----END AGE ENCRYPTED FILE-----)/s;
+    my $fake_age_keys = [{ recipient => $public, enc => $armored }];
+
+    # Use a distinctive fill that no real data key would contain.
+    no warnings 'redefine';
+    local *Crypt::Age::decrypt = sub { return 'CANARYCANARYCANARYCANARY' };  # 24 bytes
+
+    my $dk = eval {
+        File::SOPS::Backend::Age->decrypt_data_key(
+            age_keys   => $fake_age_keys,
+            identities => [$secret],
+        );
+    };
+    my $err = $@;
+    is $dk, undef, 'decrypt_data_key refuses the canary-length key';
+    unlike $err, qr/CANARY/,
+        '  ... and the error carries lengths, not key material';
+};
+
+subtest 'a 32-byte data key from Crypt::Age is accepted' => sub {
+    # Round-trip with a normal Crypt::Age to confirm the check accepts the
+    # length it actually produces in the wild. If Crypt::Age ever changes
+    # its data-key length, this test goes red and points here.
+    my $doc = encrypt_a_document();
+
+    my $plaintext = File::SOPS->decrypt(
+        encrypted  => $doc,
+        identities => [$secret],
+    );
+    is_deeply $plaintext, { password => 'plaintext-that-must-not-be-written' },
+        'a real decrypt round-trips with a 32-byte data key';
 };
 
 done_testing;
