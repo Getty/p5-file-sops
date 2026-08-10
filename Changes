@@ -115,6 +115,26 @@ Revision history for File-SOPS
     type:str, unchanged.
     The error names the class and what to pass instead; it never names
     the value.
+  - BEHAVIOUR CHANGE: a JSON document with a REFERENCE as a leaf value is
+    now refused instead of written, closing the "known gap" the YAML guard
+    above left open. Cpanel::JSON::XS under allow_bignum writes a
+    Math::BigFloat or Math::BigInt as a bare JSON number, and an unblessed
+    SCALAR ref as bare true or false - the documented JSON::XS convention
+    for \1 / \0, not a Cpanel bug. detect_type calls every reference but a
+    JSON::PP::Boolean str, so the MAC digest covers the leaf's
+    STRINGIFICATION, and the document and its own MAC then stated different
+    things: \1 / \0 digests as SCALAR(0x...) (a heap address) while the
+    document carries true or false. Measured against sops 3.13.3, every
+    such document failed its own verification here and in sops -d (exit
+    51), written silently. The exception is an exact JSON::PP::Boolean,
+    which Cpanel writes as bare true/false - the one reference whose
+    document form and digest agree. A SUBCLASS of it is refused: detect_type
+    calls it bool but neither Cpanel nor the carrier pipeline writes it as
+    bare true/false, and the same defect was wearing the whitelist. Same
+    exception as on the YAML side, same exact-class rule, same "encrypted
+    slots are unaffected" rule, same rule that the error names the class
+    and never the value. See docs/adr/0008 (closes the "known gap, karr
+    #66" it explicitly filed).
   - SECURITY: the random data key and the per-value GCM nonce are now
     checked for length where they are generated, and there is only one
     generator left. _random_bytes existed twice, in File::SOPS and in

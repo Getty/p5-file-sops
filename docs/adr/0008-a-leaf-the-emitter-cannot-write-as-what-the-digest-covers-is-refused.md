@@ -132,6 +132,19 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   `Format::JSON::_reject_foreign_bignum`. Filed as karr #66 rather than folded
   in, so that this change stays the one the ticket describes.
 
+  **Closed by karr #66 (the edit to `_reject_foreign_bignum` that turns the
+  two-name allow_bignum whitelist into the same exact-class rule the YAML side
+  uses).** The JSON guard now refuses every referenced leaf except an exact
+  `JSON::PP::Boolean`, with the same message naming the class or ref kind and
+  never the value, the same exception, the same "encrypted slots are
+  unaffected" rule, and the same exact-class-rather-than-`->isa` discipline.
+  Measured against sops 3.13.3: `\1` / `\0` / `\$x` croak,
+  `JSON->true` / `JSON->false` still write as bare `true` / `false`, and
+  `t/26-json-unblessed-ref-guard.t` pins the whole exchange (13 subtests,
+  5 of them driven against the binary). No new ADR: the rationale is this
+  one's, and a karr #66 ADR would be a "same rule, same exception, same
+  rationale, JSON side" of itself.
+
 ### What changes for existing callers
 
 Nothing for any tree made of plain scalars, `undef`, hashes, arrays and

@@ -5,6 +5,7 @@ use Moo;
 use Carp qw(croak);
 use Cpanel::JSON::XS ();
 use Math::BigFloat ();
+use Scalar::Util qw(blessed);
 use File::SOPS::Encrypted;
 use namespace::clean;
 
@@ -204,30 +205,59 @@ sub emit {
     ));
 }
 
-# allow_bignum is what lets _float_carrier reach the wire, but it whitelists the
-# two classes for EVERYONE, not just for us -- so a Math::BigFloat or
-# Math::BigInt the CALLER put in the tree, which the encoder used to refuse
-# outright ("encountered object ... neither allow_blessed, convert_blessed nor
-# allow_tags"), would now be written as a bare number without a word.
+# Every referenced leaf the JSON emitter cannot write as the text the digest
+# covers. Closes the asymmetry Format::YAML closed in karr #65 / ADR 0008:
+# detect_type calls every reference but a JSON::PP::Boolean `str`, so the
+# digest covers the leaf's STRINGIFICATION, while Cpanel::JSON::XS -- with
+# allow_bignum widened for _float_carrier -- writes a Math::BigFloat /
+# Math::BigInt as a bare number, and writes an UNBLESSED scalar ref as a bare
+# true/false (the documented JSON::XS convention for \1 / \0). Measured
+# against sops 3.13.3, unencrypted leaf x_unencrypted:
 #
-# That is not merely a laxer input rule. detect_type calls a blessed leaf `str`,
-# so the digest covers the object's stringification verbatim while the document
-# carries it as a JSON number that Go reparses as a float64 and re-derives:
-# Math::BigFloat->new('1.00000000000000000000000000001') digests as those 29
-# digits and reads back as 1. A document that fails its own MAC, produced
-# silently, which is exactly what this whole change exists to stop.
+#   Math::BigFloat->new("1.5")  bare number 1.5         self-MAC FAIL, exit 51
+#   Math::BigInt->new("42")     bare number 42          self-MAC FAIL, exit 51
+#   bless {a=>1}, 'Foo'         Cpanel refuses           self-MAC FAIL, exit 51
+#   \1 (unblessed)              bare true                self-MAC FAIL, exit 51
+#   \0 (unblessed)              bare false               self-MAC FAIL, exit 51
 #
-# Our own carriers are created below, after this has run on the caller's tree.
+# All five -- the two we caught, the two Cpanel catches on its own, and the
+# two nobody caught -- are the same defect: document and digest state
+# different things, and the file is unreadable, written silently.
+#
+# The exception is the EXACT class, not ->isa: detect_type accepts a
+# JSON::PP::Boolean subclass as bool, but neither Cpanel nor the carrier
+# pipeline knows how to write it as bare true/false, and the guard's job is
+# what the emitter can write. ref($node) eq 'JSON::PP::Boolean' matches the
+# one class $YAML::XS::Boolean = 'JSON::PP' produces, JSON->true / JSON->false
+# produce, and every JSON::MaybeXS backend produces -- the only reference
+# whose document form and digest agree.
+#
+# Unblessed refs are in scope deliberately: \1 and \0 are the karr #66 case
+# and the callback already has them in hand. They are not blessed, so the
+# earlier "Math::BigFloat / Math::BigInt by name" rule could not see them.
+#
+# Not in assert_representable: that runs on the verify side too, and over
+# leaves that are about to become ENC[...] strings. A referenced leaf in an
+# ENCRYPTED slot works in both formats today (type:str, plaintext = the same
+# stringification) and must keep working. See docs/adr/0008 and karr #66.
 sub _reject_foreign_bignum {
     my ($node) = @_;
 
-    return unless ref($node) eq 'Math::BigFloat' || ref($node) eq 'Math::BigInt';
+    return if ref($node) eq 'JSON::PP::Boolean';
 
-    croak "cannot write a " . ref($node) . " to a SOPS document: the digest "
-        . "covers its stringification while the document would carry it as a "
-        . "JSON number, and the two disagree for any value a double cannot "
-        . "hold. Pass a plain Perl number, or a string to store the digits "
-        . "exactly";
+    my $what = Scalar::Util::blessed($node)
+        ? "a leaf blessed into " . ref($node)
+        : "an unblessed " . ref($node) . " reference";
+
+    croak "cannot write $what to a SOPS document: Cpanel::JSON::XS writes it "
+        . "differently from the stringification the digest covers -- a "
+        . "Math::BigFloat or Math::BigInt as a bare number, an unblessed "
+        . "scalar reference as bare true/false, any other object is refused "
+        . "by Cpanel itself. The document and its own MAC would state "
+        . "different things, and neither sops nor this module could read the "
+        . "file. Pass a plain Perl scalar, or the string you want stored. A "
+        . "boolean has to be an exact JSON::PP::Boolean (JSON->true / "
+        . "JSON->false); a subclass of it is written as a tag as well";
 }
 
 # Does this emitter's own rendering of the float come back as the same double?
@@ -311,6 +341,31 @@ measured to reach JSON as a bare number instead of a quoted string. A float that
 already emitted faithfully keeps exactly the bytes it had, C<-0.0> included.
 C<NaN> and C<Inf> are unchanged. See
 L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
+
+B<A reference as a leaf value is refused>, with one exception. L<Cpanel::JSON::XS>
+under C<allow_bignum> writes a C<Math::BigFloat> / C<Math::BigInt> as a bare
+number, and an unblessed C<\1> / C<\0> as bare C<true> / C<false> -- the
+documented JSON::XS convention for SCALAR refs -- while
+L<File::SOPS::Encrypted/detect_type> calls the leaf C<str> so the MAC digest
+covers its B<stringification>. The document and its own MAC then state different
+things, and the file is unreadable to sops and to this module alike. Until
+0.003 it was written anyway, without a word; now it dies naming the class or
+reference kind (never the value).
+
+The exception is an exact L<JSON::PP::Boolean>, which this emitter writes as
+bare C<true> / C<false> -- the one reference whose document form and digest
+agree. A B<subclass> of it is not covered: C<detect_type> calls it C<bool> but
+Cpanel refuses it (or the carrier pipeline writes it as a tag), so it is
+refused like any other object.
+
+Only leaves that reach the document B<verbatim> can trigger this -- values
+excluded by the encryption rules, everything in a plaintext document, and the
+C<sops> section. A value that gets encrypted is an C<ENC[...]> string by the
+time this method sees it, so an object in an encrypted slot is unaffected and
+still stores its stringification as C<type:str>. L<File::SOPS::Format::YAML>
+has refused the same leaves since 0.003; see
+L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
+and karr #66 for the unblessed-ref half of the same defect.
 
 =cut
 

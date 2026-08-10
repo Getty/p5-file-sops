@@ -738,10 +738,15 @@ emitter that writes something else instead produces a document that fails its
 own MAC. Both handlers use it: L<File::SOPS::Format::YAML> refuses every
 reference except an exact L<JSON::PP::Boolean>, because L<YAML::XS> writes the
 rest as C<!!perl/> tagged structures; L<File::SOPS::Format::JSON> refuses
-L<Math::BigFloat> and L<Math::BigInt> by name, because the C<allow_bignum>
-its own carrier needs would otherwise make a B<caller-supplied> one a bare
-number where the encoder used to refuse the document outright. See
-L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>.
+every reference except an exact L<JSON::PP::Boolean>, for the same reason --
+under C<allow_bignum> Cpanel::JSON::XS writes a Math::BigFloat or Math::BigInt
+as a bare number and an unblessed C<\1> / C<\0> as bare C<true> / C<false>.
+Both messages name the class or ref kind and never the value; the exception
+is the exact class (a C<JSON::PP::Boolean> subclass is refused the same way
+C<detect_type> accepts it -- the guard's question is what the emitter can
+write). See
+L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
+(karr #65 on the YAML side, karr #66 closing the known gap on the JSON side).
 
 =back
 
