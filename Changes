@@ -1,6 +1,20 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Pin the parser-disagreement fidelity gap against the real sops binary.
+    A handful of bare scalars -- 0x10, 1_000 in YAML, a JSON integer above
+    2^64 -- resolve to different types between Go's yaml.v3 / encoding/json
+    and this distribution's YAML::XS / Cpanel::JSON::XS. Both directions
+    round-trip self-consistently and neither is a MAC failure: a document
+    File::SOPS writes is accepted by sops and vice versa. The value comes
+    back as a different type than sops would have produced for the same
+    input (the YAML 0x10 comes back as the string "0x10", not the int 16;
+    a JSON int above 2^64 round-trips as a string here while sops would
+    have truncated it to a float). The gap is recorded rather than fixed
+    in ADR 0002 ("Type detection now depends on the parser, so parsers
+    can disagree") and is now pinned by an interop subtest so a future
+    attempt to close it has to break that assertion on purpose. No code
+    or wire bytes move.
   IMPORTANT - if you encrypted data with 0.001 or 0.002, read this.
   The defects below could corrupt or misrepresent stored values, and
   two of them are not repairable from the existing ciphertext:

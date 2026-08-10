@@ -1749,4 +1749,169 @@ CHILD
         or diag("child perl printed '$read_back'");
 };
 
+###############################################################################
+# Parser-disagreement fidelity gap (karr #29, ADR 0002 §"Type detection now
+# depends on the parser, so parsers can disagree")
+#
+# sops 3.13.3 and File::SOPS both take the value type from the parser, but
+# they use different parsers -- yaml.v3 vs YAML::XS, encoding/json vs
+# Cpanel::JSON::XS -- and a handful of bare scalars resolve to different
+# types between them. Both directions round-trip self-consistently and
+# neither is a MAC failure; a document we write is accepted by sops and vice
+# versa. So this is a fidelity gap, not a corruption: the value comes back
+# as a different type than sops would have produced for the same input.
+#
+# This subtest pins the gap against the real sops binary so the difference
+# is visible and so a future "fix" cannot silently reclassify one of these
+# scalars without breaking this assertion. The ticket is recorded rather
+# than fixed (ADR 0002); fixing it would mean either post-processing the
+# parser output against YAML 1.1/1.2 resolution rules or changing parsers,
+# and the parser change moves bytes on the wire (ADR 0001).
+# -----------------------------------------------------------------------------
+subtest 'Parser-disagreement fidelity gap (sops 3.13.3, recorded, karr #29)' => sub {
+    # ---- YAML: 0x10 and 1_000 resolve to int in yaml.v3, str in YAML::XS ----
+    my $yaml_src = <<'YAML';
+hex_int: 0x10
+underscored_int: 1_000
+half: .5
+YAML
+
+    my $plain_yaml = "$tempdir/parser_gap.yaml";
+    write_file($plain_yaml, $yaml_src);
+
+    # sops encrypts these: 0x10 -> type:int, plaintext 16; 1_000 -> type:int,
+    # plaintext 1000; .5 -> type:float, plaintext 0.5.
+    my $sops_enc = `$sops_bin -e --age $public $plain_yaml 2>&1`;
+    is($? >> 8, 0, '[yaml] sops encrypts the bare-scalar gap fixture')
+        or diag($sops_enc);
+    like($sops_enc, qr/hex_int"?\s*:\s*"?ENC\[[^\]]*type:int\]/,
+        '[yaml] sops types 0x10 as int');
+    like($sops_enc, qr/underscored_int"?\s*:\s*"?ENC\[[^\]]*type:int\]/,
+        '[yaml] sops types 1_000 as int');
+
+    # File::SOPS decrypts and gives back the canonicalised int (16, 1000)
+    # because sops stored the canonical plaintext -- a number on the wire
+    # IS the number, regardless of how it was spelled in the source. This
+    # is not the gap.
+    my $got = eval {
+        File::SOPS->decrypt(
+            encrypted  => $sops_enc,
+            identities => [$secret],
+            format     => 'yaml',
+        );
+    };
+    is($@, '', '[yaml] File::SOPS verifies the document sops wrote')
+        or diag("died: $@");
+    next unless $got;
+    cmp_ok($got->{hex_int}, '==', 16,
+        '[yaml] 0x10 comes back as the int sops stored (16)');
+    cmp_ok($got->{underscored_int}, '==', 1000,
+        '[yaml] 1_000 comes back as the int sops stored (1000)');
+    cmp_ok($got->{half}, '==', 0.5, '[yaml] .5 comes back as 0.5');
+
+    # The actual gap: File::SOPS encrypts the SAME bare scalars and types
+    # them as str, because YAML::XS does not resolve them. The document
+    # verifies self-consistently and sops accepts it -- but sops decrypts
+    # back as the source text (a string), not as the int sops would have
+    # produced for the same input.
+    my $perl_enc = eval {
+        File::SOPS->encrypt(
+            data       => { hex_int => '0x10', underscored_int => '1_000', half => '.5' },
+            recipients => [$public],
+            format     => 'yaml',
+        );
+    };
+    is($@, '', '[yaml] File::SOPS encrypts the bare-scalar gap fixture')
+        or diag("died: $@");
+    next unless $perl_enc;
+
+    like($perl_enc, qr/hex_int"?\s*:\s*"?ENC\[[^\]]*type:str\]/,
+        '[yaml] File::SOPS types a bare 0x10 as str (YAML::XS does not resolve it)');
+    like($perl_enc, qr/underscored_int"?\s*:\s*"?ENC\[[^\]]*type:str\]/,
+        '[yaml] File::SOPS types a bare 1_000 as str (YAML::XS does not resolve it)');
+    like($perl_enc, qr/half"?\s*:\s*"?ENC\[[^\]]*type:str\]/,
+        '[yaml] a string ".5" is a string here too (YAML::XS does not see it as a bare scalar because we passed a Perl string)');
+
+    my $perl_file = "$tempdir/perl_yaml_gap.yaml";
+    write_file($perl_file, $perl_enc);
+
+    my $sops_dec = `$sops_bin -d $perl_file 2>&1`;
+    is($? >> 8, 0,
+        '[yaml] sops accepts a YAML::XS-typed document (verified self-consistently)')
+        or diag("sops output: $sops_dec");
+
+    # The fidelity gap, pinned: sops decrypts the bare 0x10 and 1_000 back as
+    # the source text -- str -- not as int 16 and int 1000. Same input,
+    # different answer than sops would give for a literal 16 or 1000. sops
+    # quotes strings in its output, so accept either form.
+    if ($? >> 8 == 0) {
+        like($sops_dec, qr/^hex_int: "0x10"$/m,
+            '[yaml] sops decrypts our 0x10 back as the string "0x10", not the int 16');
+        like($sops_dec, qr/^underscored_int: "1_000"$/m,
+            '[yaml] sops decrypts our 1_000 back as the string "1_000", not the int 1000');
+    }
+
+    # ---- JSON: an integer above 2^64 ------------------------------
+    # Cpanel::JSON::XS hands a JSON int above 2^64 back as a plain string
+    # (POK only, no NOK), so File::SOPS types it str and writes the digits
+    # verbatim. Go's encoding/json makes it a float64 and sops writes
+    # type:float with plaintext 18446744073709552000. Both directions
+    # round-trip self-consistently; sops accepts what we write. Same shape
+    # as the YAML scalars above.
+    #
+    # The Perl side: a bare int above int64 is REFUSED (karr #28, ticket
+    # #10-integer-range.t) because no wire form preserves it -- so the
+    # gap is only reachable through a Perl STRING holding the digits, or
+    # through a JSON parse of such a literal.
+    my $json_above_int64 = '18446744073709551616';   # 2**64 exactly
+
+    # File::SOPS: bare string is type:str (Perl's flags, not the gap).
+    my $perl_json_enc = eval {
+        File::SOPS->encrypt(
+            data       => { above_int64 => $json_above_int64 },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+    is($@, '', '[json] File::SOPS encrypts the above-int64 fixture as a string')
+        or diag("died: $@");
+    next unless $perl_json_enc;
+    like($perl_json_enc, qr/"above_int64"\s*:\s*"ENC\[[^\]]*type:str\]"/,
+        '[json] File::SOPS types a string above int64 as str (digits verbatim)');
+
+    # sops: a JSON NUMBER above 2^64 becomes a float64 (18446744073709552000)
+    # and is typed type:float with the truncated plaintext.
+    my $json_num_src = <<JSON;
+{
+  "above_int64_num": 18446744073709551616
+}
+JSON
+    my $plain_json = "$tempdir/parser_gap.json";
+    write_file($plain_json, $json_num_src);
+    my $sops_json_enc = `$sops_bin -e --age $public $plain_json 2>&1`;
+    is($? >> 8, 0, '[json] sops encrypts a JSON number above 2^64')
+        or diag($sops_json_enc);
+    like($sops_json_enc, qr/"above_int64_num"\s*:\s*"ENC\[[^\]]*type:float\]"/,
+        '[json] sops types a JSON number above 2^64 as float (truncated)');
+
+    # The gap, pinned: sops decrypts its own JSON float back as the truncated
+    # number (18446744073709552000), and a sops-encrypted file with this value
+    # also has its MAC computed against the truncated plaintext, so neither
+    # side can recover the original digits. The Perl-encrypted string file
+    # above is also self-consistent -- sops decrypts it back as the exact
+    # digits -- but the gap is that two implementations asked the same JSON
+    # question ("what is 18446744073709551616?") and got two different answers.
+    my $enc_file = "$tempdir/sops_json_above_int64.json";
+    system("$sops_bin -e --age $public --input-type json --output-type json "
+         . "$plain_json > $enc_file 2>/dev/null");
+    is($? >> 8, 0, '[json] sops re-encrypted the above-int64 fixture to a file')
+        or diag("sops failed on $plain_json");
+    if ($? >> 8 == 0) {
+        my $dec = `$sops_bin -d --input-type json --output-type json $enc_file 2>&1`;
+        like($dec, qr/"above_int64_num"\s*:\s*18446744073709552000/,
+            '[json] sops reads its own truncated float back as '
+            . '18446744073709552000, not the original 18446744073709551616');
+    }
+};
+
 done_testing;
