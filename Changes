@@ -67,6 +67,16 @@ Revision history for File-SOPS
     can disagree") and is now pinned by an interop subtest so a future
     attempt to close it has to break that assertion on purpose. No code
     or wire bytes move.
+  - Known gap, not fixed in this revision: when _reject_foreign_bignum
+    (Format/JSON.pm) or _reject_unwritable_leaf (Format/YAML.pm) refuses
+    a leaf, the message names the class and the cause but not where in
+    the document the leaf sits. In a large document with one bad leaf
+    that is a manual search (karr #68). The fix is to thread a path
+    argument through canonical_float_tree to both reject callbacks --
+    the same shape _at_path / _sorted_leaves already use in
+    _compute_mac -- but that is a change to the format lane's walks and
+    is not within the API lane's surface. Logged for the format lane to
+    pick up; the current behaviour is unchanged.
   IMPORTANT - if you encrypted data with 0.001 or 0.002, read this.
   The defects below could corrupt or misrepresent stored values, and
   two of them are not repairable from the existing ciphertext:
