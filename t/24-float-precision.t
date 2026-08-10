@@ -374,7 +374,7 @@ subtest 'a caller-supplied Math::BigFloat as an unencrypted JSON leaf is refused
     };
 
     ok(!defined $encrypted, 'encrypt() does not return a document');
-    like($@, qr/cannot write a Math::BigFloat to a SOPS document/,
+    like($@, qr/cannot write a leaf blessed into Math::BigFloat to a SOPS document/,
         'and dies with the foreign-bignum guard message, not a generic JSON encoder error');
 };
 
@@ -396,7 +396,7 @@ subtest 'a caller-supplied Math::BigInt as an unencrypted JSON leaf is refused' 
     };
 
     ok(!defined $encrypted, 'encrypt() does not return a document');
-    like($@, qr/cannot write a Math::BigInt to a SOPS document/,
+    like($@, qr/cannot write a leaf blessed into Math::BigInt to a SOPS document/,
         'and dies with the foreign-bignum guard message');
 };
 
@@ -418,7 +418,7 @@ subtest 'the guard reaches a foreign bignum nested inside a hash and inside an a
         );
     };
     ok(!defined $nested, 'a bignum nested inside a hash is refused');
-    like($@, qr/cannot write a Math::BigFloat to a SOPS document/, 'with the guard message');
+    like($@, qr/cannot write a leaf blessed into Math::BigFloat to a SOPS document/, 'with the guard message');
 
     my $in_array = eval {
         File::SOPS->encrypt(
@@ -431,7 +431,7 @@ subtest 'the guard reaches a foreign bignum nested inside a hash and inside an a
         );
     };
     ok(!defined $in_array, 'a bignum inside an array is refused');
-    like($@, qr/cannot write a Math::BigInt to a SOPS document/, 'with the guard message');
+    like($@, qr/cannot write a leaf blessed into Math::BigInt to a SOPS document/, 'with the guard message');
 };
 
 ###############################################################################
