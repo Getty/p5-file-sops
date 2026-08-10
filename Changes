@@ -1,6 +1,17 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Note the deliberate structural coupling in File::SOPS::edit:
+    _is_sops_not_a_mapping keys on File::SOPS::Metadata::from_hash's
+    exception text to tell a reserved-key refusal from a parse failure.
+    A structural fix (syntax-only parse in the format handlers, leaving
+    the sops section in the tree) reaches well past the one call site
+    that needs the distinction and into the format lane (karr #51). The
+    coupling is documented at the call site and pinned by t/17-in-place-
+    and-edit.t in both directions -- all four shapes of a hand-written
+    sops entry get the reserved-key message, broken YAML gets the parse
+    message, and a Metadata.pm rewording that breaks the classifier fails
+    a test rather than silently restoring the regression. No code change.
   - Document the deliberate "match sops" decision on decrypt_file output
     permissions: a new file is created with 0666 & ~umask (the open '>' rule),
     not with a hard 0600. The "How a file is written" POD now records that
