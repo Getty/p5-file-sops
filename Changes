@@ -1,6 +1,13 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Document the deliberate divergence: edit re-keys the file, sops edit does
+    not. The "Editing re-keys the file" section in File::SOPS::edit's POD now
+    points forward to the future data_key => $bytes argument that would close
+    the gap, and notes that the cost of closing it is raw key material on the
+    public API, so it is an API decision rather than a refactor. No behaviour
+    change; the implementation has said this in a comment since edit shipped,
+    but a one-line POD tweak makes it a contract. See karr #41.
   - Pin the parser-disagreement fidelity gap against the real sops binary.
     A handful of bare scalars -- 0x10, 1_000 in YAML, a JSON integer above
     2^64 -- resolve to different types between Go's yaml.v3 / encoding/json

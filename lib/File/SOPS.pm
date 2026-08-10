@@ -1193,6 +1193,14 @@ not affect the MAC.
 C<ignore_mac> is passed through to L</decrypt>; editing a file you could not
 verify re-signs whatever it contained, so prefer to fail.
 
+A C<data_key =E<gt> $bytes> argument would close the gap -- pass the
+existing data key through and this method stops re-keying -- but it puts
+raw key material on the public API, which is a real decision (and
+probably an ADR) rather than a refactor. It will be worth doing once a
+backend other than age exists (karr #39): today the refusal only fires
+on documents this distribution could not have produced in the first
+place.
+
 =cut
 
 # The config file, spelled exactly. Measured against sops 3.13.3: a .sops.yml
