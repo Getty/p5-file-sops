@@ -1,6 +1,15 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Refuse a path_regex that uses a construct Go RE2 does not support, at
+    match time. creation_rules_for compiled the same string as Perl here
+    and as Go RE2 in sops, and a pattern that compiles here but uses
+    lookarounds or backreferences silently selects a different rule (or
+    none) in sops without either side saying so. Lookarounds
+    ((?= / (?! / (?<= / (?<!), backreferences (\1..\9), and anything else
+    that is unambiguously RE2-incompatible are now refused here, naming
+    the construct and the config file. (?i), character classes, standard
+    quantifiers and anchors compile in both and pass. See karr #53.
   - Note the deliberate structural coupling in File::SOPS::edit:
     _is_sops_not_a_mapping keys on File::SOPS::Metadata::from_hash's
     exception text to tell a reserved-key refusal from a parse failure.

@@ -1343,9 +1343,15 @@ string with Go's RE2, which is not the same dialect: C<(?i)> works in both, but
 a lookbehind compiles here and makes sops stop with C<error parsing regexp>
 (measured on 3.13.3). A C<path_regex> written in either dialect alone will
 therefore pick different rules -- or no rule -- depending on which of the two
-tools reads the config, and this does not warn about it. Keep a C<path_regex>
-to what both accept. One that will not compile at all is reported here naming
-the config file and the rule; sops reports it too.
+tools reads the config. The constructs that RE2 does not have -- lookarounds
+(C<< (?= >>, C<< (?! >>, C<< (?<= >>, C<< (?<! >>) and backreferences
+(C<\1>..C<\9>) -- are refused here at match time, naming the offending
+construct and the config file; everything that compiles in both
+(C<(?i)>, C<.>, standard quantifiers, character classes, anchors) passes.
+One that will not compile at all is reported here naming the config file
+and the rule; sops reports it too. Keep a C<path_regex> to what both
+accept, and you can rely on the refusal rather than on memorising the
+dialect differences.
 
 =head3 Rules this refuses rather than half-applies
 
@@ -1556,10 +1562,57 @@ sub _first_matching_rule {
             . "parsing regexp\"."
             if $@;
 
+        # sops compiles the same string with Go RE2, which is not the same
+        # dialect. A pattern that compiles here but uses an RE2-incompatible
+        # construct silently selects a different rule in sops (or none), so
+        # the two tools disagree without either one saying so. Refuse the
+        # constructs that are unambiguous -- lookarounds and backreferences
+        # -- and let everything that is in both (?i, character classes,
+        # standard quantifiers, anchors) through.
+        my $incompatible = _re2_incompatible_construct($regex);
+        if ($incompatible) {
+            my $shown = length($regex) > 60
+                ? substr($regex, 0, 57) . '...'
+                : $regex;
+            croak "Creation rule $index in '$config' has a path_regex "
+                . "('$shown') that uses $incompatible, which Go RE2 does "
+                . "not support and sops will refuse to compile. Either "
+                . "rewrite the pattern in constructs both dialects accept, "
+                . "or drop the rule. See the POD on creation_rules_for.";
+        }
+
         return ($rule, $index) if $matched;
     }
 
     return;
+}
+
+# What construct in this pattern, if any, Go RE2 will not compile? Returns a
+# human-readable name (e.g. "a lookbehind") or the empty string if nothing in
+# the pattern is RE2-incompatible. The check is intentionally conservative:
+# only the unambiguous cases -- lookarounds (?=, (?!, (?<=, (?<!) and
+# backreferences (\1..\9) -- because RE2 silently rejects them while Perl
+# compiles them. Possessive quantifiers and atomic groups are also RE2-unable
+# but Perl does not have them in the same form (Perl writes them as (?>...)
+# or with the /a modifier), so flagging those would produce false positives on
+# patterns that compile the same way in both. See karr #53.
+sub _re2_incompatible_construct {
+    my ($regex) = @_;
+    return '' unless defined $regex;
+
+    # Lookarounds: (?=  (?!  (?<=  (?<!
+    return 'a lookahead (?=...) or negative lookahead (?!...)'
+        if $regex =~ /\(\?[=!]/;
+    return 'a lookbehind (?<=...) or negative lookbehind (?<!...)'
+        if $regex =~ /\(\?<?[=!]/;
+
+    # Backreferences. \1..\9 are unambiguous in both dialects; \g{1} is the
+    # Perl-only spelling and would already be rejected by RE2, but the simpler
+    # form is what most configs use.
+    return 'a backreference (\\1, \\2, ...)'
+        if $regex =~ /\\[1-9]/;
+
+    return '';
 }
 
 # Is a creation rule's field set, in the sense Go's zero value gives it? An
