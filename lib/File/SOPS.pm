@@ -377,6 +377,14 @@ umask. That is what sops's C<--output> does as well, so a decrypted file this
 writes is no more and no less protected than before -- if that is too open for
 plaintext, set the umask or the mode yourself.
 
+The match-sops decision is deliberate (karr #45): the alternative, a hard
+C<0600> on every new output, would break a caller whose next step is
+another process reading the file -- loudly, not silently -- and would
+diverge from the reference implementation without a measurable security
+gain over a umask set to 077 by the caller. L</edit> uses 0600 for its
+own temporary copy, which is a different question -- that file is known
+to be removed at the end of the call rather than passed on.
+
 =back
 
 A target that exists and is B<not a regular file> -- C</dev/stdout>,

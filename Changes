@@ -1,6 +1,13 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Document the deliberate "match sops" decision on decrypt_file output
+    permissions: a new file is created with 0666 & ~umask (the open '>' rule),
+    not with a hard 0600. The "How a file is written" POD now records that
+    the alternative was considered and rejected (karr #45): it would break a
+    caller whose next step is another process reading the file, and would
+    diverge from the reference implementation without a measurable security
+    gain over a caller-set umask 077. No behaviour change.
   - Document the deliberate divergence: edit re-keys the file, sops edit does
     not. The "Editing re-keys the file" section in File::SOPS::edit's POD now
     points forward to the future data_key => $bytes argument that would close
