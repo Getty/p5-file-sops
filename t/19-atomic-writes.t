@@ -370,4 +370,139 @@ subtest 'a target whose directory does not exist is still named in the error' =>
               . 'caller nothing about which path was wrong');
 };
 
+###############################################################################
+# A read-only target is refused, with the file the caller asked for named
+###############################################################################
+#
+# sops -e -i refuses a chmod 0444 file with "Could not open in-place file for
+# writing: ...: permission denied" (measured, 3.13.3). The atomic write replaced
+# the old open '>' path, and rename() checks the directory, not the file, so
+# this is the one refusal the atomic write silently dropped. Every method that
+# goes through _replace_file has to enforce it.
+subtest 'a read-only target is refused and left untouched' => sub {
+    my $sub   = scratch();
+    my $plain = "db:\n  password: secret123\n";
+
+    my $ro_in = plaintext_file($plain, dir => $sub, name => 'ro-in.yaml');
+    chmod 0444, $ro_in or die $!;
+    my $before_in = read_file($ro_in);
+
+    my $ro_out = "$sub/ro-out.yaml";
+    write_file($ro_out, "placeholder: previous contents\n");
+    chmod 0444, $ro_out or die $!;
+    my $before_out = read_file($ro_out);
+
+    my $enc_in = encrypted_file(data => { db => { password => 'shh' } },
+                                dir => $sub, name => 'ro-enc.yaml');
+    chmod 0444, $enc_in or die $!;
+    my $before_enc = read_file($enc_in);
+
+    my $dec_in = "$sub/ro-dec-input.yaml";
+    write_file($dec_in, File::SOPS->encrypt(
+        recipients => [$public], format => 'yaml',
+        data => { a => 'b' }));
+    my @known = ('ro-in.yaml', 'ro-out.yaml', 'ro-enc.yaml', 'ro-dec-input.yaml');
+
+    for my $case ({
+        name => 'encrypt_in_place',
+        code => sub { File::SOPS->encrypt_in_place(file => $ro_in,
+                                                   recipients => [$public]) },
+        file => $ro_in,
+        before => $before_in,
+    }, {
+        name => 'decrypt_file',
+        code => sub {
+            File::SOPS->decrypt_file(input => $dec_in, output => $ro_out,
+                                     identities => [$secret]);
+        },
+        file => $ro_out,
+        before => $before_out,
+    }, {
+        name => 'rotate',
+        code => sub { File::SOPS->rotate(file => $enc_in,
+                                         identities => [$secret]) },
+        file => $enc_in,
+        before => $before_enc,
+    }, {
+        name => 'encrypt_file (existing read-only output)',
+        code => sub {
+            File::SOPS->encrypt_file(input => $ro_in, output => $ro_out,
+                                     recipients => [$public]);
+        },
+        file => $ro_out,
+        before => $before_out,
+    }) {
+        my $err = error_from($case->{code});
+        like($err, qr/permission denied/i,
+            "$case->{name}: refused with the sops wording")
+            or diag("sops reports 'Could not open in-place file for writing: "
+                  . "$case->{file}: permission denied'");
+        is(read_file($case->{file}), $case->{before},
+            "$case->{name}: the file is untouched")
+            or diag('the failure that has to be raised BEFORE any work is '
+                  . 'doing the work');
+        is_deeply([strays($sub, @known)], [],
+            "$case->{name}: nothing left in the directory")
+            or diag('the refusal has to precede the tempfile too');
+    }
+};
+
+subtest 'edit refuses a read-only file too, before the re-encrypt' => sub {
+    # The refusal lives in _replace_file, which edit reaches only after the
+    # editor ran and the result re-parsed. The check therefore costs the
+    # editor nothing when the file is writable, and saves edit from
+    # re-encrypting over a read-only file when it is not.
+    my $file = encrypted_file(data => { secret => 'shh' });
+    chmod 0444, $file or die $!;
+    my $before = read_file($file);
+
+    my $script = "$dir/editor-ro-edit.pl";
+    write_file($script, <<"PERL");
+use strict;
+use warnings;
+my \$file = \$ARGV[-1];
+open my \$out, '>', \$file or die \$!;
+print \$out "secret: edited\\n";
+close \$out;
+PERL
+    my $ed = [$^X, $script];
+
+    my $err = error_from(sub {
+        File::SOPS->edit(file => $file, identities => [$secret], editor => $ed)
+    });
+
+    like($err, qr/permission denied/i, 'edit is refused at the write step');
+    is(read_file($file), $before, 'and the encrypted file is untouched')
+        or diag('the editor wrote plaintext to the temp file copy, which '
+              . 'is fine; the refusal has to come before _replace_file '
+              . 'would overwrite the original');
+};
+
+subtest 'a target that has to be created is not refused for permission' => sub {
+    # The check is "exists AND not writable", not "not writable" -- a new
+    # file in a writable directory is none of the target's business, and the
+    # existing tempfile() croak already covers the directory case.
+    my $in = plaintext_file("a: b\n");
+    my $sub = scratch();
+    my $fresh = "$sub/fresh.yaml";
+
+    ok(File::SOPS->encrypt_file(input => $in, output => $fresh,
+                                recipients => [$public]),
+        'a writable directory and a new file proceeds as before')
+        or diag('the check is on the target, not on the directory');
+};
+
+subtest 'a writable target still works (the check is not a false positive)' => sub {
+    my $sub = scratch();
+    my $file = plaintext_file("a: b\n", dir => $sub);
+    chmod 0644, $file or die $!;
+
+    File::SOPS->encrypt_in_place(file => $file, recipients => [$public]);
+    like(read_file($file), qr/ENC\[AES256_GCM,/,
+        'a 0644 file is encrypted normally')
+        or diag('the check is on the file, not on some other condition');
+    is(sprintf('%04o', (stat $file)[2] & 07777), '0644',
+        'and keeps its mode');
+};
+
 done_testing;
