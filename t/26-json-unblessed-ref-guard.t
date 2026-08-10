@@ -39,6 +39,14 @@ use Crypt::Age;
 # guard. YAML's behaviour is unchanged by this ticket; cases 1 and 2 below are
 # JSON-only.
 #
+# Karr #67 (subtest 6) closes the OTHER silent-corruption side of the same
+# defect, for ENCRYPTED slots: an unblessed ref there was accepted, written as
+# ENC[...,type:str] with a heap address as the plaintext, and read back as that
+# address -- the file verified (doc and digest agreed) but the stored value
+# was unrecognisable. The new assert_representable guard refuses it at encrypt
+# time, in JSON and YAML alike. Subtest 6 used to assert the SHAPE of the
+# pre-fix happy path; it now asserts the refusal.
+#
 # Interop is required: a green perl-only suite proves the library agrees with
 # itself, which is the failure mode here. The cases that would otherwise be
 # silent bugs only fail against sops, so a missing sops binary is a skip, not
@@ -335,21 +343,34 @@ subtest 'a JSON::PP::Boolean subclass is refused too (JSON)' => sub {
 };
 
 ###############################################################################
-# 6. A \1 in an ENCRYPTED slot is unaffected: _encrypt_tree replaces every
-#    encrypted leaf with an ENC[...] string before emit ever sees it, so the
-#    leaf's stringification is what the digest covers AND what the ENC string
-#    carries. The guard never sees a value that got encrypted.
+# 6. Karr #67 / ADR 0008 closes the silent-corruption side of the same defect
+#    for the encrypted slot. Where this test previously asserted the SHAPE of
+#    the pre-fix happy path (the doc and the digest agreed on a heap address,
+#    so the file verified and the caller never noticed), the new
+#    assert_representable guard refuses the unblessed ref at encrypt time
+#    with a message naming the ref kind, not the value.
+#
+#    Before #67: \1 in an encrypted slot was accepted, written as ENC[...,type:str]
+#    whose plaintext was SCALAR(0x...) (the ref's heap address), and read back
+#    as that address on the next process. The MAC verified -- doc and digest
+#    agreed -- but the stored value was meaningless and unrecognisable. That
+#    is the silent part the guard exists to close.
+#
+#    ADR 0008 measured that blessed objects (a Math::BigFloat, an object
+#    overloading "", a qr//) DO round-trip correctly through encrypted slots
+#    in both formats, so the guard exempts them; the encrypted-slot happy
+#    path is "blessed only". See t/27 for the regression that pins this.
 ###############################################################################
 
-subtest 'a \1 in an ENCRYPTED JSON slot is unaffected (the pre-existing happy path)' => sub {
-    # value_to_bytes of an unblessed SCALAR ref is its stringified address,
-    # 'SCALAR(0x...)' (measured, length 22 -- even \1 / \0, whose PV slot is
-    # empty, stringify the same way because the SvROK branch beats the PV
-    # branch). The MAC and the ENC[...] plaintext both cover that text, so
-    # the file verifies -- but the address differs per run, which is the
-    # problem karr #67 files separately. The test asserts the SHAPE
-    # (non-empty stringification, type:str), not the value: the pre-fix code
-    # already worked for this case and the new guard must not break it.
+subtest 'a \1 in an ENCRYPTED JSON slot is REFUSED (karr #67 closes the silent-corruption side)' => sub {
+    # Pre-#67 this test was the "happy path" assertion: encrypt \1 in an
+    # encrypted slot, get back ENC[...,type:str] whose plaintext was the
+    # ref's address, decrypt back to that address, sops accepts (exit 0).
+    # That was exactly the defect: a heap address stored as a value is not
+    # what the caller meant, but the only symptom was "I cannot reproduce
+    # this on a later run". #67 turns it into a loud refusal at encrypt time
+    # so the caller notices. The blessed-with-overload happy path is in
+    # t/27.
     my $encrypted = eval {
         File::SOPS->encrypt(
             data       => { secret => \1, other => 'x' },
@@ -357,23 +378,9 @@ subtest 'a \1 in an ENCRYPTED JSON slot is unaffected (the pre-existing happy pa
             format     => 'json',
         );
     };
-    is($@, '', 'encrypt() does not croak: the guard never sees this leaf') or return;
-    like($encrypted, qr/type:str/, 'written as type:str');
-
-    my $self = eval {
-        File::SOPS->decrypt(encrypted => $encrypted, identities => [$secret], format => 'json');
-    };
-    is($@, '', 'self-MAC holds') or diag("died: $@");
-    if ($self) {
-        ok(defined $self->{secret} && length $self->{secret},
-            q{and decrypts to a non-empty stringification of the ref});
-    }
-
-    my $file = scratch_file('json');
-    write_file($file, $encrypted);
-    my $out       = `$sops_bin -d $file 2>&1`;
-    my $exit_code = $? >> 8;
-    is($exit_code, 0, 'sops -d accepts the document') or diag("sops output: $out");
+    ok(!defined $encrypted, 'encrypt() does not return a document');
+    like($@, qr/unblessed SCALAR reference/, 'with the new guard message');
+    unlike($@, qr/0x[0-9a-f]+/i, 'and the message names the ref KIND, never the heap address');
 };
 
 ###############################################################################
