@@ -594,17 +594,25 @@ Revision history for File-SOPS
     of swallowed.
   - BEHAVIOUR CHANGE that follows from it - a file written by any of
     those methods comes back with a NEW INODE, so hard links to it keep
-    the old content, and replacing a file needs write permission on its
-    DIRECTORY rather than on the file (a read-only file in a writable
-    directory is replaced, where sops -e -i refuses). sops keeps the
-    inode and updates every hard link; this trades that for not
-    destroying the file. Nothing else moves: an existing target keeps
-    its mode, a target that has to be created still gets 0666 against
-    the umask, and a symlink is still resolved to its target - as sops
-    does in all three cases. An output that is not a regular file
-    (/dev/null, /dev/stdout, a fifo) is written through directly and
-    keeps working. Documented under "How a file is written" in
-    File::SOPS.
+    the old content. sops keeps the inode and updates every hard link;
+    this trades that for not destroying the file. Nothing else moves:
+    an existing target keeps its mode, a target that has to be created
+    still gets 0666 against the umask, and a symlink is still resolved
+    to its target - as sops does in all three cases. An output that is
+    not a regular file (/dev/null, /dev/stdout, a fifo) is written
+    through directly and keeps working. Documented under "How a file is
+    written" in File::SOPS.
+  - Replacing a file needs write permission on its DIRECTORY rather than
+    on the file, and now refuses a read-only file in a writable
+    directory with the same wording sops -e -i uses ("Could not open
+    in-place file for writing: ...: permission denied"), where the
+    atomic write introduced by the change above would otherwise have
+    replaced it (rename() checks the directory, not the file). The
+    atomic write is the only reason this became a thing: the old open
+    '>' would have failed on the chmod for free, and the early
+    releases of this distribution maintained that refusal by accident
+    through encrypt_in_place and edit. Every method that writes a file
+    through _replace_file now enforces it.
   - The message for an already-encrypted input now points at edit as
     well as rotate, as sops's own exit-203 message points at its editor
     mode.

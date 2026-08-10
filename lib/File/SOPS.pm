@@ -360,9 +360,12 @@ file with C<n> links comes back with one link and the other C<n-1> still
 pointing at the previous content.
 
 =item * Replacing a file needs write permission on its B<directory>, not on the
-file. A read-only file in a writable directory is replaced anyway, where
-C<sops -e -i> stops with C<Could not open in-place file for writing: permission
-denied>. C<chmod 0444> is not a guard against these methods.
+file. A read-only file in a writable directory is refused with C<Could not
+open in-place file for writing: ...: permission denied>, the same wording
+C<sops -e -i> uses (measured, 3.13.3). C<chmod 0444> is a guard against these
+methods. The directory, by contrast, must be writable -- a read-only
+C<secrets/> is the precondition that lets C<chmod 0444> on the file mean
+anything, and these methods cannot write into a directory that is not.
 
 =item * A B<symlink> is resolved: the link is left alone and the file it points
 at is replaced. sops does the same (measured, 3.13.3) -- what differs is only
@@ -1701,6 +1704,15 @@ sub _replace_file {
     my ($path, $content) = @_;
 
     my $target = -l $path ? (Cwd::abs_path($path) // $path) : $path;
+
+    # karr #46: sops -e -i refuses a read-only file with EACCES; the atomic
+    # write was happy because rename() checks the directory, not the file.
+    # This is a behaviour change introduced by the atomic write itself, where
+    # the old open '>' would have failed on the chmod for free. Match sops
+    # and refuse here, before any work -- a different inode is no
+    # consolation when the file was deliberately read-only.
+    croak "Could not open in-place file for writing: $target: permission denied"
+        if -e $target && !-w $target;
 
     return _write_through($target, $content) if -e $target && !-f $target;
 
