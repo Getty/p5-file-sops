@@ -1416,6 +1416,31 @@ instead, and a caller that adds one of its own alongside gets the refusal
 L<File::SOPS::Metadata/Encryption rules are mutually exclusive> gives any
 document carrying two.
 
+=head3 What this does not read or return
+
+A few things a C<.sops.yaml> can carry are deliberately outside this
+method's scope (karr #54):
+
+=over 4
+
+=item * C<destination_rules> is not read. sops's full file lifecycle has
+two rule lists, creation_rules (which decides how a file is encrypted)
+and destination_rules (which decides how it is rewritten when it is
+moved to a different path or backend). File::SOPS does not move files,
+so destination_rules has no consumer here; a config carrying only
+destination_rules is reported as having no creation rules.
+
+=item * A rule naming C<aws_kms>, C<azure_kv> or C<hc_vault> is ignored.
+Those are C<sops>-section field names that sops also ignores in a
+creation rule (measured, 3.13.3). The names THIS method refuses are the
+config file's: C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault>,
+C<hc_vault_transit_uri>.
+
+=item * C<$SOPS_CONFIG> is not consulted (covered above under
+C<config>).
+
+=back
+
 =cut
 
 # Internal helpers

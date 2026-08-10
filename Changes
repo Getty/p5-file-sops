@@ -1,6 +1,14 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Document what creation_rules_for deliberately does not read or
+    return (karr #54): destination_rules is not consulted (File::SOPS
+    does not move files); a rule with aws_kms / azure_kv / hc_vault is
+    ignored (those are the sops section field names, which sops itself
+    ignores in a creation rule, not the config-file field names the
+    refusal names); $SOPS_CONFIG is not consulted unless the caller
+    passes config explicitly. All three are now called out under "What
+    this does not read or return" in the POD. No behaviour change.
   - Refuse a path_regex that uses a construct Go RE2 does not support, at
     match time. creation_rules_for compiled the same string as Perl here
     and as Go RE2 in sops, and a pattern that compiles here but uses
