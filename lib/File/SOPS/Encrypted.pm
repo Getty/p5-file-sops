@@ -508,7 +508,29 @@ sub _decimal_fits_int64 {
 
 sub assert_representable {
     my ($class, $value) = @_;
-    return 1 unless defined $value && !ref $value;
+    return 1 unless defined $value;
+
+    # karr #67: an unblessed reference in an encrypted slot would be
+    # stringified as 'SCALAR(0x...)' / 'ARRAY(0x...)' / 'HASH(0x...)' /
+    # 'CODE(0x...)' -- a heap address that differs per process run -- and
+    # value_to_bytes would feed that same address into the MAC digest. The
+    # document verifies (the doc and the digest agree on the address), but the
+    # stored value is unrecognisable and impossible to reproduce on a later
+    # read. Refused here, the same shape as the int64 check below. A blessed
+    # object passes: ADR 0008 measured that an encrypted Math::BigFloat, an
+    # object overloading "" and a qr// all round-trip correctly -- they have a
+    # stringification the caller chose.
+    if (ref $value) {
+        return 1 if blessed($value);
+        croak "cannot encrypt an unblessed " . ref($value)
+            . " reference; the SOPS digest covers the reference's heap "
+            . "address (e.g. SCALAR(0x...)), which differs per run, and "
+            . "storing that as an encrypted value is almost never what the "
+            . "caller means. Pass a string (the value the ref was holding, "
+            . "or its stringification), or a blessed object whose "
+            . "stringification is the value you mean.";
+    }
+
     return 1 unless _sv_kind($value) eq 'int';
 
     # The same decimal value_to_bytes would write, tested by the same rule the
@@ -533,10 +555,31 @@ Class method. Dies if C<$value> is something no SOPS document can carry, and
 returns true otherwise. Called for every leaf L<File::SOPS/encrypt> is about to
 write -- encrypted or not -- before anything is emitted.
 
-There is one such value today: B<an integer outside Go's C<int64> range>.
-Perl's integers reach C<2**64-1>, Go's C<int> stops at C<2**63-1>, and the
-reference implementation writes C<type:int> only within that range. Measured
-against sops 3.13.3, a wider integer produces a document it will not read:
+There are two such values today:
+
+=over 4
+
+=item B<An unblessed reference.> C<\1>, C<\$x>, C<\@arr>, C<\%hash>, C<sub {}>.
+B<detect_type> calls a reference C<str>, so L</value_to_bytes> would digest
+its stringification -- C<SCALAR(0x...)>, C<ARRAY(0x...)>, C<HASH(0x...)> or
+C<CODE(0x...)>, the ref's heap address. _encrypt_tree would feed that same
+address into the encrypted slot, and the document would verify against itself
+(doc and digest agree on the address) but store a value that differs per run
+and is meaningless on a later read. The pre-fix code wrote the file silently
+and the caller had no reason to notice; that is the defect karr #67 exists to
+close. A blessed object B<passes>: ADR 0008 measured that an encrypted
+L<Math::BigFloat>, an object overloading C<"">, and a L<Regexp> all
+round-trip correctly today -- they have a stringification the caller chose,
+which is exactly what an encrypted slot carries. The exception is the same
+class B<detect_type> uses for the digest, which is C<blessed($v)> and so
+covers any subclass: the encrypted-slot rule and the unencrypted-slot guard
+asked the same question in different ways and the encrypted slot is the
+looser one.
+
+=item B<An integer outside Go's C<int64> range.> Perl's integers reach
+C<2**64-1>, Go's C<int> stops at C<2**63-1>, and the reference implementation
+writes C<type:int> only within that range. Measured against sops 3.13.3, a
+wider integer produces a document it will not read:
 
 =over 4
 
@@ -555,10 +598,15 @@ through a library whose job is to preserve it is the defect this method exists
 to prevent. Store the digits as a B<string> instead -- that is C<type:str>,
 written verbatim, and it round-trips exactly through both implementations.
 
+=back
+
 This is a B<write>-side rule only. Reading is unaffected: sops's truncated
 C<12345678901234567000> parses back as a Perl integer above C<int64>, and
 L</value_to_bytes> must still hash it as those digits or a legitimate sops
-document would fail verification.
+document would fail verification. An older file this library itself wrote
+under 0.003 with an unblessed ref in an encrypted slot is read back as the
+heap address that was stored, which is unrecognisable but verifiable; the
+guard refuses the B<new> write and leaves the read path alone.
 
 =cut
 

@@ -135,6 +135,30 @@ Revision history for File-SOPS
     slots are unaffected" rule, same rule that the error names the class
     and never the value. See docs/adr/0008 (closes the "known gap, karr
     #66" it explicitly filed).
+  - BEHAVIOUR CHANGE: an unblessed reference in an ENCRYPTED slot is now
+    refused at encrypt time instead of silently stored as a heap address.
+    The previous behaviour wrote ENC[...,type:str] whose plaintext was the
+    reference's stringification - SCALAR(0x...) / CODE(0x...) - and the
+    MAC digest covered that same stringification, so the file verified
+    (doc and digest agreed) but stored a value that differs per process
+    run and is meaningless on a later read. Nothing in the pre-fix
+    document signalled that the value would not survive a second
+    invocation. The new guard lives in assert_representable, sitting next
+    to the int64 check and exempting every blessed reference; this is the
+    same blessed-vs-unblessed split ADR 0008 measured for the encrypted
+    slot's happy path (a Math::BigFloat, an object overloading "", a qr//
+    - all blessed, all round-tripping correctly). An ARRAY or HASH ref
+    in an encrypted slot still works: the tree walks recurse into an
+    unblessed HASH or ARRAY before any leaf branch fires, so the ref
+    itself never reaches assert_representable and the contents are
+    encrypted normally. The error names the ref kind (unblessed SCALAR
+    reference, unblessed CODE reference, ...) and never the value; it
+    says to pass a string or a blessed object whose stringification is
+    the value meant. Reading is unchanged: an older 0.003 file this
+    library wrote with an unblessed ref in an encrypted slot is read
+    back as the heap address that was stored, which is unrecognisable
+    but verifiable - the guard refuses new writes and leaves the read
+    path alone. See docs/adr/0008 (closing note, karr #67).
   - SECURITY: the random data key and the per-value GCM nonce are now
     checked for length where they are generated, and there is only one
     generator left. _random_bytes existed twice, in File::SOPS and in

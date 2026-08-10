@@ -145,6 +145,53 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   one's, and a karr #66 ADR would be a "same rule, same exception, same
   rationale, JSON side" of itself.
 
+- **The encrypted-slot half of the same defect closed by karr #67.** The
+  decision above explicitly rejected putting the rule in
+  `assert_representable`, on the grounds that doing so would refuse
+  encrypted-slot documents this library reads and writes correctly today:
+  measured, an encrypted `Math::BigFloat`, an object overloading `""` and a
+  `qr//` all round-trip through `encrypt`/`decrypt` in YAML and JSON.
+  That exemption held -- and the same shape of guard, applied at the value
+  level, closes the OTHER silent-corruption side of the same defect for
+  encrypted slots.
+
+  The pre-fix `_encrypt_tree` replaces every encrypted leaf with
+  `ENC[…,type:str]` whose plaintext is the leaf's stringification, and the
+  same stringification reaches the MAC digest via `value_to_bytes` -- so
+  the document verifies (doc and digest agree on the text) but stores a
+  value that is meaningless on a later read. For an **unblessed SCALAR** or
+  **CODE** reference at the leaf, that text is `SCALAR(0x…)` / `CODE(0x…)`
+  -- the ref's heap address, which differs per process run. The file
+  verified silently, the caller had no reason to notice, and the stored
+  value was unrecognisable. **Closed by `assert_representable` refusing
+  every unblessed reference**, with the same exact-blessed-object
+  exemption (ADR 0008's `Math::BigFloat` / overloaded-`""` / `qr//`
+  measurements become the rule's exception list, and the test set
+  `t/27-encrypted-slot-ref-guard.t` pins all three classes in both
+  formats).
+
+  The guard is **encrypt-side only**, exactly like the int64 check it sits
+  next to. `_verify_mac` does not call `assert_representable` -- the
+  comment above `_compute_mac` says "the same walk is used to verify"
+  but is misleading; the behaviour is what matters. An older 0.003 file
+  this library wrote with an unblessed ref in an encrypted slot is read
+  back as the heap address that was stored, which is unrecognisable but
+  verifiable; the guard refuses the **new** write and leaves the read
+  path alone. That is what the brief asks for and what t/27 subtest 5
+  pins.
+
+  **ARRAY and HASH refs in encrypted slots escape the guard by design.**
+  `_encrypt_tree`, `_sorted_leaves` and `_document_leaves` all recurse
+  into an unblessed HASH or ARRAY before any leaf branch fires, so the
+  ref itself never reaches `assert_representable` and the contents (here:
+  plain ints or strings) are encrypted normally. The defect is specific
+  to SCALAR and CODE refs -- the two ref kinds whose stringification is
+  a heap address rather than a container that can be walked. Calling
+  `assert_representable(\@arr)` or `assert_representable(\%hash)`
+  directly still croaks (the guard is uniform across kinds); what the
+  walks do is never call it on those kinds in the first place. t/27
+  subtest 2b pins both halves of this.
+
 ### What changes for existing callers
 
 Nothing for any tree made of plain scalars, `undef`, hashes, arrays and
@@ -191,3 +238,20 @@ library writes and reads correctly today, in both formats, and refuse to open
 files it can currently open. Measured, not assumed: an encrypted
 `Math::BigFloat`, an overloaded object and a `qr//` all round-trip through
 `encrypt`/`decrypt` today in YAML and in JSON.
+
+**Partially reopened by karr #67.** The rationale that blocked the rule
+from living in `assert_representable` — "would refuse documents this
+library writes and reads correctly today" — applies to *blessed* objects,
+not to unblessed ones. The blessedness of the leaf, not the format
+machinery, is what makes the encrypted-slot stringification the value
+the caller chose. A guard in `assert_representable` that exempts every
+blessed reference and refuses every unblessed one has the exact
+shape this ticket needs and does not disturb the measured happy path:
+the encrypted `Math::BigFloat`, overloaded object and `qr//` are all
+blessed, all exempted, all still round-trip; the unblessed `\1` /
+`\$x` / `sub {}` are the only new refusals. `_verify_mac` still does
+not call `assert_representable` (the comment above `_compute_mac` is
+misleading on this point — `assert_representable` runs encrypt-side
+only), so the read side of the boundary is unchanged and an older file
+this library wrote with an unblessed ref in an encrypted slot still
+decrypts.
