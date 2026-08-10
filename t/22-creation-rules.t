@@ -377,6 +377,41 @@ subtest 'a path_regex that will not compile is an error' => sub {
     like($err, qr/\Q$root\E/, 'and which config file');
 };
 
+subtest 'a path_regex with a construct RE2 does not have is refused at match time (karr #53)' => sub {
+    # sops compiles the same string with Go RE2; the patterns below compile in
+    # Perl but sops rejects them with "error parsing regexp". A config that
+    # uses them silently picks a different rule (or none) in sops, so refusing
+    # them here is a louder failure than either side diverging.
+    for my $case (
+        [ 'lookahead',         'secrets/(?=prod).*\.yaml$'   ],
+        [ 'negative lookahead','secrets/(?!prod).*\.yaml$'   ],
+        [ 'lookbehind',        '(?<=^prod/).+\.yaml$'        ],
+        [ 'negative lookbehind','(?<!^test/).+\.yaml$'       ],
+        [ 'backreference',     '(.).*\\1\.yaml$'             ],
+    ) {
+        my ($name, $pattern) = @$case;
+        my $root = tree(
+            '.sops.yaml' => config_with(rule($pattern, $pub_a, '')),
+            's.yaml'     => "k: v\n",
+        );
+        my $err = exception(sub {
+            File::SOPS->creation_rules_for(file => "$root/s.yaml") });
+        like($err, qr/path_regex/, "$name is refused, naming the field");
+        like($err, qr/\Q$root\E/,  "$name: also names the config file")
+            or diag("err: $err");
+        unlike($err, qr/^\Q$root\E.+ at \S+ line/ms,
+            "$name: the path is named once, not twice");
+    }
+
+    # (?i) and the standard constructs are in BOTH dialects, so they pass.
+    my $passing = tree(
+        '.sops.yaml' => config_with(rule('(?i)\.yaml$', $pub_a, '')),
+        's.yaml'     => "k: v\n",
+    );
+    my %args = File::SOPS->creation_rules_for(file => "$passing/s.yaml");
+    ok(exists $args{recipients}, 'a (?i) pattern compiles in both RE2 and Perl');
+};
+
 ###############################################################################
 # What a rule carries.
 ###############################################################################
