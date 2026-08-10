@@ -254,6 +254,16 @@ numeric or boolean it reads:
     File::SOPS->encrypt(data => { v => 1.50   })  # type:float, plaintext 1.5
     File::SOPS->encrypt(data => { v => JSON->true })  # type:bool, plaintext True
 
+The C<JSON-E<gt>true>/C<JSON-E<gt>false> in the last line is a class-method
+call on the C<JSON> package -- it is not imported by L</use File::SOPS;>
+(nothing is; namespace::clean strips it back out), and it works under a bare
+C<use File::SOPS;> only by accident, because CryptX loads JSON.pm on the
+way to L<Crypt::AuthEnc::GCM>. Rely on the accident and your code breaks
+the moment a future CryptX stops loading JSON. The caller has to say so
+explicitly: C<< use JSON::MaybeXS qw(JSON); >> -- JSON::MaybeXS is
+already a prerequisite via the L<Format::JSON|File::SOPS::Format::JSON>
+handler, so this is a use-line, not a new dependency.
+
 This is the rule the reference implementation follows -- it types a value by
 what the YAML/JSON parser returned, so a quoted scalar is a string -- and
 L<YAML::XS> and L<Cpanel::JSON::XS> preserve the same distinction, so a
@@ -289,6 +299,7 @@ There is no per-leaf type argument to L</encrypt>, and none is needed: the
 scalar is the type, so you say what a value is by handing over the scalar that
 says it.
 
+    use JSON::MaybeXS qw(JSON);          # JSON->true is not exported by File::SOPS
     $data->{port}  = "$data->{port}";   # type:str
     $data->{port}  = 0 + $data->{port}; # type:int
     $data->{ratio} = 0.0 + $data->{ratio};  # type:float
