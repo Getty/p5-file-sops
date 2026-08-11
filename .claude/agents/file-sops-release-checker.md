@@ -30,7 +30,14 @@ Audit only — you report findings; `file-sops-wire`, `file-sops-api` or
 3. **`Changes`** — a `{{$NEXT}}` section exists and covers the user-visible changes
    since the last release (`git log --oneline` since the last `v*` tag). Entries name
    the user-visible effect, not the internal refactor.
-4. **`dzil build`** — runs clean: no missing files, no warnings, `.claude/` not shipped.
+4. **`dzil build`** — runs clean: no missing files, no warnings. Note that `.claude/`
+   and `CLAUDE.md` **are** shipped in the tarball, deliberately: this distribution
+   discloses how it was built, so they carry no `gather_exclude_match` and their
+   presence is not a finding. `docs/` and `refs/` are still excluded. What *is* a
+   finding: anything under `.claude/` that should never be published — a stray
+   `settings.local.json`, credentials, session state. `.gitignore` keeps those
+   untracked and `Git::GatherDir` ships tracked files only, so check that the untracked
+   set is still what it should be.
 5. **Interop proof — specific to this distribution.** A release claims byte
    compatibility with `sops`. Check whether `t/04-interop.t` actually *ran*: a suite
    that reports `All tests successful` while the binary was absent has skipped every
