@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-08-10T01:44:48Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:34:08Z
+created: 2026-08-09T04:33:14Z
+id: 45
+priority: medium
+started: 2026-08-10
+status: done
+tags:
+- api
+- security
+title: decrypt_file creates a new plaintext output with umask permissions
+updated: 2026-08-16T00:34:08Z
+---
+
+Split out of karr #40 rather than folded into it, because it is a permissions
+policy question and #40 was a data-loss fix.
+
+decrypt_file writes the DECRYPTED document. When its output file does not
+exist yet it is created with 0666 & ~umask -- 0644 under the common umask 022,
+i.e. world-readable plaintext secrets. That is what open ">" did before #40 and
+what _replace_file deliberately reproduces now, so #40 changed nothing here.
+
+Measured, sops 3.13.3, umask 022:
+
+  sops -d --output dec-new.yaml enc.yaml   ->  dec-new.yaml is 0644
+
+so the reference implementation is no better, and matching it was the
+conservative choice for a fix whose whole point was not to surprise anyone.
+
+The question this ticket is for: should decrypt_file (and edit, which already
+uses 0600 for its temporary copy) create a NEW output at 0600 instead? The
+argument for is that this distribution is a library called from code, the file
+it just created is plaintext secrets, and 0600 is what its own edit path
+already considers correct for exactly that content. The argument against is
+that it is a deliberate divergence from sops that would break a caller whose
+next step is another user or process reading the file -- loudly, at least.
+
+If it is taken: it is a BEHAVIOUR CHANGE entry in Changes, a line in the
+"How a file is written" POD section (which currently states the umask rule as
+deliberate and says to set the umask or mode yourself), and it should probably
+apply only to decrypt_file, not to encrypt_file, whose output is ciphertext.
+POD + Changes now record the 'match sops, leave to caller' decision explicitly under 'How a file is written'. No code change.
+Closed by orchestrator during board hygiene: work shipped in 1f3a16c (POD + Changes record the 'match sops, leave it to the caller' decision under 'How a file is written').
