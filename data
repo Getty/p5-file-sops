@@ -1,0 +1,40 @@
+---
+claimed_at: 2026-08-10T01:45:15Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:35:08Z
+created: 2026-08-09T06:05:02Z
+id: 57
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- docs
+- api
+title: POD tells callers to write JSON->true without saying where JSON comes from
+updated: 2026-08-16T00:35:08Z
+---
+
+lib/File/SOPS.pm POD (the "Value types" and "Saying what a value is" sections) shows
+
+    File::SOPS->encrypt(data => { v => JSON->true })   # type:bool
+    $data->{flag}  = JSON->true;                       # type:bool
+
+as the only documented way to produce type:bool, and never says the caller has to `use JSON::MaybeXS;` for it.
+
+File::SOPS re-exports nothing -- `use namespace::clean` strips encode_json/decode_json/JSON from the package, verified:
+
+    perl -Ilib -MFile::SOPS -e "print defined &File::SOPS::JSON ? 1 : 0"   # 0
+
+but the example nevertheless works after a bare `use File::SOPS;`:
+
+    perl -Ilib -MFile::SOPS -e "print ref(JSON->true)"   # JSON::PP::Boolean
+
+by accident. `JSON->true` there is not the JSON::MaybeXS-exported JSON() sub, it is a class-method call on package JSON, which is in %INC only because CryptX loads JSON.pm (CryptX.pm line 14) on the way to Crypt::AuthEnc::GCM. Nothing in this distribution asks for JSON.pm, and nothing keeps CryptX doing it.
+
+Fix: say in the POD that the boolean examples need `use JSON::MaybeXS;` in the CALLER (JSON::MaybeXS is already a prereq via the format handlers), or show a form that does not rely on an imported bareword. Either way the example should stop being true only by luck.
+
+Found while working karr #49.
+POD: 'Value types' section now says JSON->true/JSON->false need  in the calling code, with the CryptX-accident caveat spelled out. 'Saying what a value is' section shows the use-line above the examples. No code change.
+POD: Value types section now says JSON true/false need a JSON::MaybeXS use-line in the calling code, with the CryptX-accident caveat. Saying what a value is section shows the use-line above the examples. No code change.
+Closed by orchestrator during board hygiene: work shipped in a58983f (POD says JSON->true / JSON->false need a JSON::MaybeXS use-line in the caller).
