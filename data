@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-08-10T01:45:04Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:34:44Z
+created: 2026-08-09T05:50:34Z
+id: 53
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- interop
+title: path_regex is a Perl regex here and RE2 in sops, and nothing says so at match
+  time
+updated: 2026-08-16T00:34:44Z
+---
+
+creation_rules_for (karr #38) compiles a .sops.yaml path_regex as a Perl regex. sops compiles the same string with Go RE2. Measured on 3.13.3: (?i) works in both; a Perl lookbehind ((?<!x)s\.yaml$) compiles here and makes sops stop with "error parsing regexp". So a config using a construct from either dialect alone silently selects a DIFFERENT rule - or none - depending on which tool reads it, and both tools report success.
+
+The POD on creation_rules_for says this and tells the reader to keep a path_regex to what both accept. Nothing enforces it.
+
+Options, none obviously right, which is why this is a ticket rather than part of #38:
+ - warn when a path_regex uses a construct RE2 does not have (lookaround, backreferences, \Z, possessive quantifiers, code blocks). Cheap to get wrong in both directions.
+ - refuse them outright. Refuses configs sops accepts as long as the rule never has to match.
+ - leave it documented, and close this.
+
+Worth deciding only if someone hits it. Split out of #38.
+Implemented: creation_rules_for now refuses path_regex with lookarounds or backreferences (the unambiguous RE2-incompatible constructs). POD + Changes updated. Tests added in t/22-creation-rules.t.
+Closed by orchestrator during board hygiene: work shipped in 60ae8ca + 3e81c40 (creation_rules_for refuses lookarounds and backreferences; tests in t/22-creation-rules.t).
