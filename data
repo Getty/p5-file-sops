@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-08-10T01:44:37Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:33:45Z
+created: 2026-08-08T23:31:50Z
+id: 30
+priority: low
+started: 2026-08-08
+status: done
+tags:
+- api
+- types
+title: encrypt has no per-leaf type override, so a contaminated scalar cannot be corrected
+updated: 2026-08-16T00:33:45Z
+---
+
+Gap named in ADR 0002 and left open there. The type now comes from the scalar, and Perl marks a string as numeric IN PLACE the first time it is used in numeric context - so a caller who does `if ($cfg->{port} > 1024)` before calling encrypt turns the string 8080 into type:int, and the resulting SV is indistinguishable from a parsed bare 8080. File::SOPS::Encrypted->encrypt_value takes an explicit type, but File::SOPS->encrypt has no way to pass one per leaf, so through the public API there is no way to say what a value is. Options range from an explicit type map keyed by path (cheap, ugly) to accepting a typed wrapper object at the leaf (alternative 3 in ADR 0002, rejected there on API cost for the general case but plausible as an opt-in). Related to karr #17, which is about encryption RULES rather than types, but they would land in the same argument list.
+ADR 0003 (karr #27) adds a constraint this ticket must honour: File::SOPS::_value_to_bytes calls value_to_bytes($value) with NO type, so every leaf reaches the MAC digest as str and is UTF-8 encoded. type:bytes is exempt from that encoding on the cipher path. Today the two cannot disagree because type:bytes is only reachable through Encrypted->encrypt_value directly, where there is no MAC. The moment this ticket adds a per-leaf type override to File::SOPS->encrypt, the MAC path has to be given the same type - otherwise a type:bytes leaf is hashed encoded and encrypted raw, and the document fails its own MAC.
+Decided NOT to build, with the reasoning below; documentation and a regression test shipped instead, in efab680 (branch worktree-agent-a1c47d951be5f0670). Leaving this open per instruction so the decision can be reviewed before the ticket is closed.
+
+The premise does not hold. Measured:
+
+  my %cfg = (port => "8080");
+  if ($cfg{port} > 1024) { }        # IOK|POK  -> type:int
+  $cfg{port} = "$cfg{port}";        # POK      -> type:str, text intact
+
+Reading a scalar in numeric context sets the numeric flag but leaves the string it already holds untouched, so restringifying recovers BOTH the type and the original text - "007" comes back "007", "1.50" comes back "1.50". The other direction is 0 + $x and 0.0 + $x. So a caller already has a way to say what a value is, and it is the same channel ADR 0002 chose: the scalar.
+
+The one case the idiom does not cover is a numeric ASSIGNMENT:
+
+  $cfg{ratio} += 0;                 # "1.50" is now the number 1.5
+  $cfg{ratio} = "$cfg{ratio}";      # type:str, but the text is "1.5"
+
+and that case is unreachable for ANY API - a type override would write the same 1.5 under a different label, because the caller replaced the string before this module was called. So neither option in the ticket buys anything the core idiom does not already give.
+
+Cost of the two options, for the record. A path-keyed type map introduces a THIRD path notation into a distribution that already has two (extract bracket/dot syntax and the colon-joined AAD form), cannot address individual array elements (they share the parent path), and no-ops silently on a typo. A typed wrapper object adds a public class, an asymmetry (encrypt would take wrappers, decrypt would never return them), and a new twin site in both the tree walk and the MAC path - which is this distribution signature bug.
+
+No ADR: nothing about the architecture was decided, only that the gap ADR 0002 left open is already covered. If a reviewer disagrees, the ADR to write is the one that ADDS the surface.
+
+Shipped: a "Saying what a value is" section in File::SOPS POD (not Encrypted.pm - a parallel worker owns that file), and t/11-caller-supplied-types.t pinning the idioms so a change to the type ladder cannot quietly remove the remedy. Reading the private SVp_IOK/SVp_NOK instead of the public flags would leave its first subtest with no way to pass.
+
+Not addressed and not reachable from Perl either way: type:bytes has no scalar shape, and neither of our parsers produces one for a YAML !!binary scalar. Separate concern, no ticket raised.
+Not built, deliberately -- see efab680. The idiom $h{k} = "$h{k}" restores both type and original text after a numeric read, and no API argument could fix the one case it misses (a numeric assignment has already replaced the string). Left open for the maintainer to confirm the call rather than closed by the agent that made it.
+Verified: efab680 already shipped the 'Saying what a value is' POD section in lib/File/SOPS.pm (line 286) and t/16-caller-supplied-types.t pins the idiom ('numeric read is repairable, restores text', 'promoting string to number', 'bool has no Perl literal', 'numeric assignment destroys text, no API could restore'). The ticket's decision -- not built, idiom is the channel -- is the right one. No code change from this lane.
+Closed by orchestrator during board hygiene: work shipped in efab680 (POD section 'Saying what a value is' plus t/16-caller-supplied-types.t). Decision: no per-leaf type argument; the stringification idiom is the channel.
