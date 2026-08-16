@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-08-10T01:44:53Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:34:20Z
+created: 2026-08-09T05:14:40Z
+id: 51
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- format
+- debt
+title: edit tells the reserved-key refusal from a parse failure by matching Metadata's
+  message text
+updated: 2026-08-16T00:34:20Z
+---
+
+Left behind by karr #47, deliberately and on the record.
+
+File::SOPS::edit has to distinguish two refusals of the text that comes back from the editor: "this does not parse" and "this carries a top-level sops entry of your own". The format handlers do not offer that distinction. parse() does both jobs at once -- it loads the document AND interprets its sops section -- so a non-mapping entry (sops: mine, a list, an explicit null) is refused inside parse() by File::SOPS::Metadata::from_hash and reaches edit as an exception, indistinguishable from a YAML syntax error.
+
+#47 fixed the user-visible symptom by classifying that exception in File::SOPS::_is_sops_not_a_mapping, which matches the start of from_hash's message. That is a coupling to another module's wording. It is pinned in both directions by t/17-in-place-and-edit.t (all four shapes get the reserved-key message, broken YAML gets the parse message), so a rewording in Metadata.pm fails a test rather than silently restoring the wrong message -- but a test is not a structure.
+
+The structural shape is the read-side counterpart to the emit method the format handlers gained in 3e4f3bb: a parse that loads a document and stops there, leaving the sops section in the tree for the caller to decide about. edit would then do what sops does in editor mode -- load, then validate the tree -- and File::SOPS::encrypt's own reserved-key guard would catch the entry with no classification at all. sops separates the same two stages: "Could not load tree, probably due to invalid syntax" against "Tree not valid for encryption" (3.13.3).
+
+Lane: the new method belongs to file-sops-format, the switch in edit to file-sops-api. Nothing about the wire moves -- it is a read path with no emission and no MAC -- but the format handlers are not the API lane's to extend, which is why #47 stopped here.
+
+Not urgent: the behaviour is correct today and tested. This is about where the knowledge lives.
+Recommended action (a) only: documented in Changes, no code change. The coupling is already pinned by t/17-in-place-and-edit.t in both directions. Structural fix would touch format lane.
+Closed by orchestrator during board hygiene: work shipped in 9f739f6 (Changes documents the structural coupling; t/17-in-place-and-edit.t pins it both ways). Structural fix would need the format lane.
