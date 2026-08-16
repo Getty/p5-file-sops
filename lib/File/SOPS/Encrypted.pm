@@ -531,6 +531,35 @@ sub assert_representable {
             . "stringification is the value you mean.";
     }
 
+    # karr #59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on
+    # the wire. value_to_bytes writes +Inf / -Inf / NaN -- the same text
+    # Yo's strconv.FormatFloat produces -- but neither emitter can carry it:
+    # Cpanel::JSON::XS writes it as `null` (the document is silently rounded),
+    # JSON::XS writes bare `inf` (invalid JSON, sops refuses with "invalid
+    # character i"), and YAML::XS writes bare `Inf` (self-MAC OK, sops -d exit
+    # 51). All three put a file on disk that no implementation can read back.
+    # Refused here, the same shape as the ref and int64 checks. Reading is
+    # unaffected -- a type:float plaintext of +Inf or NaN is accepted by
+    # _deserialize_value today (karr #59's request, and Go writes it) and stays
+    # accepted: assert_representable is encrypt-side only.
+    if (_sv_kind($value) eq 'float') {
+        my $inf = 9**9**9;
+        my $form
+            = $value != $value              ? 'NaN'
+            : $value == $inf                ? '+Inf'
+            : $value == -$inf               ? '-Inf'
+            :                                  undef;
+        croak "value is a non-finite float ($form) and no SOPS document can "
+            . "carry it: the JSON emitter writes it as null, the YAML emitter "
+            . "writes bare Inf / NaN, and what one writes the other cannot "
+            . "read back. sops itself writes type:float +Inf / NaN, but only "
+            . "because Go has a strconv.FormatFloat rule that does not survive "
+            . "the round-trip through Perl's encoder. Store the value as a "
+            . "string (type:str), which is written verbatim and round-trips "
+            . "exactly through both implementations."
+            if defined $form;
+    }
+
     return 1 unless _sv_kind($value) eq 'int';
 
     # The same decimal value_to_bytes would write, tested by the same rule the
@@ -555,7 +584,7 @@ Class method. Dies if C<$value> is something no SOPS document can carry, and
 returns true otherwise. Called for every leaf L<File::SOPS/encrypt> is about to
 write -- encrypted or not -- before anything is emitted.
 
-There are two such values today:
+There are three such values today:
 
 =over 4
 
@@ -575,6 +604,21 @@ class B<detect_type> uses for the digest, which is C<blessed($v)> and so
 covers any subclass: the encrypted-slot rule and the unencrypted-slot guard
 asked the same question in different ways and the encrypted slot is the
 looser one.
+
+=item B<A non-finite float:> C<NaN>, C<+Inf>, C<-Inf>. L</value_to_bytes>
+writes them as C<NaN> / C<+Inf> / C<-Inf> -- the same text Go's
+C<strconv.FormatFloat> produces -- but no emitter can carry it: Cpanel's
+JSON encoder writes C<null> (the document is silently rounded), JSON::XS
+writes bare C<inf> (invalid JSON, sops refuses with C<invalid character i>),
+and YAML::XS writes bare C<Inf> / C<NaN> (self-MAC OK, sops -d exit 51).
+All three put a file on disk nothing can read back. The pre-fix code wrote
+the file anyway, and the caller had no reason to notice -- that is the
+defect karr #59 exists to close. Store the value as a B<string> instead --
+that is C<type:str>, written verbatim, and the same number (or its
+deliberate stringification) is round-tripped exactly through both
+implementations. Reading is unaffected: a C<type:float> plaintext of
+C<+Inf> or C<NaN> is accepted by L</_deserialize_value> today, and sops
+itself writes such a value, so the read path has to keep accepting it.
 
 =item B<An integer outside Go's C<int64> range.> Perl's integers reach
 C<2**64-1>, Go's C<int> stops at C<2**63-1>, and the reference implementation

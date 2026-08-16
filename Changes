@@ -1,6 +1,28 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a non-finite float (NaN, +Inf, -Inf) is now refused
+    at encrypt time instead of written into a document nothing can read
+    back. File::SOPS::Encrypted::value_to_bytes has always written
+    +Inf / -Inf / NaN - the same text Go's strconv.FormatFloat produces -
+    and the MAC digest covered that text, but no emitter could carry it.
+    Measured against sops 3.13.3: Cpanel::JSON::XS writes null (the value
+    is simply gone, self-MAC FAIL, sops -d exit 51), JSON::XS writes bare
+    inf (invalid JSON, sops refuses with "invalid character i"), and
+    YAML::XS writes bare Inf or NaN (exit 51 for Inf; NaN happened to
+    work, because Go reads bare NaN as the STRING NaN whose ToBytes is
+    also NaN). All three put a file on disk that at least one
+    implementation cannot read back, and the caller had no reason to
+    notice. The guard lives in assert_representable, next to the int64
+    range check and the reference checks; the error names the form
+    (+Inf, -Inf, NaN), never the value, and says to store the number as
+    a string instead - that is type:str, written verbatim, and it
+    round-trips exactly through both implementations. -0.0 is NOT
+    refused: it is finite, and the JSON -0.0 row is the one ADR 0005
+    went out of its way to protect. Reading is unchanged - a type:float
+    plaintext of +Inf or NaN is still accepted by _deserialize_value,
+    because sops itself writes it, so the read path has to keep taking
+    it. Pinned by t/28-non-finite-float-refusal.t. See karr #59.
   - Refuse a data key from Crypt::Age that is not 32 bytes long, in
     File::SOPS::Backend::Age::decrypt_data_key. The data key the SOPS
     data path consumes is exactly the 32-byte AES-256 key every value
