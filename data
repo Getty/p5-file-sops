@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-08-10T01:44:59Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:34:32Z
+created: 2026-08-09T05:27:27Z
+id: 52
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- crypto
+- dependencies
+title: Crypt::Age's own CSPRNG returns are unchecked, and one of them wraps our data
+  key
+updated: 2026-08-16T00:34:32Z
+---
+
+Found while fixing karr #44, which put a length check on the two random
+values File::SOPS generates itself (the data key and the per-value GCM
+nonce). That check stops at this distribution.
+
+The age layer generates two more random values, in Crypt::Age::Primitives
+(Crypt::Age 0.001), both from Crypt::PRNG::random_bytes and neither checked:
+
+  generate_file_key   random_bytes(FILE_KEY_SIZE)   -- 16 bytes
+  (nonce)             random_bytes(16)
+
+plus a Crypt::PK::X25519 ephemeral key via generate_key.
+
+The file key is what ChaCha20-Poly1305 encrypts our data key under, so a
+short return there weakens the wrapping of the key that protects every value
+in the document. As with #44, nothing downstream would notice: ChaCha20 keys
+are a fixed size so a short one would fail loudly, but the 16-byte nonce has
+the same property the GCM nonce had -- shorter is still accepted.
+
+Not fixable here: Crypt::Age is a separate distribution. The options are an
+upstream patch (Getty-authored, so cheap), or a check in
+File::SOPS::Backend::Age on what comes back, which can only see the finished
+stanza and not the values that went into it. Probably upstream, in the same
+shape as the refs/cryptx-pv-defect.md report for karr #42.
+
+Low priority: unlike #44 there is no unchecked read() involved, only
+unchecked returns from a CSPRNG that has never been observed to return short.
+#44 was raised because its fallback path made a short return plausible.
+Closed by orchestrator during board hygiene: work shipped in a2ffd22 (Backend::Age::decrypt_data_key refuses a data key that is not 32 bytes) plus the encrypt-side _random_bytes checks. Pinned by t/21-random-bytes.t.
