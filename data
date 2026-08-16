@@ -1,0 +1,28 @@
+---
+claimed_at: 2026-08-10T01:45:10Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:34:56Z
+created: 2026-08-09T05:50:40Z
+id: 54
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- roadmap
+title: '.sops.yaml: the parts creation_rules_for deliberately left out'
+updated: 2026-08-16T00:34:56Z
+---
+
+karr #38 implemented creation_rules_for: find the config, match the first rule, return recipients plus the encryption rule. What it deliberately did NOT do, each its own decision:
+
+ - destination_rules. Not read at all; a config carrying only destination_rules is reported as having no creation rules.
+ - key_groups / shamir_threshold. REFUSED rather than ignored (a rule carrying either dies), because sops writes shamir_threshold into the document it produces and splits the data key across groups. Implementing them means implementing Shamir, which this distribution cannot do.
+ - Recipients for backends other than age - pgp, kms, gcp_kms, azure_keyvault, hc_vault_transit_uri. Also refused; blocked on karr #39. NOTE for whoever picks that up: those are the CONFIG file field names and they are NOT the sops section field names (azure_keyvault vs azure_kv, hc_vault_transit_uri vs hc_vault). Measured on 3.13.3: aws_kms, azure_kv and hc_vault in a creation rule are ignored by sops entirely.
+ - $SOPS_CONFIG. sops honours it; creation_rules_for does not, on purpose - an environment variable that redirects which public keys a secret gets encrypted to is a reasonable thing for a user to set for a command they typed and not a reasonable thing for a library to obey for a caller who never asked. config => $ENV{SOPS_CONFIG} opts in. Revisit only with a reason.
+ - The full --config search rules.
+
+Split out of #38.
+Added explicit POD section 'What this does not read or return' documenting destination_rules (not read), aws_kms/azure_kv/hc_vault in a creation rule (ignored, with the section-vs-config name asymmetry called out), and . No code change.
+Closed by orchestrator during board hygiene: work shipped in 6af03cd (POD section 'What this does not read or return').
