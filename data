@@ -1,0 +1,22 @@
+---
+claimed_at: 2026-08-10T01:44:31Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:33:33Z
+created: 2026-08-08T23:31:36Z
+id: 29
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- interop
+- types
+title: YAML::XS and Go's yaml.v3 resolve some bare scalars differently, so our type
+  differs from sops's
+updated: 2026-08-16T00:33:33Z
+---
+
+Surfaced by karr #15 / ADR 0002: now that the type comes from the parser, a disagreement between OUR parser and Go yaml.v3 is visible as a type difference on the wire, where the old text-pattern ladder flattened it. Measured against sops 3.13.3 and YAML::XS: sops types "0x10" as int with plaintext 16 and "1_000" as int with plaintext 1000; YAML::XS resolves neither, so File::SOPS types both as str and writes the source text. ".5" agrees (float, plaintext 0.5). Both directions round-trip self-consistently and neither is a MAC failure - a document we write is accepted by sops and vice versa - so this is a fidelity gap, not a corruption: the value comes back as the string "0x10" rather than the number 16. Fixing it means either post-processing YAML::XS output against YAML 1.1/1.2 resolution rules or changing parser, and ADR 0001 already records why the emitter/parser choice is load-bearing for the MAC. Recorded rather than fixed; see the last section of ADR 0002.
+One more instance, measured while doing karr #28: a JSON integer ABOVE 2^64. Cpanel::JSON::XS hands back 18446744073709551616 as a plain string (POK only, no NOK), so File::SOPS types it str and writes the digits verbatim; Go's encoding/json makes it a float64 and sops writes type:float with plaintext 18446744073709552000. Same shape as the rest of this ticket - self-consistent both ways, sops accepts what we write, but the value comes back as a string rather than a number. YAML::XS does NOT have this problem: it gives NOK for the same literal, so the YAML path agrees with sops.
+Confirmed: ADR 0002 already documents the parser disagreement (sops 0x10/1_000 as int, JSON >2^64 as float) as a fidelity gap, recorded rather than fixed. Adding an interop test that pins it under t/04-interop.t so the gap is visible and not silently 'fixed' without a real decision. No code change in Encrypted.pm / Metadata.pm / SOPS.pm.
+Closed by orchestrator during board hygiene: work shipped in da7805a (interop test pinning the parser-disagreement fidelity gap). Decision recorded in ADR 0002: recorded, not fixed.
