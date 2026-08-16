@@ -1,0 +1,37 @@
+---
+claimed_at: 2026-08-10T16:27:07Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-08-16T00:30:23Z
+created: 2026-08-09T06:26:40Z
+id: 59
+priority: normal
+started: 2026-08-10
+status: done
+tags:
+- interop
+- wire
+- json
+- yaml
+- mac
+title: Non-finite floats (Inf, NaN) are written as null, as invalid JSON, or as Inf,
+  and never round-trip
+updated: 2026-08-16T00:30:23Z
+---
+
+Found while measuring karr #56 (sops 3.13.3, Perl 5.36.0). value_to_bytes has a deliberate branch for these -- it writes +Inf, -Inf and NaN, which is what Gos strconv.FormatFloat produces -- but nothing on the emitting side can carry them, and nothing refuses them either.
+
+Measured, an unencrypted 9**9**9 (+Inf), default configuration:
+
+  format  backend           document says   result
+  json    Cpanel::JSON::XS  null            self MAC FAIL, sops -d exit 51
+  json    JSON::XS          inf             sops -d exit 1, "Could not unmarshal input data: invalid character i"
+  yaml    (YAML::XS)        Inf             self decrypt OK, sops -d exit 51 (MAC mismatch)
+
+The digest covers +Inf in all three cases. Under Cpanel the value is not merely misrendered, it is GONE -- null -- and the document is unreadable by either implementation.
+
+JSON has no representation for these at all, so there is no rendering that fixes the json rows. The honest fix is probably assert_representable: refuse a non-finite float on the write side, the way it already refuses an integer wider than int64, and say what to do instead (store the string). Reading is a separate question -- a type:float plaintext of +Inf / NaN is accepted by _deserialize_value today and should stay accepted, since Go writes it.
+
+Not folded into #56: it moves wire behaviour (a croak where there was none) and wants its own ADR paragraph. Wire lane.
+Commit-bereit. lib/File/SOPS/Encrypted.pm +45 (neuer float-Block in assert_representable, POD erweitert um non-finite float =item). t/28-non-finite-float-refusal.t NEU, 22 subtests gruen. Suite 657/657 PASS, t/04-interop.t (31 Tests) gegen sops 3.13.3 AUSGEFUEHRT, nicht geskippt. Lane: wire. Test-Fix waehrend der Sitzung: 2 kleine Defekte in der Test-Regex (Interpolations-Footgun mit + als Quantifier) + 1 widersinnige unless-Klausel, die das Form-Naming verboten haette. Code-Bedeutung unveraendert -- (+Inf) ist der gewollte Name der Form, nicht der Wert. KEIN Changes-Eintrag geschrieben -- Maintainer entscheidet, ob karr #59 einen eigenen Absatz bekommt oder zusammen mit #62 in den {{}} kommt (#62 = emitter/value_to_bytes Disagreement, noch offen). KEIN ADR geschrieben -- passt zu ADR 0004 (foreign scalars) und 0006 (floats emitted in form that parses back); die Refusal-Rationale ist 'wire write cannot carry it', dokumentiert in der POD. KEIN commit durchgefuehrt.
+Committed as 4a56b20 (Encrypted.pm +45, t/28 NEU, Changes BEHAVIOUR CHANGE entry written by the orchestrator). Suite 657/657 across 29 files, t/04-interop.t executed against sops 3.13.3, not skipped. Working tree clean. NOTE for karr #62: five of its six matrix rows are now closed by this refusal -- only YAML -0.0 remains, so #62 should be rescoped to that single case.
