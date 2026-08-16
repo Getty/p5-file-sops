@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-08-10T01:44:42Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-16T00:33:57Z
+created: 2026-08-09T00:54:17Z
+id: 41
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- interop
+title: edit re-keys the document; sops edit does not
+updated: 2026-08-16T00:33:57Z
+---
+
+Found while implementing edit (karr #4).
+
+Measured against sops 3.13.3: `sops edit` leaves the wrapped data keys BYTE-IDENTICAL
+across an edit -- the age `enc` blob before and after are the same. It decrypts the
+tree, edits it, and re-encrypts the values under the SAME data key, changing only the
+values, the MAC and lastmodified.
+
+File::SOPS->edit decrypts and calls encrypt, which generates a new data key every
+time. Consequences, all documented on the method:
+
+- every edit rewrites the whole sops section, so the diff of an edited file is
+  larger than sops would produce;
+- edit inherits rotate refusal for foreign key material (pgp/kms/...), because a
+  new data key cannot be wrapped for those recipients. `sops edit` has no such
+  limitation, since it never replaces the key. This is the part that actually
+  costs a user something: a document shared with a PGP recipient cannot be edited
+  here at all.
+
+Preserving the data key would need encrypt to accept one -- a `data_key`
+argument, i.e. putting raw key material into the public API -- plus carrying the
+existing key-material fields across into the new metadata instead of regenerating
+them. That is a real API decision (and probably an ADR), not a refactor, which is
+why edit shipped re-keying and saying so.
+
+Worth doing if and when a backend other than age exists (karr #39): until then
+the refusal only ever fires on documents this distribution could not have
+produced.
+POD now points at the future data_key argument under the existing 'Editing re-keys the file' section, with the caveat that raw key material on the public API is a real decision. Changes entry added. No code change.
+Closed by orchestrator during board hygiene: work shipped in 36fa244 (POD notes the future data_key argument under 'Editing re-keys the file'). Decision: not built while age is the only backend.
