@@ -1,0 +1,78 @@
+---
+claimed_at: 2026-08-10T16:23:41Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-19T23:37:40Z
+created: 2026-08-09T22:13:20Z
+depends_on:
+- 69
+id: 66
+priority: high
+started: 2026-08-10
+status: done
+tags:
+- json
+- wire
+- mac
+title: JSON writes an unblessed \1 / \0 as true/false while the digest covers SCALAR(0x...)
+updated: 2026-08-19T23:37:40Z
+---
+
+Gefunden beim Abarbeiten von #65 (YAML blessed-leaf guard), gemessen gegen sops 3.13.3.
+
+Dieselbe Fehlerklasse wie #65, anderer Ausloeser: NICHT blessed, sondern eine
+gewoehnliche Skalar-Referenz. Cpanel::JSON::XS schreibt \1 als bare `true` und
+\0 als bare `false` -- das ist eine dokumentierte JSON::XS-Konvention, kein
+Fehler des Encoders. detect_type nennt das Leaf `str` (ref, nicht blessed), also
+deckt der Digest die Stringifizierung `SCALAR(0x55...)`, eine Heap-Adresse.
+
+Gemessen, unencrypted Leaf, sops 3.13.3:
+
+  json  \1   emittiert  "x_unencrypted" : true    self-MAC FAIL, sops -d exit 51
+  json  \0   emittiert  "x_unencrypted" : false   self-MAC FAIL, sops -d exit 51
+
+Still geschrieben, kein Wort. YAML hat denselben Fall (dort `!!perl/ref`) und
+lehnt ihn seit #65 / ADR 0008 ab; die JSON-Seite nicht, weil
+Format::JSON::_reject_foreign_bignum nur Math::BigFloat und Math::BigInt bei
+Namen kennt und Cpanel eine UNBLESSED Referenz nicht von sich aus verweigert
+(nur blessed Objekte).
+
+Fix ist eine Bedingung mehr in _reject_foreign_bignum: jede Referenz ausser
+einer exakten JSON::PP::Boolean ablehnen, mit derselben Begruendung wie auf der
+YAML-Seite. Damit waeren beide Emitter deckungsgleich. Bewusst NICHT unter #65
+mit erledigt, um die Aenderung auf das zu beschraenken was das Ticket
+beschreibt.
+
+Zu pruefen vor dem Fix, wie bei #65: ob \1/\0 irgendwo als Boolean-Idiom durch
+diese Distribution laufen. Beim Suite-weiten Messen unter #65 kam KEINE
+unblessed Referenz an einem Emitter an -- 28 blessed Leaves, alle
+JSON::PP::Boolean, plus die 4 Bignums aus den Guard-Tests -- aber ein Caller
+koennte \1 als Boolean uebergeben (JSON::XS akzeptiert es), und der bekaeme dann
+ein die statt eines kaputten Dokuments. Das ist die richtige Antwort, gehoert
+aber in Changes.
+
+Wire-Lane.
+Implementation + Tests committed: 8a76de0 + 1ecf549. t/04-interop.t + t/25 + t/26 alle ausgefuehrt gegen sops 3.13.3, 606/606 PASS.
+Review-Stand: Commit 8a76de0, lib/File/SOPS/Format/JSON.pm (nicht in HEAD-Stat, im full-Diff), lib/File/SOPS/Encrypted.pm +reject-POD, Changes +24, ADR 0008 um Known-Gap-Closed erweitert (kein neues ADR -- selbe Regel, selbe Ausnahme, selbe Rationale). Tests t/26-json-unblessed-ref-guard.t vorhanden (14 subtests). Suite 606/606 PASS, t/04 + t/25 + t/26 gegen sops 3.13.3 ausgefuehrt. _reject_foreign_bignum wurde zu _reject_referenced_leaf -- exakt-Klassen-Regel wie auf der YAML-Seite (nicht ->isa, sonst wuerde JSON::PP::Boolean-Subklasse als loophole entstehen). BigNum-Fall bleibt in scope, neuer Branch im selben Guard. BEHAVIOUR CHANGE: \1 / \0 als leaf values sterben jetzt mit croak, wurden vorher stillschweigend als true/false geschrieben. Maintainer: Diff reviewen, BEHAVIOUR-CHANGE-Flag im Changes-Eintrag bestaetigen.
+PLAN (Orchestrator, 2026-08-16) -- Review plus ein kleiner, gemessener Rest.
+
+8a76de0 + 1ecf549 sind in HEAD, t/26-json-unblessed-ref-guard.t existiert
+(13 subtest-Bloecke, nicht 14).
+
+REST, nachgemessen: der Review-Bericht im Body behauptet "_reject_foreign_bignum
+wurde zu _reject_referenced_leaf". Das ist in HEAD NICHT passiert.
+Format/JSON.pm:204 und :243 heissen weiterhin _reject_foreign_bignum, waehrend
+die Funktion inzwischen jede Referenz ausser JSON::PP::Boolean ablehnt -- der
+Name sagt heute etwas anderes, als der Code tut. Die YAML-Seite heisst korrekt
+_reject_unwritable_leaf. Reine Umbenennung, kein Wire-Byte bewegt sich,
+Format-Lane. Laeuft am besten mit #68, das ohnehin beide Callbacks anfasst.
+
+Schritte:
+  1. git show 8a76de0 1ecf549
+  2. BEHAVIOUR CHANGE im Changes-Eintrag bestaetigen: \1 / \0 als Leaf sterben
+     jetzt mit croak, wurden vorher still als true / false geschrieben.
+  3. Umbenennung nachziehen -- oder bewusst verwerfen und das hier vermerken.
+  4. karr move 66 done
+INHALTLICH BESTAETIGT 2026-08-19: Maintainer bestaetigt den BEHAVIOUR CHANGE -- ein unblessed \\1 / \\0 als Leaf stirbt jetzt mit croak, statt still als true/false geschrieben zu werden und dabei den eigenen MAC zu brechen (sops -d exit 51). Das BEHAVIOUR-CHANGE-Flag im Changes-Eintrag bleibt. Ticket bleibt in review, bis der eine gemessene Rest erledigt ist: die Umbenennung _reject_foreign_bignum -> _reject_referenced_leaf in Format/JSON.pm, die der urspruengliche Bericht behauptet hatte und die nie passiert ist. An die Format-Lane vergeben, zusammen mit #68.
+Rest erledigt (Format-Lane, Commit 1ac697f): _reject_foreign_bignum -> _reject_referenced_leaf in lib/File/SOPS/Format/JSON.pm (Aufrufstelle in emit() + Definition). Alte Namensnennungen mitgezogen: t/24-float-precision.t, t/26-json-unblessed-ref-guard.t (beide als Historie kenntlich, damit ein grep nach dem alten Namen weiterhin faendig wird), docs/adr/0008 (Closed-by-#66-Absatz nennt jetzt beide Namen), Changes-Eintrag unter {{$NEXT}}. Verhalten unveraendert; Emitter-Bytes gegen HEAD ueber ein Neun-Dokument-Korpus byte-identisch gemessen. prove -lr t/ 658/658 PASS, t/04-interop.t AUSGEFUEHRT 31/31 gegen sops 3.13.3. Punkt 2 des Plans (BEHAVIOUR-CHANGE-Flag im Changes-Eintrag bestaetigen) bleibt beim Maintainer -- nicht angefasst.
+ERLEDIGT 2026-08-19. Beide Haelften zu: (1) Maintainer bestaetigt den BEHAVIOUR CHANGE -- unblessed \\1 / \\0 als Leaf stirbt mit croak statt still als true/false geschrieben zu werden und den eigenen MAC zu brechen; das Flag im Changes-Eintrag bleibt. (2) Der gemessene Rest ist weg: _reject_foreign_bignum heisst in Commit 1ac697f jetzt _reject_referenced_leaf, der alte Name ist aus lib/ verschwunden (nachgeprueft per grep). Die fuenf weiteren Fundstellen wurden mitgezogen: t/24 und t/26 nennen beide Namen, weil die Stellen historisch erzaehlen und ein grep auf jeden von beiden landen soll; ADR 0008 haelt die Umbenennung als Teil von #66 fest; Changes hat einen eigenen Bullet. Verifiziert 658/658 PASS, t/04 31/31 AUSGEFUEHRT.
