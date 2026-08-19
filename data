@@ -1,0 +1,129 @@
+---
+class: standard
+completed: 2026-08-19T23:58:24Z
+created: 2026-08-09T15:30:43Z
+depends_on:
+- 69
+id: 62
+priority: medium
+started: 2026-08-19T23:58:24Z
+status: done
+tags:
+- wire
+- mac
+- yaml
+- json
+- interop
+title: 'YAML -0.0: emitter writes 0, digest covers -0 (the last row of the old non-finite
+  matrix)'
+updated: 2026-08-19T23:58:24Z
+---
+
+Found while building the case matrix for karr #58 (sops 3.13.3). Same family as #58 -- the emitter writes something value_to_bytes did not digest -- but none of these is the 16/17-digit case and none is fixed by fixing #58. Measured with an unencrypted leaf, default unencrypted_suffix:
+
+  format  value   emitted   digest   result
+  yaml    -0.0    0         -0       sops -d exit 51, self MAC FAIL
+  yaml    +Inf    Inf       +Inf     sops -d exit 51 (self MAC OK)
+  yaml    NaN     NaN       NaN      exit 0 -- works, by luck: Go reads bare NaN as the
+                                     STRING NaN, whose ToBytes is also NaN
+  json    NaN     null      NaN      sops -d exit 51, self MAC FAIL
+  json    +Inf    null      +Inf     sops -d exit 51, self MAC FAIL
+  json    -Inf    null      -Inf     sops -d exit 51, self MAC FAIL
+
+JSON -0.0 is NOT in this list: Cpanel writes -0.0, which reparses as the NV -0.0 and digests as -0, so it works. That is exactly what ADR 0005 bought, and any fix here must not lose it -- the naive form of #58 option (a) does lose it (Math::BigFloat->new(-0) drops the sign, exit 51).
+
+For YAML the fix is probably the same dualvar mechanism #58 is considering: with it, +Inf and -Inf emit as +Inf/-Inf and sops -d goes to exit 0 (measured). -0.0 stays broken either way (emitting -0 makes Go yaml.v3 resolve an int 0, digest 0, still a mismatch), so YAML -0.0 may be a genuine no-representation case for a croak -- the argument the int64 range check already makes.
+
+For JSON there is no representation for NaN or Inf at all, so the honest answer is probably to refuse rather than write null and hand the caller a document that fails its own MAC. That is an API/wire policy decision, not a mechanical fix.
+
+Do not fold this into #58. Sequence it after, so the two ADRs stay separable.
+RESCOPED after karr #59 landed (commit 4a56b20). Five of the six rows in this ticket's matrix are now closed: assert_representable refuses every non-finite float at encrypt time, so yaml +Inf, json NaN, json +Inf and json -Inf can no longer be written at all, and yaml NaN with them. The ONLY remaining row is yaml -0.0: emitted as 0, digested as -0, sops -d exit 51, self-MAC FAIL. Per the original body that row may be a genuine no-representation case (emitting -0 makes Go yaml.v3 resolve int 0, digest 0, still a mismatch), which is the same argument the int64 range check already makes -- i.e. it likely belongs in the very assert_representable block #59 just added. json -0.0 must NOT be touched: Cpanel writes -0.0, reparses as NV -0.0, digests as -0, and that is exactly what ADR 0005 bought.
+PLAN (Orchestrator, 2026-08-16) -- Wire-Lane. Eine Zeile Matrix, eine Entscheidung, eine Falle.
+
+Nachgemessen 2026-08-16 in HEAD (perl 5.40.1, Cpanel::JSON::XS-Backend) -- die
+Rescope-Notiz stimmt:
+
+  YAML  -0.0  ->  "zzz: 0"                                      MISMATCH
+  JSON  -0.0  ->  "zzz" : -0.0                                  ok
+  value_to_bytes(-0.0) = "-0"
+
+Nur diese eine Zeile ist offen; die uebrigen fuenf hat #59 (4a56b20)
+geschlossen.
+
+ENTSCHEIDUNG VOR DEM CODE -- refuse oder reparieren?
+Reparieren scheitert laut Body an Go: ein emittiertes -0 wird von yaml.v3 als
+int 0 aufgeloest, digest 0, der Mismatch bleibt. Fuer YAML gibt es also keine
+Darstellung. Refuse ist damit die wahrscheinliche Antwort.
+
+DIE FALLE, die den Fix wertlos macht, wenn man sie uebersieht:
+assert_representable (Encrypted.pm:509ff) ist FORMATUNABHAENGIG. Ein Refuse
+dort trifft AUCH JSON -- und JSON -0.0 funktioniert heute und ist genau das,
+was ADR 0005 erkauft hat. Also entweder kennt der Check das Zielformat, oder
+er gehoert gar nicht dorthin, sondern in den YAML-Emitter, wo der
+reject-Callback aus ADR 0008 schon sitzt und wo Formatwissen hingehoert.
+Zweiteres ist wahrscheinlich richtig: der YAML-Emitter ist der einzige, der
+-0.0 nicht schreiben kann.
+
+VOR DEM CODE ZU LESEN: _canonical_floats gibt bei -0 heute frueh zurueck --
+$NO_AGREED_FORM (Encrypted.pm:746) matcht /\A(?:NaN|[+-]Inf|-0)\z/, also wird
+-0.0 vom carrier ausgenommen und unveraendert an Dump() gereicht. Genau dort
+sitzt der Hebel, und genau dort steht schon eine Entscheidung drin, die nicht
+versehentlich fuer JSON mitgeaendert werden darf.
+
+ADR: ein Absatz in 0006 (dort steht die -0-Ausnahme), plus ein Satz in 0008,
+falls der Refuse ueber den reject-Callback laeuft.
+
+Test: eigene Datei oder subtests in t/28-non-finite-float-refusal.t. Die
+eigentliche Assertion ist nicht "YAML -0.0 refused", sondern "JSON -0.0
+UNVERAENDERT" -- das ist die Zeile, die eine Regression faengt. Dazu ein
+Interop-Fall gegen sops.
+
+Mitnehmen, kosmetisch, gleicher Block: Encrypted.pm:535 sagt "Yo's
+strconv.FormatFloat", gemeint ist "Go's".
+MEASURED + IMPLEMENTED 2026-08-19 (wire lane, commit a0d43c6) -- BUT NOT AS DECIDED. THE DECISION'S PREMISE IS FALSE.
+
+The maintainer's decision was 'refuse in assert_representable', resting on
+'YAML -0.0 has no representation'. That was derived from a single spelling
+(-0, the canonical text, which yaml.v3 resolves as an INTEGER) and never
+measured against any other. Measured now, sops 3.13.3, one document per
+spelling, unencrypted leaf, digest -0:
+
+  0            sops -d exit 51   self-MAC FAIL   (what YAML::XS renders)
+  -0           sops -d exit 51   self-MAC FAIL   (the canonical text)
+  !!float -0   sops -d exit 51   self-MAC FAIL
+  -0.0         sops -d exit 0    self-MAC OK     reads back as -0
+  -0.          sops -d exit 0    self-MAC OK
+
+A representation exists, so refusing would have croaked on a value that
+works. Two further measurements make a refusal in assert_representable
+actively wrong, both of which the ticket's plan did not consider:
+
+  * an ENCRYPTED -0.0 works today in BOTH formats (sops -d exit 0, reads
+    back -0). assert_representable runs over encrypted leaves too, so a
+    refusal there breaks it -- exactly the ADR 0008 objection.
+  * JSON -0.0 works today. assert_representable is format-blind, so a
+    refusal there breaks it too -- the trap this ticket flagged.
+
+Implemented the repair instead (option 'reparieren', which the ticket
+preferred and rejected only on the false premise): -0 leaves
+$NO_AGREED_FORM in Encrypted.pm and Format::YAML::_float_carrier writes
+-0.0. Byte movement verified by emitting 31 floats/strings/ints through
+both handlers before and after: EXACTLY ONE LINE MOVES (the YAML negative
+zero). JSON counter-measurement green before and after.
+
+ADR 0006 amended (karr #62 paragraph); no new ADR -- trigger and
+consequence are ADR 0006's own, and the -0 exclusion lived there.
+Tests: t/24-float-precision.t section 9, 3 subtests, all against the
+binary. Counter-proof: fix reverted -> subtest 19 red, rest green.
+prove -lr t/ 661/661 PASS. SOPS_BIN=/tmp/sops prove -l t/04-interop.t
+31/31 PASS, EXECUTED.
+
+Also measured and worth knowing: sops CANNOT write this value either.
+sops -e on a plaintext -0.0 emits -0 and then rejects its own file with
+exit 51, in YAML and in JSON alike. So there is no sops->us fixture.
+
+MAINTAINER: if you still want the refusal, this is one commit (a0d43c6)
+to revert. It was implemented against the stated decision because the
+decision's stated reason is measurably untrue and a refusal would have
+been a regression.
+ERLEDIGT 2026-08-19, Commit a0d43c6 -- ABER NICHT WIE ENTSCHIEDEN, und der Maintainer hat die Revision heute bestaetigt. Die Entscheidung lautete 'in assert_representable refusen'; die Wire-Lane hat gemessen, dass deren Praemisse falsch ist. Eine Repraesentation EXISTIERT, sie wurde nur nie durchprobiert: gegen sops 3.13.3, ein Dokument je Schreibweise, Digest -0 -- '0' exit 51, '-0' exit 51, '!!float -0' exit 51, aber '-0.0' EXIT 0 (liest -0 zurueck) und '-0.' exit 0. Ein Refuse haette also auf einem Wert gecroakt, der funktioniert. Zwei weitere Messungen machten ihn aktiv falsch: ein VERSCHLUESSELTES -0.0 funktioniert heute in beiden Formaten, und assert_representable laeuft auch ueber verschluesselte Leaves (genau ADR 0008s Einwand gegen Formatregeln an dieser Stelle); und assert_representable ist formatblind, haette also JSON -0.0 mitgetoetet -- die Falle, die dieses Ticket selbst markiert hatte. Gebaut wurde stattdessen die im Ticketkoerper genannte Option 'reparieren': NO_AGREED_FORM laesst -0 fallen, YAMLs _float_carrier wird zu dualvar(value, text eq '-0' ? '-0.0' : text). Der -0.0-Text ist die einzige geschriebene Dezimalzahl der Distribution, die nicht wortwoertlich value_to_bytes-Ausgabe ist -- eine Schreibweise, keine zweite Konvertierung, gleicher Double, Digest unangetastet. Gegenmessung JSON explizit: 31 Floats/Strings/Integer durch BEIDE Handler vor und nach der Aenderung, genau EINE Zeile bewegt sich (YAML v: 0 -> v: -0.0), JSON null Bewegung. +0.0 bleibt bare 0, die Strings '-0' und '-0.0' bleiben quoted. Gegenprobe: Fix gestasht -> t/24 subtest 19 rot, die anderen 20 gruen. ADR 0006 ergaenzt (kein neues -- die -0-Ausnahme stand in dessen Decision-Abschnitt). Orchestrator hat unabhaengig nachgeprueft: 661/661 PASS, t/04 31/31 AUSGEFUEHRT, und sops liest das YAML -0.0 als sein eigenes -0. Nebenbefund im Ticket festgehalten: sops kann diesen Wert selbst nicht schreiben -- sops -e auf ein plaintext -0.0 emittiert -0 und weist die eigene Datei danach mit exit 51 zurueck, in YAML UND JSON. Deshalb gibt es keine sops-nach-uns-Fixture.
