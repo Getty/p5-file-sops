@@ -28,7 +28,9 @@ use Crypt::Age;
 # to sops and to this module alike. Exit 51 in sops -d, measured against sops
 # 3.13.3.
 #
-# The pre-fix _reject_foreign_bignum only named Math::BigFloat and Math::BigInt,
+# The pre-fix guard -- then _reject_foreign_bignum, renamed to
+# _reject_referenced_leaf once it stopped being about bignums -- only named
+# Math::BigFloat and Math::BigInt,
 # because those were the two classes allow_bignum whitelists wide of our own
 # carrier. Cpanel itself catches every other blessed reference (Foo=HASH(0x...),
 # qr//) with its own error, and unblessed SCALAR refs fell through silently.
@@ -196,6 +198,8 @@ subtest 'the guard reaches a rejected leaf nested inside a hash (JSON)' => sub {
     };
     ok(!defined $nested, 'a \1 nested inside a hash is refused');
     like($@, qr/unblessed SCALAR reference/, 'with the guard message');
+    like($@, qr/\Aouter_unencrypted:inner_unencrypted: /,
+        'and the key path in front of it (karr #68)');
 };
 
 subtest 'the guard reaches a rejected leaf nested inside an array (JSON)' => sub {
@@ -206,6 +210,42 @@ subtest 'the guard reaches a rejected leaf nested inside an array (JSON)' => sub
     };
     ok(!defined $in_array, 'a \0 inside an array is refused');
     like($@, qr/unblessed SCALAR reference/, 'with the guard message');
+    like($@, qr/\Alist_unencrypted:2: /,
+        'and the key path, array index included (karr #68)');
+};
+
+###############################################################################
+# 3a. karr #68: the refusal says WHERE, on the JSON side too. Same walk, same
+#     path, same notation as t/25 pins for YAML -- both handlers take the
+#     location from canonical_float_tree, so a message shape that drifts apart
+#     between them is a bug, and these two blocks are what catches it.
+#
+#     '(document root)' for the empty path and array indices carried are both
+#     deliberate; the reasoning is in t/25-blessed-leaf-guard.t section 3a.
+###############################################################################
+
+subtest 'the JSON refusal names the leaf location (karr #68)' => sub {
+    my @cases = (
+        [ 'a leaf at the document root',
+          \1,
+          qr/\A\(document root\): / ],
+        [ 'a top-level leaf',
+          { leaf_unencrypted => \1 },
+          qr/\Aleaf_unencrypted: / ],
+        [ 'a leaf under two mappings',
+          { a_unencrypted => { b_unencrypted => \1 } },
+          qr/\Aa_unencrypted:b_unencrypted: / ],
+        [ 'a leaf inside a sequence inside a mapping',
+          { a_unencrypted => [ 'x', { b_unencrypted => \0 } ] },
+          qr/\Aa_unencrypted:1:b_unencrypted: / ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $data, $expect) = @$case;
+        my $result = eval { File::SOPS::Format::JSON->emit($data) };
+        ok(!defined $result, "$label is refused");
+        like($@, $expect, "$label is named by its path");
+    }
 };
 
 ###############################################################################

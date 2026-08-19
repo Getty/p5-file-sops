@@ -154,6 +154,14 @@ produces a document sops accepts today, the bytes are unchanged.
   as 29 digits and reads back as `1`. `canonical_float_tree` therefore takes an
   optional `reject` callback, and the JSON handler refuses both classes by name.
   Callers see a die where they saw a die before, with a message that says why.
+
+  **Amended by karr #68:** `reject` is called as `$reject->($leaf, $where)`.
+  `$where` is that leaf's key path, built by the same recursion, colon-joined,
+  or `(document root)` — the shape `File::SOPS::_at_path` already uses for the
+  MAC walk's messages, with array indices carried because a diagnostic is not
+  an AAD. Both handlers put it in front of their message. The walk returns the
+  same tree it always did; the only change is that the refusal says which leaf
+  it is about.
 - Two emit-and-reparse cycles per float leaf that needs checking. On documents
   of the size secrets files actually are this is not measurable; on a document
   with thousands of floats it would be.

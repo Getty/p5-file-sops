@@ -104,16 +104,27 @@ Revision history for File-SOPS
     can disagree") and is now pinned by an interop subtest so a future
     attempt to close it has to break that assertion on purpose. No code
     or wire bytes move.
-  - Known gap, not fixed in this revision: when _reject_foreign_bignum
-    (Format/JSON.pm) or _reject_unwritable_leaf (Format/YAML.pm) refuses
-    a leaf, the message names the class and the cause but not where in
-    the document the leaf sits. In a large document with one bad leaf
-    that is a manual search (karr #68). The fix is to thread a path
-    argument through canonical_float_tree to both reject callbacks --
-    the same shape _at_path / _sorted_leaves already use in
-    _compute_mac -- but that is a change to the format lane's walks and
-    is not within the API lane's surface. Logged for the format lane to
-    pick up; the current behaviour is unchanged.
+  - A refused leaf is now named by its key path. When the YAML or JSON
+    emitter refuses a leaf it cannot write as the text the digest covers
+    - a blessed object, a Math::BigFloat, an unblessed \1 - the message
+    opens with where that leaf sits: "servers:1:weight: cannot write ..."
+    or "(document root): cannot write ...". It named the class and the
+    cause but not the location, so one bad leaf in a large document was
+    a manual search (karr #68). The path is built by the same walk that
+    finds the leaf (File::SOPS::Encrypted::canonical_float_tree, whose
+    optional reject callback is now called as $reject->($leaf, $where)),
+    and it is the shape the MAC walk's own messages already use, so
+    there is one notation to learn and not two. Array indices are
+    carried here where the MAC path drops them - that omission is the
+    AAD rule, and this string is a diagnostic. Keys only: no value ever
+    reaches the message. No wire bytes move; the walk returns the same
+    tree it did before, verified against sops 3.13.3.
+  - Format::JSON's reject callback is renamed from _reject_foreign_bignum
+    to _reject_referenced_leaf. Internal, no API change: the two-name
+    Math::BigFloat / Math::BigInt whitelist it was named for stopped
+    existing when karr #66 widened it to every reference but an exact
+    JSON::PP::Boolean, and the name had been describing the old rule
+    ever since. The YAML twin is _reject_unwritable_leaf.
   IMPORTANT - if you encrypted data with 0.001 or 0.002, read this.
   The defects below could corrupt or misrepresent stored values, and
   two of them are not repairable from the existing ciphertext:

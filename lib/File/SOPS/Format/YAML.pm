@@ -318,16 +318,20 @@ sub emit {
 # leaves that are about to become ENC[...] strings. A blessed leaf in an
 # ENCRYPTED slot works in both formats today (type:str, plaintext = the same
 # stringification) and must keep working.
+#
+# $where is the leaf's key path from canonical_float_tree, in the shape the MAC
+# walk's messages already use. It goes in FRONT of the message: the class alone
+# told a caller what was wrong and left finding it a manual search (karr #68).
 sub _reject_unwritable_leaf {
-    my ($node) = @_;
+    my ($node, $where) = @_;
 
     return if ref($node) eq 'JSON::PP::Boolean';
 
     my $what = blessed($node) ? "a leaf blessed into " . ref($node)
                               : "an unblessed " . ref($node) . " reference";
 
-    croak "cannot write $what to a SOPS document: YAML::XS writes it as a "
-        . "Perl-specific !!perl/ tagged structure while the digest covers its "
+    croak "$where: cannot write $what to a SOPS document: YAML::XS writes it "
+        . "as a Perl-specific !!perl/ tagged structure while the digest covers its "
         . "stringification, so the document and its own MAC would state "
         . "different things and neither sops nor this module could read the "
         . "file. Pass a plain Perl scalar, or the string you want stored. A "

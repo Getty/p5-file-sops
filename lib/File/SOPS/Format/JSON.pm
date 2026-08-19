@@ -201,7 +201,7 @@ sub emit {
         $data,
         roundtrips => \&_float_roundtrips,
         carrier    => \&_float_carrier,
-        reject     => \&_reject_foreign_bignum,
+        reject     => \&_reject_referenced_leaf,
     ));
 }
 
@@ -240,8 +240,12 @@ sub emit {
 # leaves that are about to become ENC[...] strings. A referenced leaf in an
 # ENCRYPTED slot works in both formats today (type:str, plaintext = the same
 # stringification) and must keep working. See docs/adr/0008 and karr #66.
-sub _reject_foreign_bignum {
-    my ($node) = @_;
+#
+# $where is the leaf's key path from canonical_float_tree, in the shape the MAC
+# walk's messages already use. It goes in FRONT of the message: the class alone
+# told a caller what was wrong and left finding it a manual search (karr #68).
+sub _reject_referenced_leaf {
+    my ($node, $where) = @_;
 
     return if ref($node) eq 'JSON::PP::Boolean';
 
@@ -249,8 +253,8 @@ sub _reject_foreign_bignum {
         ? "a leaf blessed into " . ref($node)
         : "an unblessed " . ref($node) . " reference";
 
-    croak "cannot write $what to a SOPS document: Cpanel::JSON::XS writes it "
-        . "differently from the stringification the digest covers -- a "
+    croak "$where: cannot write $what to a SOPS document: Cpanel::JSON::XS "
+        . "writes it differently from the stringification the digest covers -- a "
         . "Math::BigFloat or Math::BigInt as a bare number, an unblessed "
         . "scalar reference as bare true/false, any other object is refused "
         . "by Cpanel itself. The document and its own MAC would state "

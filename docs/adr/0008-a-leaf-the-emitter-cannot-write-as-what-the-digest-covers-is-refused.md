@@ -107,6 +107,13 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   value: an error goes into bug reports, and a plaintext secret that lands
   there was not encrypted for any practical purpose.
 
+  **Amended by karr #68:** it now also names the leaf's key path, in front of
+  the message (`servers:1:weight: cannot write …`, or `(document root): …`).
+  The path comes from `canonical_float_tree`, which passes it to `reject` as a
+  second argument, and is the shape the MAC walk's own messages use. Keys, not
+  values — a SOPS document leaves its keys readable by design, so the rule
+  above is untouched.
+
 ## Consequences
 
 - **A croak where a document used to be written.** This is a behaviour change
@@ -132,9 +139,10 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   `Format::JSON::_reject_foreign_bignum`. Filed as karr #66 rather than folded
   in, so that this change stays the one the ticket describes.
 
-  **Closed by karr #66 (the edit to `_reject_foreign_bignum` that turns the
-  two-name allow_bignum whitelist into the same exact-class rule the YAML side
-  uses).** The JSON guard now refuses every referenced leaf except an exact
+  **Closed by karr #66 (the edit to `_reject_foreign_bignum` -- renamed to
+  `Format::JSON::_reject_referenced_leaf`, because the two-name bignum
+  whitelist it was named for is gone -- that turns it into the same
+  exact-class rule the YAML side uses).** The JSON guard now refuses every referenced leaf except an exact
   `JSON::PP::Boolean`, with the same message naming the class or ref kind and
   never the value, the same exception, the same "encrypted slots are
   unaffected" rule, and the same exact-class-rather-than-`->isa` discipline.

@@ -751,23 +751,41 @@ sub canonical_float_tree {
     my $carrier    = $args{carrier}    // croak "carrier callback required";
     my $reject     = $args{reject};
 
-    return _canonical_floats($tree, $roundtrips, $carrier, $reject);
+    return _canonical_floats($tree, $roundtrips, $carrier, $reject, []);
+}
+
+# WHERE a rejected leaf sits, in the shape File::SOPS::_at_path already uses for
+# the MAC walk's messages -- keys colon-joined, '(document root)' for the empty
+# path. One copy of the convention, here, rather than one per reject callback:
+# a caller who has to learn two notations for the same document is the reason
+# karr #68 exists at all.
+#
+# Array INDICES are carried, where the MAC's own _sorted_leaves drops them --
+# that omission is the AAD rule (SOPS gives every element of an array its
+# parent's path), and this string is a diagnostic, never an AAD. `items:3:key`
+# is the same shape _extract_path reports a navigation failure at.
+sub _leaf_location {
+    my ($path) = @_;
+    return ($path && @$path) ? join(':', @$path) : '(document root)';
 }
 
 sub _canonical_floats {
-    my ($node, $roundtrips, $carrier, $reject) = @_;
+    my ($node, $roundtrips, $carrier, $reject, $path) = @_;
 
-    return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier, $reject) }
+    return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier,
+                                           $reject, [ @$path, $_ ]) }
                  keys %$node }
         if ref $node eq 'HASH';
-    return [ map { _canonical_floats($_, $roundtrips, $carrier, $reject) } @$node ]
+    return [ map { _canonical_floats($node->[$_], $roundtrips, $carrier,
+                                     $reject, [ @$path, $_ ]) }
+                 0 .. $#$node ]
         if ref $node eq 'ARRAY';
 
     # Blessed leaves (JSON::PP::Boolean) and anything else with a reference are
     # not floats and must reach the emitter untouched -- unless the caller's
     # emitter says it cannot write this one faithfully.
     if (ref $node) {
-        $reject->($node) if $reject;
+        $reject->($node, _leaf_location($path)) if $reject;
         return $node;
     }
     return $node unless defined $node;
@@ -822,9 +840,14 @@ emits a L<Scalar::Util/dualvar>'s string half verbatim and unquoted, while
 every JSON backend quotes it and needs a L<Math::BigFloat> under
 C<allow_bignum> instead.
 
-=item * C<reject> is optional and is called for every blessed or otherwise
-referenced leaf, so a handler can refuse one its emitter cannot write as the
-text the digest covers. L</detect_type> calls every reference but a
+=item * C<reject> is optional and is called as C<< $reject->($leaf, $where) >>
+for every blessed or otherwise referenced leaf, so a handler can refuse one its
+emitter cannot write as the text the digest covers. C<$where> is that leaf's
+key path, colon-joined, or the string C<(document root)> -- the same shape the
+MAC walk's own messages use, with array indices carried because this is a
+diagnostic and not an AAD. Both handlers put it in front of their message, so
+one bad leaf in a large document is named rather than searched for (karr #68).
+L</detect_type> calls every reference but a
 L<JSON::PP::Boolean> C<str>, so the digest covers its stringification, and an
 emitter that writes something else instead produces a document that fails its
 own MAC. Both handlers use it: L<File::SOPS::Format::YAML> refuses every

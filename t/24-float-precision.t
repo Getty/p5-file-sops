@@ -352,9 +352,10 @@ PERL
 #    Math::BigFloat->new('1.00000000000000000000000000001') digests as 29
 #    digits and reads back as 1.
 #
-#    _reject_foreign_bignum is the fix: it croaks on any Math::BigFloat or
-#    Math::BigInt reaching the emitter that is NOT its own carrier. Entirely
-#    new behaviour as of karr #58 -- until now, not one line of test.
+#    _reject_referenced_leaf -- named _reject_foreign_bignum when karr #58
+#    added it -- is the fix: it croaks on any Math::BigFloat or Math::BigInt
+#    reaching the emitter that is NOT its own carrier. Entirely new
+#    behaviour as of karr #58 -- until now, not one line of test.
 #
 #    No sops binary needed for these -- the assertion is that File::SOPS
 #    refuses to produce a document at all, which is a Perl-level guarantee.

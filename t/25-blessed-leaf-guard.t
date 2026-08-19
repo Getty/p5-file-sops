@@ -258,6 +258,7 @@ subtest 'the guard is reachable through the public File::SOPS->encrypt, not only
     };
     ok(!defined $encrypted, 'encrypt() does not return a document');
     like($@, qr/\bSome::Random::Class\b/, 'with the same guard message');
+    like($@, qr/\Apoison_unencrypted: /, 'and the key path in front of it (karr #68)');
 };
 
 subtest 'the guard reaches a rejected leaf nested inside a hash and inside an array (YAML)' => sub {
@@ -272,6 +273,8 @@ subtest 'the guard reaches a rejected leaf nested inside a hash and inside an ar
     };
     ok(!defined $nested, 'a poison leaf nested inside a hash is refused');
     like($@, qr/\bSome::Random::Class\b/, 'with the guard message');
+    like($@, qr/\Aouter_unencrypted:inner_unencrypted: /,
+        'and the key path in front of it (karr #68)');
 
     my $in_array = eval {
         File::SOPS::Format::YAML->emit({
@@ -280,6 +283,52 @@ subtest 'the guard reaches a rejected leaf nested inside a hash and inside an ar
     };
     ok(!defined $in_array, 'a poison leaf inside an array is refused');
     like($@, qr/\bSome::Random::Class\b/, 'with the guard message');
+    like($@, qr/\Alist_unencrypted:2: /,
+        'and the key path, array index included (karr #68)');
+};
+
+###############################################################################
+# 3a. karr #68: the refusal says WHERE. It named the class and left finding the
+#     leaf to the reader -- in a document of a hundred keys, a manual search.
+#     The path comes from canonical_float_tree's walk and is the shape
+#     File::SOPS::_at_path already uses for the MAC walk's own messages, so a
+#     caller learns one notation rather than two.
+#
+#     Two things are pinned here deliberately. The empty path renders as
+#     '(document root)', not as an empty prefix -- a leaf CAN sit there, because
+#     a blessed hashref handed to emit() is a leaf and not a mapping. And array
+#     INDICES are carried, where the MAC's own _sorted_leaves drops them: that
+#     omission is the AAD rule (SOPS gives every element of an array its
+#     parent's path) and this string is a diagnostic, never an AAD. Dropping
+#     either has to break an assertion on purpose.
+#
+#     Keys and not values: a SOPS document leaves its keys readable by design,
+#     and nothing derived from a plaintext belongs in an error. Section 3 above
+#     already pins that the message carries no value.
+###############################################################################
+
+subtest 'the YAML refusal names the leaf location (karr #68)' => sub {
+    my @cases = (
+        [ 'a leaf at the document root',
+          bless({}, 'Some::Random::Class'),
+          qr/\A\(document root\): / ],
+        [ 'a top-level leaf',
+          { leaf_unencrypted => bless({}, 'Some::Random::Class') },
+          qr/\Aleaf_unencrypted: / ],
+        [ 'a leaf under two mappings',
+          { a_unencrypted => { b_unencrypted => bless({}, 'Some::Random::Class') } },
+          qr/\Aa_unencrypted:b_unencrypted: / ],
+        [ 'a leaf inside a sequence inside a mapping',
+          { a_unencrypted => [ 'x', { b_unencrypted => bless({}, 'Some::Random::Class') } ] },
+          qr/\Aa_unencrypted:1:b_unencrypted: / ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $data, $expect) = @$case;
+        my $result = eval { File::SOPS::Format::YAML->emit($data) };
+        ok(!defined $result, "$label is refused");
+        like($@, $expect, "$label is named by its path");
+    }
 };
 
 ###############################################################################
