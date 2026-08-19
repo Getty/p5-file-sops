@@ -1,0 +1,138 @@
+---
+claimed_at: 2026-08-10T16:23:34Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-19T23:20:28Z
+created: 2026-08-09T21:49:16Z
+depends_on:
+- 69
+id: 65
+priority: high
+started: 2026-08-09
+status: done
+tags:
+- yaml
+- wire
+- mac
+- api
+title: YAML writes any blessed leaf as a !!perl/ tag and the document fails its own
+  MAC
+updated: 2026-08-19T23:20:28Z
+---
+
+Gefunden beim Abarbeiten von #64 (Testluecken zu #58), vom test-writer als Grenzfall gemeldet und vom Orchestrator nachgemessen. NICHT durch #58 eingefuehrt -- canonical_float_tree reicht blessed Refs unveraendert durch, genau wie Dump() es vorher direkt tat. Der JSON-Guard aus #58 hat die Asymmetrie nur sichtbar gemacht.
+
+Der test-writer hatte es als Bignum-Fall gemeldet. Es ist allgemeiner: JEDES blessed Leaf ausser JSON::PP::Boolean.
+
+Gemessen, beliebige Klasse (bless {a=>1}), unencrypted Leaf:
+
+  json:  REFUSED -- "encountered object ..., but neither allow_blessed,
+         convert_blessed nor allow_tags settings are enabled"
+         (Cpanel::JSON::XS, Format/JSON.pm Zeile 199) -- fail loud, gut
+  yaml:  geschrieben, self-MAC BRICHT
+
+Mit Math::BigFloat->new("1.5") schreibt YAML:
+
+  x_unencrypted: !!perl/hash:Math::BigFloat
+
+also eine perl-spezifische getaggte Struktur, waehrend detect_type das Leaf
+str nennt und der Digest die Stringifizierung ("1.5") deckt. Dokument und
+Digest sagen etwas voellig Verschiedenes; decrypt scheitert an der eigenen
+MAC-Pruefung. Kein sops der Welt liest das.
+
+Das ist die Kernfehlerklasse dieser Distribution: still ein Dokument
+schreiben, das seinen eigenen MAC bricht. Seit #58 ist die JSON-Seite
+dagegen geschuetzt und die YAML-Seite nicht -- eine Asymmetrie, die keinen
+Grund hat.
+
+Naheliegender Fix: den reject-Callback, den canonical_float_tree bereits
+anbietet, auch in Format::YAML::emit wiren und jedes blessed Leaf ausser
+JSON::PP::Boolean ablehnen. Die Mechanik existiert, sie ist auf der
+YAML-Seite nur nicht angeschlossen (Format/YAML.pm uebergibt roundtrips und
+carrier, aber kein reject).
+
+Vorher pruefen: ob es legitime blessed Leaves ausser JSON::PP::Boolean gibt,
+die heute durch die YAML-Seite gehen und weiter durchgehen muessen -- ADR 0002
+und ADR 0004 sind die relevanten. Ein Test gehoert an t/24-float-precision.t
+oder eine eigene Datei, je nachdem wie breit der Guard wird. Wire-lane, weil
+es die Uebereinstimmung von Digest und Dokument bewegt.
+IMPLEMENTIERT. Nicht committet -- Maintainer reviewt den Diff.
+
+Geaendert: lib/File/SOPS/Format/YAML.pm (reject-Callback + _reject_unwritable_leaf + POD),
+lib/File/SOPS/Encrypted.pm (nur die reject-POD-Beschreibung verallgemeinert),
+Changes unter {{$NEXT}}, docs/adr/0008 (neu). t/ nicht angefasst.
+
+ADR: eigenes ADR 0008 statt Absatz in 0006. Begruendung: 0006 entscheidet, wie ein
+FLOAT geschrieben wird; hier wird entschieden, dass ein Leaf gar nicht geschrieben
+wird. Anderer Ausloeser, andere Konsequenz (ein neuer croak), und niemand sucht
+"warum lehnt File::SOPS mein Objekt ab" unter einem Float-ADR.
+
+MESSUNG 1 (welche blessed Leaves sind legitim): emit beider Formate ueber die
+GANZE Suite instrumentiert (25 Dateien, 573 Tests, t/04-interop.t gelaufen).
+28 blessed Leaves erreichten einen Emitter, ALLE JSON::PP::Boolean, plus die 4
+Math::BigFloat/BigInt die die JSON-Guard-Tests absichtlich hinschicken. Keine
+unblessed Referenz. _encrypt_tree ersetzt jedes verschluesselte Leaf durch einen
+ENC[...]-String bevor emit laeuft, ein Objekt in einem VERSCHLUESSELTEN Slot
+erreicht den Guard also nie.
+
+MESSUNG 2 (sieht emit die sops-Sektion): JA -- serialize baut EINEN Baum aus
+data + metadata->to_hash. Metadata::to_hash schreibt mac_only_encrypted =>
+JSON->true. Ein Guard ohne Boolean-Ausnahme haette JEDES
+mac_only_encrypted-Dokument unschreibbar gemacht. Verifiziert nach dem Fix:
+mac_only_encrypted + bool in sops, yaml und json, sops -d exit 0.
+
+MESSUNG 3 (die Falle in der Falle): der Whitelist-Test muss die EXAKTE Klasse
+sein, nicht ->isa. detect_type akzeptiert eine JSON::PP::Boolean-SUBKLASSE als
+bool, YAML::XS schreibt sie aber als !!perl/scalar:MyBool 1 -- derselbe Defekt
+mit Whitelist. Mit isa waere ein Loch im Guard geblieben.
+
+Guard deckt jede Referenz ausser exakt JSON::PP::Boolean, also auch UNBLESSED
+(\1, coderef -> !!perl/ref, !!perl/code, identisch kaputt, Callback hatte sie
+schon in der Hand).
+
+Ergebnismatrix, sops 3.13.3, unencrypted Leaf, yaml, vorher -> nachher:
+  Math::BigFloat / Math::BigInt / bless {} / overload "" / bless \$s /
+  sub {} / \1 / \0   : still geschrieben, self-MAC FAIL, exit 51  ->  croak
+  qr//               : still geschrieben, self-MAC FAIL, exit 0 (!) ->  croak
+  JSON->true/false   : exit 0  ->  exit 0, unveraendert
+
+BYTE-IDENTITAET: beide Emitter ueber 10 Baeume (Skalare, Booleans, nested,
+leere Container, 16/17-Digit-Floats, NaN/Inf/-0.0, ENC-String, Unicode,
+Multiline, Zahlenstrings) vor und nach der Aenderung erfasst -- diff leer.
+
+Suite: 25 Dateien, 573 Tests, PASS, t/04-interop.t AUSGEFUEHRT gegen
+sops 3.13.3 (30 Tests), nicht geskippt. dzil build sauber, podchecker sauber
+auf den gewobenen Dateien.
+
+Ausserdem verifiziert: sops -e geschriebenes Dokument (bool/null/list) durch
+rotate + decrypt_file -> ok, sops -d exit 0. Blessed Leaf in einem
+VERSCHLUESSELTEN Slot: unveraendert type:str in beiden Formaten.
+
+DRIFT, separat gefiltert statt mitgenommen: #66 -- JSON schreibt ein unblessed
+\1 / \0 als bare true/false waehrend der Digest SCALAR(0x...) deckt, self-MAC
+FAIL, exit 51, still. Gleiche Fehlerklasse, anderer Ausloeser (nicht blessed,
+also faengt Cpanel es nicht selbst ab). Fix waere eine Bedingung mehr in
+Format::JSON::_reject_foreign_bignum.
+Guard implementiert und gemessen, ADR 0008, Changes-Eintrag. t/ offen fuer den test-writer -- Faelle im Bericht. Nicht committet.
+Pruefung 2026-08-10: t/25-blessed-leaf-guard.t existiert seit 76eada7 mit 20 subtests. Bericht-Behauptung 't/ offen' ist veraltet -- der file-sops-wire hat die Tests in derselben Session selbst geschrieben. Handoff war nur nicht mehr erfolgt. Status-Anpassung noetig.
+Review-Stand: Commit f2d7a64, lib/File/SOPS/Format/YAML.pm +80, lib/File/SOPS/Encrypted.pm +16, ADR 0008 NEU, Changes +29. Tests t/25-blessed-leaf-guard.t vorhanden (12 subtests). Suite 25 files / 573 tests, t/04-interop.t gegen sops 3.13.3 AUSGEFUEHRT (nicht geskippt), Byte-Identitaet vor/nach ueber 10 Baeume verifiziert. Drei Folge-Findings separat als #66/#67/#68, nicht mitgenommen. Behoben: jedes blessed/unblessed Leaf ausser JSON::PP::Boolean wird vor dem Emittieren abgelehnt. Ergebnis-Matrix im Body. Maintainer: Diff reviewen, dann approved/closed. KEIN dzil release durch mich.
+PLAN (Orchestrator, 2026-08-16) -- kein Implementierungsrest, nur Maintainer-Review.
+
+f2d7a64 ist in HEAD, t/25-blessed-leaf-guard.t existiert.
+
+Zahlenkorrektur zu den beiden Berichten im Body: t/25 hat 11 subtest-Bloecke,
+nicht 20 und nicht 12. Die abweichenden Zahlen waren Schaetzungen; gezaehlt
+wurde jetzt.
+
+Schritte:
+  1. git show f2d7a64 -- lib/File/SOPS/Format/YAML.pm lib/File/SOPS/Encrypted.pm
+  2. docs/adr/0008 gegenlesen. Die tragende Regel ist "jede Referenz ausser
+     EXAKT JSON::PP::Boolean"; ->isa waere ein Loch im Guard (Messung 3 im Body,
+     eine JSON::PP::Boolean-Subklasse schreibt YAML::XS als !!perl/scalar).
+  3. Gemeinsam mit #66 und #67 reviewen -- dieselbe Fehlerklasse, dasselbe ADR,
+     und die drei Diffs ergeben einzeln ein unvollstaendiges Bild.
+  4. karr move 65 done
+
+Verifikation: volle Suite plus t/04-interop.t gegen ein echtes sops-Binary.
+Beides steht derzeit nicht zur Verfuegung, siehe #69.
+REVIEW ABGESCHLOSSEN 2026-08-19: Maintainer bestaetigt. f2d7a64 ist in HEAD, Arbeitskopie in lib/ t/ Changes/ docs/ sauber. Verifiziert in der reparierten Umgebung (karr #69): prove -lr t/ -> 656/656 PASS, SOPS_BIN=/tmp/sops prove -l t/04-interop.t -> 31 Tests, AUSGEFUEHRT. Richtung bestaetigt: ein Leaf, das der Emitter nicht als das schreiben kann, was der Digest deckt, wird abgelehnt statt still ein Dokument zu erzeugen, das seinen eigenen MAC bricht. ADR 0008 traegt die Begruendung.
