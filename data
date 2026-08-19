@@ -1,0 +1,60 @@
+---
+class: standard
+completed: 2026-08-19T23:19:56Z
+created: 2026-08-16T16:27:59Z
+id: 69
+priority: high
+started: 2026-08-19T23:19:56Z
+status: done
+tags:
+- infra
+- testing
+- interop
+title: 'The test environment cannot run the suite: Crypt::Age missing, no sops binary'
+updated: 2026-08-19T23:19:56Z
+---
+
+Gemessen 2026-08-16 in diesem Checkout, perl 5.40.1.
+
+  prove -lr t/   ->   Files=29, Tests=56, Result: FAIL
+
+26 der 29 Testdateien sterben beim LADEN, nicht an einer Assertion:
+
+  Can't locate Crypt/Age.pm in @INC
+
+Crypt::Age ist in dieser Umgebung nirgends installiert -- nicht in @INC, und
+es gibt auch keinen Dev-Checkout unter ~/dev. Damit laeuft alles, was den
+Age-Backend beruehrt, gar nicht erst an: saemtliche Round-Trip-, rotate-,
+edit-, extract- und Guard-Tests. Durch kommen nur die drei Dateien, die reine
+Encrypted.pm- oder Format-Logik pruefen.
+
+Zweitens: es gibt kein sops-Binary. Weder /tmp/sops noch $SOPS_BIN noch eins
+im PATH. t/04-interop.t wuerde also selbst mit installiertem Crypt::Age
+skip_all machen -- und das ist laut Hausregel der einzige Test, der die
+Kernbehauptung dieser Distribution ueberhaupt belegt.
+
+FOLGE, und das ist der Punkt dieses Tickets: in dieser Umgebung ist derzeit
+KEINE Aussage ueber die Korrektheit einer Aenderung moeglich. Weder "Suite
+gruen" (26 Dateien laufen nicht) noch "interop bewiesen" (kein Binary). Jeder
+Agent, der jetzt ein Codeticket bearbeitet, arbeitet ohne Netz und muesste
+genau das melden, statt "Tests bestanden" zu sagen.
+
+Zu tun, BEVOR irgendein anderes Ticket vergeben wird:
+
+  1. cpanm Crypt::Age
+     0.001, Autor GETTY, auf CPAN vorhanden. Die cpanfile verlangt genau
+     diese Version.
+
+  2. sops 3.13.3 besorgen, nach /tmp/sops legen oder $SOPS_BIN setzen.
+     Die Messungen in #61, #62, #63, #65, #66 und #67 sind alle gegen 3.13.3
+     gemacht. Eine andere Version macht die Vergleichswerte wertlos, ohne
+     dass es auffaellt.
+
+  3. Gegenprobe. Beide Zeilen gehoeren danach in JEDEN Bericht:
+       prove -lr t/
+       SOPS_BIN=/tmp/sops prove -lv t/04-interop.t
+     Die zweite muss AUSGEFUEHRT ausweisen, nicht skipped.
+
+Blockiert: alles. Kein Codeticket ist ohne Schritt 1 verifizierbar, kein
+format- oder wire-Ticket ohne Schritt 2.
+ERLEDIGT 2026-08-19 (Orchestrator). Crypt::Age war inzwischen als 0.002 installiert (cpanfile verlangt >=0.001). Fehlte tatsaechlich noch: File::Slurp (test-Dep, im cpanfile korrekt deklariert, nur nicht installiert) -- 26 Testdateien starben daran, nicht an Crypt::Age. Nachinstalliert: File::Slurp 9999.32. sops 3.13.3 von den GitHub-Releases geholt und nach /tmp/sops gelegt, also genau die Version, gegen die #61/#62/#63/#65/#66/#67 gemessen wurden. Gegenprobe, beide Zeilen: 'prove -lr t/' -> Files=29, Tests=656, Result: PASS. 'SOPS_BIN=/tmp/sops prove -l t/04-interop.t' -> Tests=31, PASS, AUSGEFUEHRT (nicht skipped). Die Blockade ueber allen anderen Tickets ist damit weg.
