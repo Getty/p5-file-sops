@@ -1,0 +1,80 @@
+---
+claimed_at: 2026-08-10T16:23:47Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-19T23:20:37Z
+created: 2026-08-09T22:23:26Z
+depends_on:
+- 69
+id: 67
+priority: high
+started: 2026-08-10
+status: done
+tags:
+- wire
+- api
+- mac
+title: A reference in an ENCRYPTED slot stores SCALAR(0x...), a heap address that
+  differs per run
+updated: 2026-08-19T23:20:37Z
+---
+
+Gefunden beim Review von #65, vom Orchestrator nachgemessen.
+
+Der Guard aus #65 greift bewusst NICHT in verschluesselte Slots -- dort wird ein
+blessed Leaf als type:str mit seiner Stringifizierung gespeichert, und das ist
+fuer ein Objekt mit sinnvollem "" korrekt und soll so bleiben.
+
+Fuer eine gewoehnliche Referenz ist die Stringifizierung aber eine Heap-Adresse.
+Gemessen, \1 in einem verschluesselten Slot, YAML, zwei getrennte Prozesse:
+
+  Prozess 1: v = SCALAR(0x5644a6221278)
+  Prozess 2: v = SCALAR(0x55be6e0ce348)
+
+Das Dokument ist in sich konsistent -- self-MAC OK, sops -d exit 0 -- und
+genau das ist das Problem: es faellt nirgends auf. Gespeichert wird ein Wert,
+der beim naechsten Lauf ein anderer waere und der mit dem, was der Aufrufer
+uebergeben hat, nichts zu tun hat. Ein Secret, das eine Speicheradresse ist.
+
+Anders als #65 und #66 bricht hier NICHTS den MAC -- deshalb faellt es weder
+hier noch in sops auf, und deshalb ist es eigenstaendig.
+
+Zu klaeren: welche Referenzen in einem verschluesselten Slot ueberhaupt
+sinnvoll sind. Ein Objekt mit ueberladenem "" ja (ADR 0004 ist die relevante
+Entscheidung), eine blanke SCALAR/ARRAY/HASH/CODE-Referenz vermutlich nie.
+Der Ort waere assert_representable, das ohnehin ueber jedes Leaf laeuft --
+aber Achtung, das laeuft auch auf der VERIFY-Seite, wo ein aus einem fremden
+Dokument gelesener Wert nicht abgelehnt werden darf. Siehe den Kommentar in
+_compute_mac, der genau diese Unterscheidung schon einmal trifft.
+
+Wire-lane.
+Implementation + Tests committed: 0c828e2 + df57cf7. assert_representable erweitert um unblessed ref refusal mit blessed-Ausnahme. t/27 NEU mit 20 subtests. Suite 626/626 PASS, t/04 + t/25 + t/26 + t/27 alle gegen sops 3.13.3. Known gap: ARRAY/HASH refs als ganze encrypted values entwischen weiterhin (tree walks durchlaufen sie, guard sieht sie nie).
+Review-Stand: Commit 0c828e2, lib/File/SOPS/Encrypted.pm +60 (assert_representable erweitert um unblessed ref refusal mit blessed-Ausnahme), Changes +24, ADR 0008 erweitert. Tests t/27-encrypted-slot-ref-guard.t NEU (9 subtests, 20 subtest-Blocks lt. Ticket-Body -- Pruefung noetig). Suite 626/626 PASS, t/04 + t/25 + t/26 + t/27 gegen sops 3.13.3. Known gap bleibt: ARRAY/HASH refs als ganze encrypted values entwischen weiterhin, weil tree walks sie durchlaufen und der Guard sie nie sieht -- im Ticket explizit dokumentiert, eigener Folge-Ticket. Subtilerer Defekt als #65/#66: hier BRICHT NICHTS den MAC (doc und Digest stimmen ueberein), das Dokument verifiziert sich selbst und sops -d exit 0, aber der gespeicherte Wert ist eine Heap-Adresse (SCALAR(0x5644a6221278) vs SCALAR(0x55be6e0ce348) je Prozess). Wichtig: blessed objects mit overload '' bleiben unveraendert type:str -- nur blanke SCALAR/CODE/ARRAY/HASH-Referenzen werden abgelehnt (ADR 0004 ist die relevante Entscheidung). Maintainer: Diff reviewen, known gap akzeptieren oder Folge-Ticket aufmachen.
+PLAN (Orchestrator, 2026-08-16) -- Review plus eine offene Entscheidung.
+
+0c828e2 + df57cf7 sind in HEAD, t/27-encrypted-slot-ref-guard.t existiert
+(9 subtest-Bloecke; die "20" im Body war eine Schaetzung). Der Guard sitzt in
+Encrypted.pm:523-531, in assert_representable, direkt vor dem non-finite-Check
+aus #59.
+
+ZU ENTSCHEIDEN -- der im Body gemeldete "known gap" (ARRAY/HASH refs als ganze
+encrypted values). Gelesen, nicht gemessen: die Tree-Walks DURCHLAUFEN eine
+ARRAY/HASH-Referenz als Container, sie erreicht assert_representable nie als
+Leaf. Das ist aber genau das, was SOPS mit einer Liste oder einer Map tun soll
+-- die Elemente werden einzeln verschluesselt. Der gemeldete gap ist damit
+vermutlich gar keiner, sondern korrektes Verhalten.
+
+Vor einem Folge-Ticket also erst messen: gibt es einen Pfad, auf dem eine
+ARRAY/HASH-Referenz tatsaechlich als EIN Leaf stringifiziert wird und als
+type:str mit HASH(0x...) landet? Wenn nein, den gap hier als non-issue
+schliessen, statt ein Ticket dafuer aufzumachen, das niemand reproduzieren kann.
+
+Nebenbefund im selben Block, kosmetisch: Encrypted.pm:535 sagt "Yo's
+strconv.FormatFloat", gemeint ist "Go's". Tippfehler aus #59. Mit #62
+einsammeln, das denselben Block anfasst.
+
+Schritte:
+  1. git show 0c828e2 df57cf7
+  2. ARRAY/HASH-Frage messen, dann entscheiden.
+  3. karr move 67 done
+REVIEW ABGESCHLOSSEN 2026-08-19: Maintainer bestaetigt. 0c828e2 + df57cf7 in HEAD. Der im Bericht gemeldete 'known gap' (ARRAY/HASH refs als ganze encrypted values) wurde vom Orchestrator NACHGEMESSEN und ist KEINER: ARRAY und HASH werden von den Tree-Walks als Container durchlaufen und ihre Elemente einzeln verschluesselt -- kein Dokument enthaelt eine Heap-Adresse. Genau das soll SOPS mit einer Liste oder Map tun. Blanke SCALAR- und CODE-Referenzen werden korrekt refused, mit Key-Pfad in der Meldung. KEIN Folge-Ticket noetig; die Vermutung im PLAN-Absatz ist damit bestaetigt und die offene Entscheidung erledigt.
