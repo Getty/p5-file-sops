@@ -1,0 +1,91 @@
+---
+class: standard
+completed: 2026-08-19T23:37:31Z
+created: 2026-08-09T22:23:36Z
+depends_on:
+- 69
+id: 68
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- diagnostics
+title: The refusal messages name no key path, in either format handler
+updated: 2026-08-19T23:37:31Z
+---
+
+Vom wire-Agenten beim Abarbeiten von #65 gemeldet, nicht verfolgt.
+
+Beide Refusals -- _reject_foreign_bignum (JSON, aus #58) und
+_reject_unwritable_leaf (YAML, aus #65) -- nennen die Klasse und den Grund,
+aber nicht, WO im Dokument das Leaf sitzt. Bei einem grossen Dokument mit
+einem einzigen kaputten Leaf ist das eine Suche von Hand.
+
+Ursache: canonical_float_tree fuehrt keinen Pfad mit. Der Walk in
+_compute_mac tut es (_sorted_leaves sammelt Pfade, _at_path haengt sie an die
+Meldung), also gibt es ein Muster im Haus, dem man folgen kann.
+
+Kosten: die Signatur des Walks aendert sich, und der reject-Callback bekommt
+ein zweites Argument. Beide Format-Handler muessen mit. Kein Wire-Byte bewegt
+sich -- der Walk liefert weiterhin denselben Baum -- aber es ist eine
+Aenderung an dem Code, den ADR 0006 und 0008 beschreiben, also gehoert eine
+Zeile in beide.
+
+Niedrig priorisiert: die Meldung ist heute korrekt und nennt die Klasse, sie
+ist nur unbequem. Kein Datenverlust, kein Interop-Problem.
+Lane conflict: the fix requires changing the signature of canonical_float_tree in Format/JSON.pm and Format/YAML.pm, plus threading a path argument through to _reject_foreign_bignum and _reject_unwritable_leaf. Both format handlers own that walk (ADR 0006, ADR 0008 reference them), and only the format lane owns changes to those callbacks. API lane owns neither the walk nor the callback. Will record as an unfixed gap and hand off via the Changes entry; leaving ticket open for the format lane to pick up.
+Board hygiene: moved off 'in-progress' -- nobody is working it. The API lane stopped here deliberately (the fix needs canonical_float_tree's signature changed in both format handlers plus a path threaded through to _reject_referenced_leaf and _reject_unwritable_leaf, which is the format lane's surface). Spec is complete, it is waiting for a worker, so 'todo' is the honest status.
+PLAN (Orchestrator, 2026-08-16) -- Format-Lane, klein, nichts blockiert es ausser #69.
+
+Die Mechanik steht fest, in HEAD nachgelesen:
+
+  Encrypted.pm:748   canonical_float_tree($class, $tree, %args)
+  Encrypted.pm:757   _canonical_floats($node, $roundtrips, $carrier, $reject)
+                     -- rekursiv ueber HASH und ARRAY, ruft $reject->($node)
+                        fuer jedes referenzierte Leaf
+  Format/JSON.pm:204   reject => \&_reject_foreign_bignum
+  Format/YAML.pm:280   reject => \&_reject_unwritable_leaf
+
+Umsetzung:
+  1. _canonical_floats bekommt einen Pfad-Parameter, den die Rekursion
+     mitfuehrt: der HASH-Zweig haengt den Key an, der ARRAY-Zweig den Index.
+  2. $reject->($node) wird $reject->($node, $path). Beide Callbacks nehmen das
+     zweite Argument und haengen es an ihre Meldung.
+  3. Pfadformat NICHT neu erfinden. _sorted_leaves und _at_path in SOPS.pm sind
+     das Muster, das die MAC-Meldungen schon benutzen -- dasselbe Format
+     verwenden, damit ein Nutzer nicht zwei lernen muss.
+  4. Die Signaturaenderung ist oeffentlich: canonical_float_tree ist eine
+     dokumentierte =method. Das POD ab Encrypted.pm:789 und die
+     reject-Beschreibung muessen mit.
+  5. Je eine Zeile in docs/adr/0006 und docs/adr/0008 -- beide beschreiben genau
+     diesen Walk.
+
+Kein Wire-Byte bewegt sich: der Walk liefert denselben Baum, nur die
+croak-Texte werden laenger. Trotzdem gilt die Lane-Regel -- wenn sich beim
+Messen zeigt, dass der Baum doch anders herauskommt, geht es an file-sops-wire.
+
+Tests: t/25, t/26 und t/27 pruefen heute die Meldungstexte. Diese Assertions um
+den Pfad zu ERWEITERN ist der Beweis, dass die Aenderung wirkt -- nicht ein
+Nebeneffekt, den man nachtraeglich anpasst.
+
+Mitnehmen, gleiche Datei, gleiche Zeilen: die Umbenennung
+_reject_foreign_bignum -> _reject_referenced_leaf aus #66.
+Erledigt (Format-Lane, Commit 1ac697f), zusammen mit dem Rest aus #66 -- gleiche Dateien, gleiche Zeilen, wie im Plan vorgesehen.
+
+Umgesetzt wie geplant, mit einer Abweichung, die hier benannt sei: Plan-Punkt 2 sagte $reject->($node, $path). Uebergeben wird stattdessen der bereits FORMATIERTE Ort-String, nicht der Pfad-Arrayref. Grund: sonst haette jeder der beiden Callbacks seine eigene Kopie der join(':')/'(document root)'-Konvention gebraucht -- zwei Kopien einer Konvention, die eine Antwort hat, und genau die Sorte Duplikat, an der diese Distribution schon zweimal haengengeblieben ist. Die eine Kopie sitzt jetzt in File::SOPS::Encrypted::_leaf_location, direkt am Walk, der den Pfad ohnehin fuehrt.
+
+  Encrypted.pm  canonical_float_tree -> _canonical_floats(..., []) ; _leaf_location() neu
+  Format/JSON.pm  _reject_referenced_leaf($node, $where)
+  Format/YAML.pm  _reject_unwritable_leaf($node, $where)
+
+Pfadformat: keys colon-joined, '(document root)' bei leerem Pfad -- dasselbe, was _at_path fuer die MAC-Meldungen liefert. Array-INDIZES werden hier mitgefuehrt, wo _sorted_leaves sie weglaesst: das Weglassen dort ist die AAD-Regel, dieser String ist Diagnose. Gleiche Form wie _extract_path bei Navigationsfehlern meldet.
+
+POD (Encrypted.pm, reject-=item) und je eine Ergaenzung in docs/adr/0006 und 0008 sind drin, Changes-Eintrag ersetzt den Known-Gap-Absatz.
+
+Tests: t/25 und t/26 je +3 Pfad-Assertions in den bestehenden nested-Subtests plus ein neuer Subtest pro Datei, der alle vier Ortsformen pinnt (root, top-level, zwei Mappings, Sequenz-Index zwischen Mappings). Gegenprobe gemacht: Praefix entfernt -> je 3 Subtests rot, Praefix zurueck -> gruen. t/27 hatte die Pfad-Assertion schon (der #67-Guard bekommt sie von _at_path), dort nichts geaendert.
+
+Kein Wire-Byte bewegt, gemessen statt argumentiert: neun Dokumente (Float-Carrier, Arrays, verschachtelte Mappings, Booleans, Unicode, leere Container) emittieren durch beide Handler byte-identisch vor und nach der Aenderung. prove -lr t/ 656 -> 658/658 PASS, SOPS_BIN=/tmp/sops prove -l t/04-interop.t AUSGEFUEHRT (nicht skipped) 31/31 gegen sops 3.13.3.
+
+Nebenbefund, NICHT hier behoben, als #71 abgelegt: der croak aus beiden Callbacks haengt 'at lib/File/SOPS/Encrypted.pm line NNN' an, nicht die Zeile des Aufrufers -- croak berichtet den Aufrufer von _canonical_floats, und das ist die Bibliothek selbst. Aelter als #68, durch den Pfad-Praefix jetzt entschaerft.
+ERLEDIGT 2026-08-19, Commit 1ac697f (Format-Lane). Pfad wird jetzt durch canonical_float_tree/_canonical_floats getragen (HASH-Zweig haengt den Key an, ARRAY-Zweig den Index) und vom neuen _leaf_location formatiert; beide reject-Callbacks (JSON _reject_referenced_leaf, YAML _reject_unwritable_leaf) stellen ihn voran. Formen: 'a_unencrypted:b_unencrypted: cannot write ...', 'list_unencrypted:2: ...', '(document root): ...'. BEWUSSTE ABWEICHUNG vom Ticketplan, gemeldet statt still gemacht: uebergeben wird der fertig formatierte String, nicht das Pfad-Arrayref -- sonst braucht jeder Callback seine eigene Kopie der join(':')-Konvention. Array-Indizes werden hier getragen, wo _sorted_leaves sie fallen laesst; das ist die AAD-Regel und dieser String ist reine Diagnose, nie AAD -- im Code und im ADR festgehalten. Gegenprobe gemacht: Praefix testweise entfernt -> 3 subtests pro Datei rot. Verifiziert 658/658 PASS, t/04 31/31 AUSGEFUEHRT gegen sops 3.13.3. Zusaetzlich per Neun-Dokumente-Korpus belegt, dass beide Emitter byte-identisch zu HEAD bleiben (2060 Bytes je Seite).
