@@ -1,0 +1,73 @@
+---
+claimed_at: 2026-08-10T00:01:35Z
+claimed_by: claude-orchestrator
+class: standard
+completed: 2026-08-19T23:20:47Z
+created: 2026-08-09T04:33:33Z
+depends_on:
+- 69
+id: 46
+priority: low
+started: 2026-08-10
+status: done
+tags:
+- api
+- interop
+title: Atomic write replaces a read-only file where sops refuses
+updated: 2026-08-19T23:20:47Z
+---
+
+Found while implementing karr #40; documented there rather than changed, so
+that #40 stayed a data-loss fix.
+
+Since #40 every method that writes a file does it with a temporary file and a
+rename. rename() checks write permission on the DIRECTORY, not on the file, so
+a read-only file in a writable directory is replaced without complaint.
+
+Measured, sops 3.13.3:
+
+  chmod 0444 ro.yaml
+  sops -e -i ro.yaml
+  -> "Could not open in-place file for writing: open .../ro.yaml: permission
+      denied", the file is untouched
+
+  perl -e "rename(tmp, ro.yaml)"   -> succeeds, ro.yaml replaced
+
+So where sops refuses, we proceed. The house rule is "where the reference
+implementation refuses, refuse", which argues for a check; the counter-argument
+is that this is how every atomic writer behaves and that a caller who chmodded
+a file 0444 was defending against an accident, not mounting a real guard.
+
+Before #40 the old open ">" path DID refuse it, by accident -- so this is a
+behaviour change that shipped inside #40 undeclared except in the POD. Either
+add the check (stat the target, croak naming the file, matching sops wording)
+or leave it and make sure the Changes entry says so, not only the POD.
+
+Note it applies to encrypt_in_place and edit as well, which have behaved this
+way since karr #4 and never mentioned it.
+The Changes entry written for #40 already declares this ('replacing a file needs write permission on its DIRECTORY rather than on the file (a read-only file in a writable directory is replaced, where sops -e -i refuses)'), so the open question is only whether to add the check, not whether it is announced.
+Implementation + Tests committed: e7c4634 + 022e46e. Check in _replace_file, sops-Wortlaut. Suite 630/630 PASS, t/04 + t/19 alle ausgefuehrt gegen sops 3.13.3.
+Board hygiene: this ticket sat in status 'in-review', which karr does not accept (valid: backlog, todo, in-progress, review, done, archived). It was therefore invisible in 'karr board' while still listed by 'karr list'. Moved to 'review', which is what was meant. Nothing about the ticket's content changed: the read-only-file question is still open and still needs a maintainer decision -- refuse like sops does, or keep the ordinary atomic-writer behaviour.
+PLAN (Orchestrator, 2026-08-16) -- kein Implementierungsrest, nur Maintainer-Review.
+
+Beide Commits sind in HEAD: e7c4634 (Check in _replace_file, sops-Wortlaut) und
+022e46e (Tests ueber die fuenf schreibenden Methoden). Die offene Policy-Frage
+des Tickets -- "refuse wie sops, oder gewoehnliches Atomic-Writer-Verhalten" --
+ist implementierungsseitig zugunsten von "refuse" beantwortet. Bestaetigen muss
+das der Maintainer.
+
+Vorab geprueft, damit das Review nicht daran haengenbleibt: der Changes-Eintrag
+beschreibt NICHT mehr das alte Verhalten. Changes:718-728 sagt heute "and now
+refuses a read-only file in a writable directory with the same wording sops -e -i
+uses". Code und Changes stimmen ueberein.
+
+Schritte:
+  1. git show e7c4634 022e46e
+  2. Entscheiden: refuse behalten (dann nichts weiter), oder revert -- dann muss
+     der Changes-Eintrag zurueck auf die reine Ankuendigung aus #40.
+  3. karr move 46 done
+
+Verifikation braucht Crypt::Age (#69), aber kein sops-Binary: der Guard ist
+reines Dateisystemverhalten, das Referenzverhalten von sops ist im Body bereits
+gemessen.
+POLICY ENTSCHIEDEN 2026-08-19: Maintainer waehlt 'refuse behalten'. Damit gilt weiter die Hausregel 'wo die Referenzimplementierung verweigert, verweigern wir' -- e7c4634 (Check in _replace_file, sops-Wortlaut) + 022e46e (Tests ueber die fuenf schreibenden Methoden) bleiben wie sie sind, kein Revert. Changes und Code stimmen bereits ueberein. Verifiziert in der reparierten Umgebung: 656/656 PASS, t/04 mit 31 Tests ausgefuehrt gegen sops 3.13.3.
