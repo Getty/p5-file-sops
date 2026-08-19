@@ -120,6 +120,61 @@ same double.**
   YAML `-0.0` has no representation that works, JSON has none for the
   non-finite values at all — and they belong to karr #62.
 
+  **Amended by karr #62 — `-0` is no longer excluded, because the premise
+  above was wrong.** "YAML `-0.0` has no representation that works" was
+  derived, not measured: the reasoning was that the canonical text `-0` is
+  resolved by Go's yaml.v3 as an *integer*, digested as `0`, and so still
+  mismatches a digest of `-0`. That much is true. What nobody tried was any
+  other spelling. Measured against sops 3.13.3, one document per spelling,
+  unencrypted leaf, digest `-0`:
+
+  | emitted | `sops -d` | self-MAC |
+  |---|---|---|
+  | `0` (what YAML::XS renders) | exit 51 | FAIL |
+  | `-0` (the canonical text) | exit 51 | FAIL |
+  | `!!float -0` | exit 51 | FAIL |
+  | `-0.0` | **exit 0**, reads back `-0` | **OK** |
+  | `-0.` | exit 0 | OK |
+
+  So a representation exists, and this ADR's own rule already licenses it:
+  the emitted decimal has to **parse back to the same double**, not to be
+  spelled canonically. `-0` is dropped from `$NO_AGREED_FORM`, which sends a
+  negative zero through the normal predicate-and-carrier path, and
+  `Format::YAML::_float_carrier` writes `-0.0` where the canonical text is
+  `-0`.
+
+  This is **the only place in the distribution where a written decimal is not
+  `value_to_bytes`'s output verbatim**, and that is a real cost: the "one
+  conversion, one text" discipline above is what keeps the document and the
+  digest from drifting. It is bounded by being a *spelling* rather than a
+  conversion — the double is the same one, the digest is untouched, and `-0`
+  is the only canonical float text whose integer-versus-float resolution
+  changes what a reader digests (every other integral text digests the same
+  either way: `3` is `3` as an int and as a float; every text needing a
+  fraction already carries a `.`). A general "append `.0` to integral text"
+  rule was rejected: it would move bytes for cases nobody has measured, such
+  as the >`int64` integral texts the carrier already produces for `1e29`.
+
+  **JSON is untouched and had to be.** `Cpanel::JSON::XS` writes an NV `-0.0`
+  as `-0.0`, which reparses as the same double, so the round-trip predicate
+  answers yes and the carrier never runs — verified by emitting 31 float,
+  string and integer values through both handlers before and after the change
+  and diffing: **exactly one line moved**, the YAML negative zero. A guard
+  that treated the two formats alike would have destroyed the JSON row, which
+  is what ADR 0005 was paid for. `t/24` section 3 pins it and section 9 pins
+  the new behaviour.
+
+  **Neither implementation could write this value before.** `sops -e` on a
+  plaintext `-0.0` emits `-0` and then rejects its own file with exit 51, in
+  YAML *and* in JSON. So `-0.0` is not "the bytes sops writes"; it is the only
+  spelling both implementations read back as the double the digest covers.
+  There is consequently no sops→us fixture for this value, and the test says
+  so rather than inventing one.
+
+  `NaN`, `+Inf` and `-Inf` stay excluded, and karr #59 has since made them
+  unreachable on the encrypt path anyway (`assert_representable` refuses
+  them); only the plaintext emitters can still reach the walk with one.
+
 The acceptance condition is **zero wire-byte movement**: for every value that
 produces a document sops accepts today, the bytes are unchanged.
 

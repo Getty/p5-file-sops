@@ -738,12 +738,18 @@ rule L</encrypt_value> documents.
 
 =cut
 
-# Canonical texts that no emitter has an agreed wire form for, left exactly as
-# they are today. YAML's -0 resolves back to an integer zero, and JSON has no
-# representation for the non-finite values at all -- both are karr #62, with a
-# different answer per format, and folding them in here would move bytes for
-# values this walk is not about. See docs/adr/0006.
-my $NO_AGREED_FORM = qr/\A(?:NaN|[+-]Inf|-0)\z/;
+# Canonical texts no emitter has an agreed wire form for, left exactly as they
+# are today: JSON has no representation for the non-finite values at all, and
+# YAML::XS writes bare Inf / NaN, which is not what Go reads back.
+#
+# assert_representable refuses all three on the encrypt path (karr #59), so
+# only the PLAINTEXT emitters -- decrypt_file, edit -- can still reach this,
+# and there the pre-#59 behaviour is what those documents already have.
+#
+# -0 used to be on this list and is not any more: karr #62 measured a YAML
+# spelling that works, and the format that needed one supplies it in its own
+# carrier. See docs/adr/0006.
+my $NO_AGREED_FORM = qr/\A(?:NaN|[+-]Inf)\z/;
 
 sub canonical_float_tree {
     my ($class, $tree, %args) = @_;
@@ -874,9 +880,17 @@ Call this at B<emit time, on a copy, after the digest has been taken>. A
 carrier is a blessed reference or a dualvar, so L</detect_type> would call it
 C<str> and the walk that computes the MAC must never see one.
 
-C<NaN>, C<+Inf>, C<-Inf> and C<-0> are returned unchanged. Those have no wire
-form both implementations agree on, the answer differs per format, and they are
-tracked separately.
+C<NaN>, C<+Inf> and C<-Inf> are returned unchanged. Those have no wire form
+both implementations agree on, and L</assert_representable> refuses them on the
+encrypt path anyway, so only the plaintext emitters can still reach this walk
+with one.
+
+A negative zero I<is> carried, and it is the one case where the carrier's text
+is not the canonical decimal: C<value_to_bytes> writes C<-0>, which Go's
+yaml.v3 resolves as an B<integer> and digests as C<0>. The rule ADR 0006 states
+is that the emitted decimal has to B<parse back to the same double>, not that
+it has to be spelled canonically, so the YAML carrier writes C<-0.0>. See
+L<File::SOPS::Format::YAML/emit>.
 
 =cut
 

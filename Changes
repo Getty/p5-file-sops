@@ -1,6 +1,23 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix a YAML document carrying an unencrypted negative zero. YAML::XS
+    renders an NV -0.0 as `0` while the MAC digest covers `-0`, so the
+    document and its own MAC stated different numbers: self-MAC FAIL,
+    `sops -d` exit 51, written without a word. It was thought to have no
+    YAML representation, because emitting the canonical `-0` makes Go's
+    yaml.v3 resolve an INTEGER zero and digest `0` - still a mismatch.
+    Measured against sops 3.13.3, `-0.0` is a spelling that works: exit 0,
+    read back as -0, self-MAC OK. The YAML emitter now writes that. JSON is
+    untouched - Cpanel::JSON::XS already wrote -0.0 and that row has always
+    worked - and so is every other value: 31 floats, strings and integers
+    emitted through both handlers before and after move exactly one line.
+    An encrypted -0.0 was never affected (it is an ENC[...] string by the
+    time the emitter runs) and still is not. Note that sops cannot write
+    this value either: `sops -e` on a plaintext -0.0 emits `-0` and then
+    rejects its own file with exit 51, in YAML and in JSON alike. Pinned by
+    t/24-float-precision.t section 9, against the binary. See karr #62 and
+    the karr #62 amendment in docs/adr/0006.
   - BEHAVIOUR CHANGE: a non-finite float (NaN, +Inf, -Inf) is now refused
     at encrypt time instead of written into a document nothing can read
     back. File::SOPS::Encrypted::value_to_bytes has always written

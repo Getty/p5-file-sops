@@ -638,4 +638,133 @@ subtest 'decrypt_file on a sops-written JSON document matches what sops -d itsel
         or diag("our decrypt_file output:\n$our_content");
 };
 
+###############################################################################
+# 9. karr #62: YAML -0.0. The last row of the old non-finite matrix, and the
+#    one ADR 0006 excluded by canonical text (-0 was on $NO_AGREED_FORM).
+#
+#    Before: YAML::XS renders an NV -0.0 as `0`, value_to_bytes digests `-0`,
+#    so the document and its own MAC state different numbers -- self-MAC FAIL,
+#    sops -d exit 51, written silently. The ticket concluded there was no YAML
+#    representation, because emitting the canonical `-0` makes Go's yaml.v3
+#    resolve an INTEGER zero and digest `0`: still a mismatch.
+#
+#    Measured against sops 3.13.3, one document per spelling, same digest:
+#
+#      -0          sops -d exit 51   self-MAC FAIL   (the ticket's premise)
+#      !!float -0  sops -d exit 51   self-MAC FAIL
+#      -0.0        sops -d exit 0    self-MAC OK     <- a representation exists
+#      -0.         sops -d exit 0    self-MAC OK
+#
+#    So the value is representable and is now carried, with the ONE text in
+#    this distribution that is not value_to_bytes's output verbatim. ADR 0006's
+#    rule is that the emitted decimal must PARSE BACK to the same double, not
+#    that it be spelled canonically, so `-0.0` satisfies it.
+#
+#    There is deliberately no sops -> us fixture for this value: `sops -e` on a
+#    plaintext -0.0 writes `-0` and then rejects its own file with exit 51, in
+#    YAML and in JSON alike (measured, 3.13.3). sops cannot write this value,
+#    so the only direction that can be pinned is ours -> sops, which is what
+#    this subtest does.
+#
+#    Section 3 above is the other half of this change and must stay green: the
+#    JSON -0.0 row worked before it and works after it, byte for byte.
+###############################################################################
+
+subtest '[yaml] -0.0 keeps its sign and its MAC (karr #62)' => sub {
+    my $encrypted = File::SOPS->encrypt(
+        data       => { negzero_unencrypted => -0.0, secret => 'shh' },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+
+    like($encrypted, qr/^negzero_unencrypted: -0\.0$/m,
+        'the written bytes are -0.0, not the 0 YAML::XS renders on its own')
+        or diag("emitted:\n$encrypted");
+    unlike($encrypted, qr/^negzero_unencrypted: -?0$/m,
+        'and specifically not the bare -0 / 0 that resolves as an integer');
+
+    my $self = eval {
+        File::SOPS->decrypt(
+            encrypted => $encrypted, identities => [$secret], format => 'yaml',
+        );
+    };
+    is($@, '', 'self-MAC holds') or diag("died: $@");
+    ok(signbit($self->{negzero_unencrypted}), 'the value decrypts back negative')
+        if $self;
+
+    my $file = scratch_file('yaml');
+    write_file($file, $encrypted);
+    my $out = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops -d accepts it') or diag("sops output: $out");
+    like($out, qr/^negzero_unencrypted: -0$/m,
+        'and sops reads it back as the negative zero, printing its own -0')
+        if $? == 0;
+};
+
+subtest '[yaml] the -0 carrier does not touch the neighbouring cases' => sub {
+    # +0.0 has always emitted `0` and digested `0`: untouched.
+    my $pos = File::SOPS->encrypt(
+        data       => { zero_unencrypted => 0.0, secret => 'shh' },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    like($pos, qr/^zero_unencrypted: 0$/m, 'a positive zero still emits bare 0');
+
+    # The STRINGS '-0' and '-0.0' are strings, not floats: detect_type reads
+    # the SV (ADR 0002), the carrier never sees them, and YAML::XS quotes
+    # them. If the carrier ever started rewriting by text rather than by SV
+    # flags, this is the assertion that would catch it.
+    my $strs = File::SOPS->encrypt(
+        data       => {
+            dash_zero_unencrypted     => '-0',
+            dash_zero_dot_unencrypted => '-0.0',
+            secret                    => 'shh',
+        },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    like($strs, qr/^dash_zero_unencrypted: '-0'$/m,
+        "the STRING '-0' stays a quoted string");
+    like($strs, qr/^dash_zero_dot_unencrypted: '-0\.0'$/m,
+        "the STRING '-0.0' stays a quoted string");
+
+    my $file = scratch_file('yaml');
+    write_file($file, $strs);
+    my $out = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops -d accepts the string document') or diag("sops: $out");
+
+    # A -0.0 that came OUT of a YAML document already emitted -0.0 before this
+    # change, because YAML::XS retains a parsed float's text. It must still
+    # take that path (roundtrips => yes) rather than the carrier.
+    my $parsed = Load("v: -0.0\n")->{v};
+    my $round  = File::SOPS->encrypt(
+        data       => { v_unencrypted => $parsed, secret => 'shh' },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+    like($round, qr/^v_unencrypted: -0\.0$/m,
+        'a -0.0 parsed from a YAML document keeps its bytes');
+};
+
+subtest '[yaml] an ENCRYPTED -0.0 is unaffected by the carrier' => sub {
+    # An encrypted leaf is an ENC[...] string by the time emit() runs, so the
+    # float never reaches the carrier at all. This worked before karr #62 and
+    # has to keep working -- it is the case ADR 0008 refused to break by
+    # putting format rules into assert_representable.
+    for my $format (qw(yaml json)) {
+        my $encrypted = File::SOPS->encrypt(
+            data       => { negzero => -0.0, secret => 'shh' },
+            recipients => [$public],
+            format     => $format,
+        );
+        my $file = scratch_file($format);
+        write_file($file, $encrypted);
+        my $out = `$sops_bin -d $file 2>&1`;
+        is($? >> 8, 0, "[$format] sops -d accepts an encrypted -0.0")
+            or diag("sops output: $out");
+        like($out, qr/negzero"?\s*:\s*-0\b/,
+            "[$format] and reads the plaintext back as -0");
+    }
+};
+
 done_testing;

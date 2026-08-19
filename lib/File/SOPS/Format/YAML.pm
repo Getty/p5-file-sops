@@ -368,7 +368,36 @@ sub _float_roundtrips {
 # Note what this is: a raw-text primitive with no guard rail. YAML::XS emits
 # whatever the PV says -- dualvar(0.3, 'hello') writes `v: hello` -- so this is
 # safe only because $text came from value_to_bytes. Do not derive it here.
-sub _float_carrier { return dualvar($_[0], $_[1]) }
+#
+# The ONE exception, and the only place in this distribution where a written
+# decimal is not value_to_bytes's output verbatim: a negative zero. Its
+# canonical text is `-0`, which YAML resolves as an INTEGER -- Go's yaml.v3 and
+# YAML::XS agree on that -- so a document carrying `-0` is digested as `0` by
+# every reader while our MAC covers `-0`. Measured against sops 3.13.3, one
+# document per spelling, leaf under _unencrypted, digest `-0`:
+#
+#   -0        sops -d exit 51 (MAC mismatch)   self-MAC FAIL   <- karr #62
+#   !!float -0  sops -d exit 51                self-MAC FAIL
+#   -0.0      sops -d exit 0, reads back -0    self-MAC OK     <- this
+#   -0.       sops -d exit 0                   self-MAC OK
+#   -0.0e0    sops -d exit 0                   self-MAC FAIL (YAML::XS differs)
+#
+# sops cannot write this value either: `sops -e` on a plaintext `-0.0` emits
+# `-0` and then rejects its own file with exit 51, in YAML and in JSON alike.
+# So `-0.0` is not "the bytes sops writes", it is the only spelling both
+# implementations read as the double the digest covers -- which is exactly what
+# ADR 0006 asks of an emitted decimal, and it says so: the text has to parse
+# back to the same double, not to be spelled canonically.
+#
+# Narrow on purpose. `-0` is the only canonical float text an integer
+# resolution changes the digest of: every other integral one digests the same
+# whether Go reads it as an int or a float (`3` is `3` either way), and every
+# float that needs a fraction already carries a `.`. A general "append .0"
+# would move bytes for cases nobody has measured.
+sub _float_carrier {
+    my ($value, $text) = @_;
+    return dualvar($value, $text eq '-0' ? '-0.0' : $text);
+}
 
 =method emit
 
@@ -397,7 +426,13 @@ L<File::SOPS::Encrypted/value_to_bytes> only where the value does not survive,
 so a float that already emitted faithfully keeps exactly the bytes it had. In
 practice that is most of them: YAML::XS retains the text of every float it
 parsed, so only bare NVs -- computed by the caller, or parsed out of JSON --
-are ever rewritten. C<NaN>, C<Inf> and C<-0.0> are unchanged. See
+are ever rewritten. C<NaN> and C<Inf> are unchanged -- they have no YAML form
+Go reads back, and L<File::SOPS::Encrypted/assert_representable> refuses them
+on the encrypt path. A negative zero B<is> rewritten, and it is the one value
+whose written decimal is not L<File::SOPS::Encrypted/value_to_bytes>'s output
+verbatim: that is C<-0>, which YAML resolves as an B<integer> and every reader
+digests as C<0>, so this emitter writes C<-0.0> instead -- the spelling
+measured to read back as the same double in sops 3.13.3 and here. See
 L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<YAML::XS>
