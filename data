@@ -1,0 +1,55 @@
+---
+class: standard
+completed: 2026-08-20T05:45:42Z
+created: 2026-08-20T05:01:01Z
+id: 88
+priority: medium
+started: 2026-08-20T05:45:42Z
+status: done
+tags:
+- wire
+- json
+- float
+title: A YAML-parsed -0.0 into JSON dies in the Math::BigFloat carrier assertion
+updated: 2026-08-20T05:45:42Z
+---
+
+Found while measuring the emitter corpus for karr #86, not caused by it. Present
+at 543b59d and unchanged by #86 (the guard is YAML-only and this is JSON).
+
+  perl -MYAML::XS=Load -MFile::SOPS -e \
+    "File::SOPS->encrypt(data => Load(qq{x_unencrypted: -0.0\n}), \
+                         recipients => [\$pub], format => q{json})"
+
+  -> Math::BigFloat did not render a float leaf at full precision.
+     Check for a global Math::BigFloat->accuracy or ->precision setting.
+
+The message is wrong about the cause and there is no global setting involved.
+What happens: YAML::XS keeps the source text, so the leaf is a float carrying a
+public PV of "-0.0". Format::JSON::_float_roundtrips answers no (Cpanel quotes a
+PV-carrying scalar, so the reparse is a str), the leaf goes to _float_carrier,
+and Math::BigFloat->new("-0", undef, undef) stringifies as "0" -- so the
+carriers own assertion, which exists to catch a truncated decimal, fires on a
+sign it cannot carry.
+
+Measured, sops 3.13.3, leaf x_unencrypted, one document per row:
+
+  perl NV -0.0        -> json  -0.0   sops -d exit 0, reads -0    (works)
+  YAML-parsed -0.0    -> json  CROAK                              (this)
+  perl NV -0.0        -> yaml  -0.0   sops -d exit 0, reads -0    (works)
+  YAML-parsed -0.0    -> yaml  -0.0   sops -d exit 0, reads -0    (works)
+
+So it is one cell of four, and the same value written from a bare NV goes
+through fine -- the carrier is reached in both cases, which suggests the
+assertion, not the carrier, is what differs.
+
+value_to_bytes writes -0 for a negative zero (ADR 0005); the YAML side handles
+it by writing -0.0 in _float_carrier, because a bare -0 is an INTEGER to every
+YAML reader. JSON has no such problem: -0 is a valid JSON number. Whether the
+right answer is to special-case the sign in the JSON carrier, to let the
+assertion compare the double rather than the text, or something else, wants a
+measurement of what sops does with a JSON -0 either way.
+
+Wire lane. Measured with sops 3.13.3, Crypt::Age 0.002.
+landed in 44a4611 (fix + docs/adr/0014 + t/24 section 15 + Changes). The carrier now takes the -0 branch through unpack/pack instead of Math::BigFloat: 6 of 228 emitter-corpus rows move and all 6 were a croak, 6/6 end-to-end documents sops -d exit 0 reading back -0. Measurement note worth keeping: every ARITHMETIC PV strip (0+$v, $v*1, $v*1.0) loses the sign, immediately or on the second call in the same process, because Perl's arithmetic ops set the private IOK on the caller's scalar in place. The assertion caught that version. Left open here: the carrier callback still gets no key path, so its message cannot name the leaf (karr #68's known gap). Spun off: karr #89, the same sign loss inside the #86 guard's _go_float.
+ERLEDIGT 2026-08-20, Commit 44a4611, ADR 0014. REPARIERT statt bessere Meldung. Gemessen: ueber 2018 kanonische Texte aus value_to_bytes ist '-0' der EINZIGE, den Math::BigFloat nicht reproduziert -- der Zweig ist genau so schmal. Zusaetzlich gemessen und wichtig: ein JSON-Leaf mit Digest -0 braucht die Schreibweise -0.0 (exit 0), waehrend -0 exit 51 gibt, weil Go ein JSON -0 als INTEGER liest. Also derselbe Split wie #62 in YAML; JSON war nicht der einfache Fall, den ADR 0006 annahm. DIE MESSUNG, DIE DEN FIX GEAENDERT HAT: die erste Fassung nutzte value*1 und bestand den Korpus, fiel aber beim ZWEITEN Emit desselben Baums im selben Prozess -- Perls Arithmetik ruft SvIV_please auf ihren Operanden und setzt das private IOK auf dem Skalar des AUFRUFERS in place. Das erste Dokument eines Prozesses waere richtig gewesen, jedes spaetere still falsch. Nur pack/unpack ueberlebt drei Runden. Korpus 228 Zeilen: 6 bewegt, alle 6 waren vorher ein croak, 0 Dokumente aendern Bytes. Gegenmessung: 0 von 228 hoeren auf zu funktionieren.
