@@ -1,0 +1,85 @@
+---
+class: standard
+completed: 2026-08-20T06:45:41Z
+created: 2026-08-20T06:01:18Z
+id: 90
+priority: high
+started: 2026-08-20T06:41:54Z
+status: done
+tags:
+- wire
+- yaml
+- mac
+- interop
+- bool
+title: A Perl boolean sentinel (!!1, $x>3, builtin::true) is digested as 1 and written
+  as true
+updated: 2026-08-20T06:45:41Z
+---
+
+Found while measuring karr #89, not caused by it. Present at 02afc79 and
+unchanged by the #89 fix -- a different mechanism, filed rather than folded in.
+
+Perl's boolean sentinels (PL_sv_yes / PL_sv_no) carry the public IOK, so
+detect_type calls them int and value_to_bytes digests `1` / `0`. YAML::XS has a
+special case for exactly those two SVs and writes them as bare `true` / `false`.
+The document therefore says a boolean and the digest covers an integer, and the
+file fails its OWN MAC immediately -- no sops binary needed to see it.
+
+Measured, sops 3.13.3, perl 5.40.1, YAML::XS 0.910.0, leaf x_unencrypted, one
+document per row:
+
+  source                       our type  our digest  document   our own MAC
+  !!1                          int       1           true       FAIL
+  ($x > 3) stored in the tree  int       1           true       FAIL
+  builtin::true                int       1           true       FAIL
+  builtin::false               int       0           false      FAIL
+  YAML::XS::Load without
+    $YAML::XS::Boolean         int       1           true       FAIL
+
+The route in is ordinary caller code: `File::SOPS->encrypt(data => { admin =>
+($user->{level} > 3) })`, or handing us a tree that a caller's own YAML::XS::Load
+produced (our parse localises $YAML::XS::Boolean, a caller's does not).
+
+The karr #86 guard cannot see it, and the reason is worth recording: it compares
+Go's resolution of the leaf's STRINGIFICATION -- "$leaf" is `1` -- against our
+digest text `1`, agrees, and returns before it ever asks _emitted_plain_scalar
+what token the emitter writes. For every other leaf the two are the same string;
+for PL_sv_yes they are not. That early-agree return is the gate that has to move,
+or the token has to come from the emitter first.
+
+Two candidate answers, and they write different documents, so this wants its own
+measurement and an ADR:
+  (a) type them bool -- digest `True` / `False`, matching what YAML::XS writes
+      and what Go resolves; changes JSON too, where Cpanel writes `1` / `0`.
+  (b) refuse them, the ADR 0008 / 0012 shape.
+Note the two emitters disagree about these SVs today (YAML `true`, JSON `1`),
+so whichever is chosen has to be chosen for both.
+
+Wire lane. Measured with sops 3.13.3, Crypt::Age 0.002, at 02afc79.
+Correction to the JSON half, measured rather than assumed (the first draft
+guessed and was wrong):
+
+  leaf   YAML emitter        JSON emitter (Cpanel::JSON::XS)
+  !!1    `true`, silent      `true`, silent      <- same defect, both formats
+  !!0    `false`, silent     croak (ADR 0012)    <- PL_sv_no PV is "", not "0"
+
+So JSON is not exempt: `!!1` is written as a bare `true` there too, under a
+digest of `1`. Only the false half is already caught, and by a guard that is
+about a different thing.
+2026-08-20 06:42 Fixed and committed as 3568612. REPAIR, not refusal: detect_type returns bool for a scalar Perl itself marks as a boolean, asked through builtin::is_bool -- the same predicate both emitters use. docs/adr/0016.
+
+Two corrections to this ticket, both measured at 2724e1d rather than assumed:
+
+1. `!!0` in an UNENCRYPTED slot does NOT write a silent `false` in YAML. It croaks, in BOTH formats, through ADR 0012 s integer guard: the leaf s PV ("") differs from its digest text ("0"), so the emitter is asked and answers with a `false` whose value_to_bytes is `False`. The ticket recorded YAML silent / JSON croak; it is croak / croak.
+
+2. `!!0` in an ENCRYPTED slot is a MAC break of its own, and a SECOND mechanism the ticket did not have. _encrypt_tree skips a leaf that is an empty string and !!0 s PV IS the empty string, so it reached the document as a plaintext "" against a digest of `False` -- sops -d exit 51, silently. That is the JSON->false defect the comment beside that line was written for, one value class over; the !blessed() test does not cover a sentinel. Fixed with the same commit.
+
+Measured, sops 3.13.3, 10 sentinel leaves x 2 slots x both handlers = 40 documents. Before: 12 exit 0 handing back the integer 1, 20 exit 51, 8 refused. After: 40 of 40 exit 0, reading back true/false.
+
+Counter-measurement: 192-row emitter corpus (48 leaves x 2 slots x both handlers), 40 rows move and every one holds a sentinel, 0 of the other 152.
+
+karr #86 guard, as asked: it now reaches _emitted_plain_scalar for a true sentinel (digest text is True, so the early agree no longer fires), gets `true`, resolves it to True, agrees for the right reason. The false half still does not reach it -- the $GO_LOOKS_AT gate rejects an empty stringification -- but the outcome is correct. Filed as karr #91, latent not live.
+
+prove -lr t/ 806/806 PASS (33 files). SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 PASS and EXECUTED (sops 3.13.3).
+ERLEDIGT 2026-08-20, Commit 3568612, ADR 0016, t/32 neu, t/04 um subtest 32 erweitert. REPARIERT statt abgelehnt: SOPS hat einen bool-Typ, sops schreibt ihn fuer diese Eingabe, und anders als bei ADR 0012 gibt es keine zwei Kandidatenhaelften zu raten -- Perl hat schon beantwortet, was der Wert ist. Praedikat ist builtin::is_bool, dasselbe das BEIDE Emitter benutzen. ZWEI PRAEMISSEN DES TICKETS KORRIGIERT: (1) !!0 unverschluesselt schreibt in YAML KEIN stilles false, es croakt in BEIDEN Formaten ueber ADR 0012s Integer-Guard. (2) Ein zweiter, im Ticket nicht enthaltener MAC-Bruch: !!0 in einem VERSCHLUESSELTEN Slot -- _encrypt_tree ueberspringt ein Leaf das ein leerer String ist, und !!0s PV IST der leere String, also landete Plaintext '' gegen Digest 'False' im Dokument, still, exit 51. Buchstabengleich der JSON->false eq '' Defekt, fuer den der Kommentar neben dieser Zeile geschrieben wurde, eine Wertklasse weiter. Mitgefixt -- ein reiner Typ-Fix haette den Bruch nur verschoben. GEMESSEN 40 Dokumente (10 Sentinel-Leaves x 2 Slots x beide Handler): vorher 12x exit 0 MIT FALSCHEM WERT, 20x exit 51, 8x refused; nachher 40 von 40 exit 0 und lesen true/false zurueck. Beide Boolean-Wege -- Sentinel und JSON->true -- erzeugen jetzt IDENTISCHE Dokumente, ein Mechanismus statt zwei. Korpus 192 Zeilen: 40 bewegt, alle Sentinels, 0 von den anderen 152. Gegenmessung: 0 die funktionierten hoeren auf. #88-Falle geprueft: fuenf Emits desselben Baums je Format in einem Prozess, Marke ueberlebt, Dokumente identisch. Gegenproben: t/32 8 von 12 subtests / 130 Assertionen rot, t/04 subtest 32 12 Assertionen rot. Verifiziert 806/806 PASS, t/04 32/32 AUSGEFUEHRT. VERSIONSFESTIGKEIT vom Orchestrator geprueft: is_bool wird per String-eval geladen (use builtin waere auf altem perl ein Compile-Fehler), das Praedikat wird gegen beide Sentinels UND gegen die Lookalikes 1/0/''/'1' verifiziert statt geglaubt, unter 5.36 ist sub{0} die vollstaendige Antwort weil es dort keinen Boolean-SV gibt -- die 5.010-Zusage der cpanfile haelt. BEHAVIOUR CHANGE markiert: ein verschluesseltes !!1 war type:int Plaintext 1 und kam als Integer zurueck, ist jetzt type:bool/True und liefert JSON->true; der Read-Pfad bleibt unangetastet, ein aelteres type:int-Dokument liest sich weiter als der Integer, der dort steht.
