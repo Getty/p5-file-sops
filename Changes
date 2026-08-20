@@ -1,7 +1,8 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
-  - extract() now returns a float that prints all of its digits. It handed
+  - BEHAVIOUR CHANGE: extract() now returns a float that prints all of its
+    digits. It handed
     back the Perl scalar it found, and a decrypted float is a bare NV with no
     string form of its own, so every stringification went through Perl's 15
     significant digits. Measured on a document the real sops wrote, both
@@ -18,7 +19,8 @@ Revision history for File-SOPS
     everything decrypt() returns, stay plain scalars, because a dualvar in a
     tree changes what the emitters write (karr #78). See karr #61 (second
     half) and docs/adr/0010.
-  - Keep the type:float label on an encrypted whole number. The READ path
+  - BEHAVIOUR CHANGE: the type:float label is now kept on an encrypted
+    whole number. The READ path
     converted a type:float plaintext with `$data + 0.0`, which sets the
     public SVf_IOK flag whenever the result is integral, so detect_type
     called the value an int and the next write relabelled the leaf
@@ -51,8 +53,7 @@ Revision history for File-SOPS
     digits on the wire rather than on a round-trip through our own reader -
     an emitter that writes 0.3 and a reader that parses 0.3 agree with each
     other. t/24-float-precision.t section 11. See karr #61 (first half; the
-    second half, extract() returning an NV whose stringification still loses
-    the digits, remains open).
+    second half is the extract() entry at the top of this release).
   - Fix an encrypted negative zero losing its sign on the READ path. A
     type:float plaintext was converted with `$data + 0.0`, which is positive
     zero twice over: Perl settles the text -0 as an INTEGER zero, which has no
@@ -326,7 +327,7 @@ Revision history for File-SOPS
     time the emitter sees it and still stores its stringification as
     type:str, unchanged.
     The error names the class and what to pass instead; it never names
-    the value.
+    the value. See karr #65.
   - BEHAVIOUR CHANGE: a JSON document with a REFERENCE as a leaf value is
     now refused instead of written, closing the "known gap" the YAML guard
     above left open. Cpanel::JSON::XS under allow_bignum writes a
@@ -824,7 +825,7 @@ Revision history for File-SOPS
     '>' would have failed on the chmod for free, and the early
     releases of this distribution maintained that refusal by accident
     through encrypt_in_place and edit. Every method that writes a file
-    through _replace_file now enforces it.
+    through _replace_file now enforces it. See karr #46.
   - The message for an already-encrypted input now points at edit as
     well as rotate, as sops's own exit-203 message points at its editor
     mode.
