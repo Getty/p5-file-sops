@@ -1,6 +1,25 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Documentation only, no behaviour change: extract's POD said where its
+    float dualvar's spelling differs from what `sops -d --extract` prints, and
+    said it with one example and no boundary - so a caller could not tell
+    whether their value was affected. Re-measured against sops 3.13.3 across
+    the whole double range, both formats, and the answer is wider and narrower
+    than the example suggested. The divergence is FORMAT-DEPENDENT: sops prints
+    an exponent from a YAML document when the decimal exponent is >= 6 or < -4
+    (so a plain `1000000.0` already prints as 1e+06, where this library says
+    1000000), and from a JSON one only when it is >= 21 or < -6 (so the `1e20`
+    the POD used as its example is `100000000000000000000` on BOTH sides
+    there). The exponent's own spelling differs between the two as well - 1e-05
+    in YAML, 1e-7 in JSON - so matching sops would need two formatters, not
+    one. What holds everywhere: measured from 5e-324 through DBL_MAX, in both
+    formats and both slot kinds, every spelling either side prints parses back
+    to the identical double and no digits are lost; the positional form's cost
+    is length (DBL_MAX is 309 digits, 5e-324 is `0.` and 323 zeros and a 5),
+    and a -0.0 prints as -0 on both sides. The decision - the wire's spelling,
+    which is the text the digest covers - is unchanged. See karr #79 and the
+    amendment in docs/adr/0010.
   - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document that has a
     `True` or `False` STRING in an unencrypted slot now WARNS, whether or not
     mac_only_encrypted is set. YAML::XS writes such a string as a bare `True`

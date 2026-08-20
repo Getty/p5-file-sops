@@ -101,7 +101,7 @@ library builds.
 `value_to_bytes` writes Go's `strconv.FormatFloat(v, 'f', -1, 64)` — shortest
 round-tripping digits, **always positional**. `sops -d --extract` prints the
 value's YAML/JSON *serialization*, which switches to an exponent at the
-magnitudes Go's `%g` does. Measured, same document, sops 3.13.3:
+magnitudes Go's `%g` does. Measured, same document, sops 3.13.3, **YAML**:
 
 | leaf | on the wire (and from us) | `sops -d --extract` prints |
 |---|---|---|
@@ -117,6 +117,32 @@ would mean writing a second float formatter — Go's `%g` rules, reimplemented
 next to the `%f` rules we already have — for a cosmetic difference at two ends
 of the range. Recorded as karr #79 in case the maintainer wants the printed
 form after all.
+
+**Amended by karr #79, which closed on this measurement rather than on a
+change.** The table above is a YAML measurement and the two ends it names are
+examples, not the boundaries. Re-measured against sops 3.13.3 across the whole
+double range, one document per row, both formats:
+
+| format | sops prints an exponent when | first magnitude that diverges |
+|---|---|---|
+| yaml | decimal exponent ≥ 6 or < −4 | `1000000` → `1e+06`, `1e-5` → `1e-05` |
+| json | decimal exponent ≥ 21 or < −6 | `1e21` → `1e+21`, `1e-7` → `1e-7` |
+
+Three things follow, and the POD says all three now. The **divergence is
+format-dependent**: from a JSON document `1e20` prints as
+`100000000000000000000` — the same text this library returns — and the two
+agree up to 1e21. The **YAML boundary is far lower than `1e20`**: a plain
+`1000000.0` already diverges, which is a much more ordinary value than the one
+this ADR chose to illustrate with. And the exponent's own spelling differs
+between the formats (`1e-05` in YAML, `1e-7` in JSON), so "Go's `%g`" is two
+rules, not one, and matching sops would need both.
+
+What did not change is the property this decision rests on: measured from
+`5e-324` through `DBL_MAX`, in both formats and in both slot kinds, **every
+spelling either side prints parses back to the identical double** and no digits
+are lost anywhere. The cost of the positional form is length — `DBL_MAX` is 309
+digits and `5e-324` is `0.` followed by 323 zeros and a `5` — and a `-0.0`
+prints as `-0` on both sides.
 
 ## Consequences
 

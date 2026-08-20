@@ -991,14 +991,39 @@ C<0.3>, where C<sops -d --extract> prints all 17. Arithmetic, C<==>, C<sprintf
 change is the point. New in 0.003; see karr #61 and
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
-Two things that dualvar does not do. The spelling is the B<wire's>, which is
-positional at every magnitude, so C<1e20> stringifies as
-C<100000000000000000000> where C<sops -d --extract> prints C<1e+20> -- the same
-double, a different spelling, no digits lost either way (karr #79). And it
-applies to the B<leaf> only: floats inside a returned branch are the plain
-scalars they have always been, because a dualvar in a structure changes the
-bytes the emitters write. Not the value: putting one into an B<unencrypted>
-slot stores the canonical decimal as a number, in JSON as in YAML (karr #78,
+Two things that dualvar does not do. The spelling is the B<wire's> -- the
+canonical decimal L<File::SOPS::Encrypted/value_to_bytes> derives, which is what
+the ciphertext holds and what the MAC covers, and which is B<positional at every
+magnitude>. C<sops -d --extract> prints the value's YAML or JSON serialization
+instead, and that switches to an exponent at the ends of the range. Measured,
+sops 3.13.3, one document per row:
+
+    format   sops prints an exponent when      example
+    yaml     decimal exponent >= 6 or < -4     1000000 -> 1e+06, 1e-5 -> 1e-05
+    json     decimal exponent >= 21 or < -6    1e21    -> 1e+21, 1e-7 -> 1e-7
+
+So C<1e20> stringifies as C<100000000000000000000> here and prints as C<1e+20>
+from a YAML document -- but as C<100000000000000000000> from a JSON one, where
+the two agree up to 1e21. The exponent's own spelling differs between the
+formats as well (C<1e-05> in YAML, C<1e-7> in JSON). B<No digits are lost in
+any of it>: measured from the smallest subnormal to C<DBL_MAX>, in both
+formats, every spelling either side prints parses back to the identical double.
+What the positional form costs is length -- C<DBL_MAX> stringifies as 309
+digits and C<5e-324> as C<0.> followed by 323 zeros and a C<5>. Matching sops
+would mean a second float formatter, Go's C<%g> rules beside the C<%f> ones
+this distribution has, and then a third for JSON's; the decision to keep the
+wire's spelling is recorded in ADR 0010 (karr #79).
+
+The wire's spelling is not the B<document's> either, where the two differ: an
+unencrypted C<1.50> or C<42.0> comes back as C<1.5> and C<42>, because the
+string half is the canonical decimal and not the source text.
+
+The second thing the dualvar does not do is travel: it applies to the B<leaf>
+this method returns and to nothing else. Floats inside a returned branch are
+the plain scalars they have always been, because a dualvar in a structure
+changes the bytes the emitters write. Not the value: putting one into an
+B<unencrypted> slot stores the canonical decimal as a number, in JSON as in
+YAML (karr #78,
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>).
 What changes is the spelling at the extremes -- C<1e300> written as 301
 positional digits rather than C<1e+300> -- and an encrypted slot is unaffected
