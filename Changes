@@ -255,25 +255,25 @@ Revision history for File-SOPS
     measurable separates a spelling from a contradiction - dualvar(0,'zero')
     numifies to the very number it would be compared against. See karr #84
     and docs/adr/0012.
-  - Fix a float leaf that carries its own string form reaching a JSON
-    document as a QUOTED STRING. Cpanel::JSON::XS writes a scalar with a
-    public string half as a JSON string whenever that half differs from its
-    own rendering of the number, and Format::JSON's round-trip check could
-    not see it: it reparsed the quoted string, value_to_bytes re-derived that
-    same text from it, and the two compared equal. Nothing failed - the
-    digest covers the canonical decimal either way, so the MAC held and
-    `sops -d` exited 0 handing back a string where a number was passed. Two
-    ordinary routes in: extract() returns such a dualvar for a float leaf,
-    and YAML::XS keeps the source text of every scalar it parses, so any
-    float from a YAML document carries one on its way into JSON. The
-    round-trip check now answers no for such a leaf and the existing
-    Math::BigFloat carrier writes the canonical decimal as a BARE NUMBER -
-    the document YAML has always produced for the same value, and, for the
-    17-digit case, byte-identical to the one a plain number produces.
-    Measured against sops 3.13.3: 28 of 28 documents exit 0 with the same
-    double read back, and a 244-row corpus through both handlers moves 20
-    rows, all of them this case, none in YAML and none in the ADR 0005 /
-    ADR 0006 float set. See karr #78 and docs/adr/0011.
+  - BEHAVIOUR CHANGE, and a fix: a float leaf that carries its own string
+    form reached a JSON document as a QUOTED STRING. Cpanel::JSON::XS writes
+    a scalar with a public string half as a JSON string whenever that half
+    differs from its own rendering of the number, and Format::JSON's
+    round-trip check could not see it: it reparsed the quoted string,
+    value_to_bytes re-derived that same text from it, and the two compared
+    equal. Nothing failed - the digest covers the canonical decimal either
+    way, so the MAC held and `sops -d` exited 0 handing back a string where
+    a number was passed. Two ordinary routes in: extract() returns such a
+    dualvar for a float leaf, and YAML::XS keeps the source text of every
+    scalar it parses, so any float from a YAML document carries one on its
+    way into JSON. The round-trip check now answers no for such a leaf and
+    the existing Math::BigFloat carrier writes the canonical decimal as a
+    BARE NUMBER - the document YAML has always produced for the same value,
+    and, for the 17-digit case, byte-identical to the one a plain number
+    produces. Measured against sops 3.13.3: 28 of 28 documents exit 0 with
+    the same double read back, and a 244-row corpus through both handlers
+    moves 20 rows, all of them this case, none in YAML and none in the ADR
+    0005 / ADR 0006 float set. See karr #78 and docs/adr/0011.
   - BEHAVIOUR CHANGE: extract() now returns a float that prints all of its
     digits. It handed
     back the Perl scalar it found, and a decrypted float is a bare NV with no
