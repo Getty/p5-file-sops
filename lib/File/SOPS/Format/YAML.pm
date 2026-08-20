@@ -780,6 +780,14 @@ Returns UTF-8 encoded bytes, unconditionally: L<YAML::XS> encodes regardless of
 whether the strings it is given carry Perl's UTF-8 flag. See
 L<File::SOPS/Character encoding>.
 
+The output B<begins with the document-start marker C<--->>, because L<YAML::XS>
+always emits one. sops writes none, in either direction. The line is cosmetic --
+YAML resolves a document with or without it identically, C<sops -d> accepts
+these files, and the MAC covers values rather than serialized text -- and it is
+kept rather than stripped, since the MAC's encrypt side rides on this emitter
+(C<docs/adr/0001>). See L<File::SOPS/Every YAML file starts with C<--->, where
+sops writes none> and karr #83.
+
 Called on its own -- which is what the plaintext emitters do -- it writes every
 YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included. The
 guard L</serialize> installs against those is deliberately not here: a plaintext

@@ -404,6 +404,33 @@ there to protect, and renaming over it would replace the device itself with an
 ordinary file. C<sops --output /dev/stdout> works, and so does passing that as
 C<output> here.
 
+=head3 Every YAML file starts with C<--->, where sops writes none
+
+L<YAML::XS>'s emitter always writes the document-start marker, so line 1 of
+B<every> YAML file this distribution produces is C<--->: the encrypted document
+from L</encrypt>, L</encrypt_file>, L</encrypt_in_place>, L</rotate> and
+L</edit>, and the plaintext from L</decrypt_file> and the copy L</edit> hands
+the editor. sops writes neither (measured, 3.13.3):
+
+    our encrypt_file    ->  "---\nhalf: ENC[...]"
+    sops -e             ->  "whole: ENC[...]"
+    our decrypt_file    ->  "---\nhalf: 1.5"
+    sops -d             ->  "whole: 2"
+
+It is cosmetic and not a compatibility difference. YAML resolves a document
+with the marker and one without it identically, C<sops -d> accepts our files
+(exit 0, pinned by C<t/04-interop.t>), and the MAC covers the B<values>, never
+the serialized text -- so nothing about the digest, the ciphertext or the
+metadata depends on that line. JSON has no such marker and is unaffected.
+
+Where it is visible: a caller who diffs this output against C<sops -d>'s meets
+one extra line at the top, and so does anything reading the file with something
+stricter than a YAML parser.
+
+It is documented rather than removed. Dropping it means changing what the
+emitter emits, and the MAC's encrypt side rides on that same emitter (see
+C<docs/adr/0001>), so it is a wire-format change for a cosmetic gain. karr #83.
+
 =cut
 
 my %FORMATS = (
@@ -824,7 +851,10 @@ It is written by the format handler's C<emit>
 (L<File::SOPS::Format::YAML/emit>, L<File::SOPS::Format::JSON/emit>) -- the
 same emitter the encrypted document goes through, minus the C<sops> section --
 so the plaintext and the encrypted file cannot disagree about quoting, booleans,
-key order or float precision.
+key order or float precision. In YAML that also means it starts with the
+document-start marker C<--->, which C<sops -d> does not write; the line is
+cosmetic and L</Every YAML file starts with C<--->, where sops writes none> has
+the measurement.
 
 B<One rendering deliberately differs from C<sops -d>: in JSON, an integral
 C<type:float> is written C<2.0> where sops writes C<2>.> The YAML output is

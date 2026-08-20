@@ -1,6 +1,15 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - POD: say that every YAML file this distribution writes begins with the
+    document-start marker ---, where sops writes none. YAML::XS's emitter
+    always emits it, so it is line 1 of the encrypted document and of the
+    plaintext alike. Cosmetic and not a compatibility difference - YAML
+    resolves a document with or without it identically, sops -d accepts our
+    files, and the MAC covers values rather than serialized text - but it was
+    nowhere in the POD, and a caller diffing our output against sops -d met it
+    with no warning. Documented rather than removed: stripping it means
+    changing the emitter the MAC's encrypt side rides on. See karr #83.
   - Fix: a refusal now reports the line the CALLER wrote encrypt(), emit() or
     decrypt() on, instead of a line inside this distribution. croak names the
     caller of the frame it stands in, and every frame between a caller and the
