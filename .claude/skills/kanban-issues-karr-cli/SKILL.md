@@ -118,6 +118,22 @@ karr board
 
 Shows tasks grouped by status with WIP utilization.
 
+### Multi-board dashboard
+
+```bash
+karr dashboard                                # scan the current directory
+karr dashboard ~/projects --depth 2           # scan elsewhere, shallower
+karr dashboard --hide-no-board                # drop the no-board summary
+karr dashboard --json                         # structured output
+```
+
+Recursively searches a directory tree for Git repositories and, for each one
+that has a karr board, prints a compact multi-column overview: one entry per
+repository, a block per open task coloured by status, several repositories
+side by side per terminal row. Configuration-free — unlike `karr-foundation
+--status`, it needs no fleet config, it just finds boards and shows where
+tickets are. Read-only: never fetches, pushes, or writes.
+
 ### Pick next task (multi-agent)
 
 ```bash
@@ -500,6 +516,7 @@ is kept separately in `refs/karr/meta/next-id`.
 14. **Need shared non-task workflow data?** → `karr set-refs` / `karr get-refs`
 15. **Board should never be drained by an automation host?** → `karr disable --reason "why"`
 16. **Need to remove the board completely?** → `karr destroy --yes`
+17. **Overview of every board under a directory?** → `karr dashboard`
 
 ## Multi-agent workflow
 
