@@ -1,7 +1,10 @@
 # ADR 0020 — A JSON number Perl cannot hold is a float, not a string
 
-- Status: **proposed** — this is a form decision written before any code, as
-  karr #63 asks. Nothing under `lib/` or `t/` has moved.
+- Status: **accepted** — implemented across f286764 (parser), bf336ac and
+  52aa468 (POD) and 66e0c5b (t/36). Written first as a form decision before
+  any code, as karr #63 asks; the implementing lanes then contradicted it in
+  three places, and those corrections are marked where they sit rather than
+  smoothed over.
 - Date: 2026-08-20
 - Tags: int, float, json, yaml, wire-format, interop, parser
 - Resolves karr #63
