@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-20T01:00:54Z
+created: 2026-08-20T00:55:54Z
+id: 82
+priority: high
+started: 2026-08-20T01:00:54Z
+status: done
+tags:
+- release
+- git
+title: Dirty tracked file will block the release build
+updated: 2026-08-20T01:00:54Z
+---
+
+A tracked file outside lib and outside Changes is currently modified and uncommitted in the working tree (kanban-issues-karr-cli SKILL.md, written by the karr CLI itself). The Git::Check plugin runs a fatal pre-release check that only allows Changes and files under lib to be dirty, so the release step will refuse to proceed until this file is committed or reverted. A plain build stays quiet about it and ships the current working-tree content into the tarball rather than the committed content. Maintainer should commit or revert this file before attempting a release.
+ERLEDIGT 2026-08-20, Commit 7183414. Die Datei war vom karr-CLI selbst geschrieben worden, waehrend er die Tickets dieser Sitzung anlegte -- inhaltlich eine legitime Aktualisierung: metrics und needs kommen in die Liste der Read-Kommandos, karr context bekommt --activity-limit samt Recent-Activity-Sektion. Committet statt verworfen. Der Audit-Befund war praeziser als 'dirty tree': Git::Check warnt in after_build nur (und auch das nur bei build_warnings=1, was dieses Bundle nie setzt -- deshalb blieb dzil build still), FAELLT aber in before_release, und seine allow_dirty-Liste deckt nur Changes und ^lib/.*\.pm$ ab. Der Release-Schritt haette also hart verweigert. Unabhaengig davon wichtig: Git::GatherDir liest getrackte Dateien von der PLATTE, nicht aus dem Index -- ein Build mit dieser Datei dirty hat den Arbeitskopie-Stand ausgeliefert, nicht den von HEAD. Nach dem Commit: dzil build sauber, Baum sauber.
