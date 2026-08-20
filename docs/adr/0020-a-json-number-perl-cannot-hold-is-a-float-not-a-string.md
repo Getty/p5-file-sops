@@ -280,6 +280,18 @@ what `sops -e` does to the identical document (measured,
 `99999999999999999999` → `100000000000000000000`), and the alternative is to go
 on being the only implementation that calls the value a string.
 
+**"Window" above means two different sets, and confusing them is the one way to
+misread this section.** The *parse-side* window — which literals take the new
+path at all — is the numeric one the Context table draws, everything past the
+IV/UV limit. The *digest-stability* window is not numeric: it is "the literal's
+text equals its double's shortest round-trip decimal", and it is what the
+paragraphs above mean. Every positional literal `sops -e` writes satisfies the
+second by construction, which is why the two coincide on a sops-written
+document. A **hand-written** literal can sit well inside the numeric range and
+still move its digest — `18446744073709551616` is just past `2^64` and digests
+as `18446744073709552000`. Verified leaf by leaf during implementation, both
+directions, against `f286764^`.
+
 ### What changes for existing callers
 
 | input | today | after |

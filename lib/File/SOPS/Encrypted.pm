@@ -569,6 +569,25 @@ The corollary is that Perl's own literals decide the type for a structure
 passed straight to L<File::SOPS/encrypt>: C<5432> is C<int> and C<'5432'> is
 C<str>. The string C<'true'> is a string.
 
+Past Perl's own integer limit both parsers hand this ladder the same shape,
+and in a B<JSON> document that is new. A bare integer literal too wide for an
+C<IV> or a C<UV> -- C<100000000000000000000>, C<-9223372036854775809> --
+arrives as the double carrying its source spelling, a
+L<Scalar::Util/dualvar> publishing C<NOK> and C<POK>, so the C<float> rung
+answers it. L<YAML::XS> has always returned that; until 0.003
+L<Cpanel::JSON::XS> returned a plain string SV instead, bit-identical to the
+same digits B<quoted>, so one number was a C<float> read out of a YAML
+document and a C<str> read out of a JSON one -- and L<File::SOPS/rotate>
+wrote a JSON B<string> where the reference had written a number. There is no
+big integer in the SOPS data model: past C<int64> a JSON number is a
+C<float64> to Go, and sops 3.13.3 writes such a leaf as C<type:float> in an
+encrypted slot and rounds it to its own double in an unencrypted one, so
+C<float> is the reference's answer too. A B<quoted>
+C<"100000000000000000000"> is unaffected and stays a C<str>; the two are told
+apart at parse time by the decoder's own type map, never by a pattern match
+on the text. See karr #63 and
+L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
+
 Perl has no boolean B<type>, but since 5.36 it has a boolean B<SV>, and that
 is what C<type:bool> reads on a plain scalar. C<!!1>, C<!!0>, C<$x E<gt> 3>,
 C<'a' eq 'a'>, C<defined $x> and C<builtin::true> all produce it, the mark
@@ -742,6 +761,14 @@ implementations. Reading is unaffected: a C<type:float> plaintext of
 C<+Inf> or C<NaN> is accepted by L</decrypt_value> today, and sops
 itself writes such a value, so the read path has to keep accepting it.
 
+Since 0.003 a B<parsed document> can reach this guard on its own, where the
+route in used to be Perl code or a YAML C<.inf>: a bare JSON integer literal
+that overflows a double -- C<1> followed by 400 zeros -- is a C<float>
+(L</detect_type>) whose value is C<+Inf>, and it used to be read as a string
+and written back as one. The croak is the closer answer, because sops
+refuses that document itself and one step earlier, at unmarshal time
+(measured, sops 3.13.3, exit 2, C<strconv.ParseFloat: value out of range>).
+
 =item B<An integer outside Go's C<int64> range.> Perl's integers reach
 C<2**64-1>, Go's C<int> stops at C<2**63-1>, and the reference implementation
 writes C<type:int> only within that range. Measured against sops 3.13.3, a
@@ -854,6 +881,17 @@ stays C<1.50> -- while a Perl number always is. A document that gets this
 wrong is not merely odd-looking: Go recomputes the MAC by re-serializing the
 value it parsed out of the plaintext, so C<007> stored under C<type:int>
 digests as C<7> on the reading side and C<sops -d> rejects the whole file.
+
+That renormalisation now reaches a wide B<JSON> integer literal as well. Such
+a leaf carries B<both> halves -- the double and its own digits, which is what
+either parser returns past Perl's integer limit (see L</detect_type>) -- and
+the bytes come from the number, so C<99999999999999999999> is written as
+C<100000000000000000000>. Inside the range a sops-written document can carry,
+that costs nothing: the digits sops writes are already the double's canonical
+decimal, so the two texts are the same string and the digest does not move at
+all (measured against sops 3.13.3, every positional literal it writes). A
+B<hand-written> literal that is not its double's canonical decimal does move
+-- to exactly the value C<sops -e> rounds the identical document to itself.
 
 Character strings are UTF-8 encoded on the way out, by the same unconditional
 rule L</encrypt_value> documents.
