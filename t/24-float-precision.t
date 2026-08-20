@@ -11,6 +11,7 @@ use Math::BigFloat;
 use Math::BigInt;
 
 use File::SOPS;
+use File::SOPS::Encrypted;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
@@ -764,6 +765,145 @@ subtest '[yaml] an ENCRYPTED -0.0 is unaffected by the carrier' => sub {
             or diag("sops output: $out");
         like($out, qr/negzero"?\s*:\s*-0\b/,
             "[$format] and reads the plaintext back as -0");
+    }
+};
+
+###############################################################################
+# 10. karr #72: the READ side of the same negative zero. Section 9 above carries
+#     the sign OUT of the library; _deserialize_value was still dropping it on
+#     the way IN. It converted a type:float plaintext with `$data + 0.0`, which
+#     is positive zero twice over -- Perl's grok_number settles the text -0 as
+#     an INTEGER zero, which has no sign to keep, and IEEE round-to-nearest
+#     makes even a genuine -0.0 + 0.0 come out +0.0. Go's
+#     strconv.ParseFloat("-0", 64) is negative zero.
+#
+#     The MAC could not catch it: the digest covers decrypt_bytes -- the
+#     plaintext "-0" -- not the deserialized value. So every document verified
+#     while our own rotate turned `negzero: -0` into `negzero: 0`, exit 0,
+#     nothing reported, both formats.
+#
+#     Unlike section 9's UNENCRYPTED value, there IS a sops -> us fixture here:
+#     an encrypted leaf never reaches sops's float emitter, so `sops -e` on a
+#     plaintext -0.0 writes a document it reads back at exit 0 (measured,
+#     3.13.3). That is what these subtests start from, so the round is
+#     sops writes -> we read -> we write -> sops reads.
+###############################################################################
+
+for my $format (qw(yaml json)) {
+    subtest "[$format] an encrypted -0 survives sops -> decrypt -> rotate -> sops (karr #72)" => sub {
+        my $plain = scratch_file($format);
+        write_file($plain, $format eq 'json'
+            ? qq({\n  "negzero": -0.0,\n  "other": 1.5\n}\n)
+            :  "negzero: -0.0\nother: 1.5\n");
+
+        my $enc_file = scratch_file($format);
+        system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+        is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+        my $content = read_file($enc_file);
+        like($content, qr/negzero.*ENC\[AES256_GCM,.*type:float\]/,
+            'and the leaf really is an encrypted type:float, not a plain one')
+            or diag("fixture:\n$content");
+
+        my $out = `$sops_bin -d $enc_file 2>&1`;
+        is($? >> 8, 0, 'sops -d reads its own fixture back') or diag("sops: $out");
+        like($out, qr/negzero"?\s*:\s*-0\b/, 'as the negative zero it wrote');
+
+        # The read side. `==` and `sprintf "%s"` cannot see the sign in Perl
+        # (`print -0.0` writes 0), so this asks for it explicitly -- and asks
+        # value_to_bytes, which is what the digest and the next ciphertext
+        # would be taken over.
+        my $data = File::SOPS->decrypt(
+            encrypted => $content, identities => [$secret], format => $format,
+        );
+        ok(signbit($data->{negzero}),
+            'our decrypt keeps the sign (measured before the fix: signbit 0)');
+        is(File::SOPS::Encrypted->value_to_bytes($data->{negzero}), '-0',
+            'and the value re-derives the plaintext -0, not 0');
+        is(File::SOPS::Encrypted->detect_type($data->{negzero}), 'float',
+            'still a float, so the next write keeps the type:float label too');
+
+        # The write side, which is where the drift became a changed document.
+        File::SOPS->rotate(file => $enc_file, identities => [$secret]);
+        my $after = `$sops_bin -d $enc_file 2>&1`;
+        is($? >> 8, 0, 'sops -d accepts the rotated document') or diag("sops: $after");
+        like($after, qr/negzero"?\s*:\s*-0\b/,
+            'and it still says -0 (measured before the fix: 0, exit 0, silently)')
+            or diag("sops output after rotate:\n$after");
+        like($after, qr/other"?\s*:\s*1\.5\b/, 'the neighbouring float is untouched');
+
+        # The plaintext emitters carried the same loss: decrypt_file wrote a
+        # bare 0 for this leaf before the fix. -0.0 is section 9's spelling,
+        # and it parses back to the double sops prints as -0.
+        my $plain_out = scratch_file($format);
+        File::SOPS->decrypt_file(
+            input      => $enc_file,
+            output     => $plain_out,
+            identities => [$secret],
+            format     => $format,
+        );
+        like(read_file($plain_out), qr/negzero"?\s*:?\s*:\s*-0\.0\b/,
+            'decrypt_file writes the sign out too');
+    };
+}
+
+subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub {
+    # Straight through File::SOPS::Encrypted, because the claim is about one
+    # plaintext -> one value -> one set of wire bytes, and a document would
+    # only add noise. encrypt_value(value => $text, type => 'float') writes
+    # $text verbatim as the plaintext -- a Perl string is never renormalised --
+    # which is the documented way to reproduce what another producer wrote.
+    my $key = "\x01" x 32;
+
+    # plaintext => the bytes value_to_bytes must re-derive from the value
+    # decrypt_value hands back. Every row but the first five is the measured
+    # behaviour from BEFORE the fix, unchanged.
+    my @ladder = (
+        [ '-0',      '-0' ], [ '-0.0',   '-0' ], [ '-0.00',  '-0' ],
+        [ '-0e0',    '-0' ], [ '-0.0e10','-0' ],
+        [ '0',        '0' ], [ '0.0',     '0' ], [ '+0',      '0' ],
+        [ '+0.0',     '0' ],
+        [ '-1',      '-1' ], [ '1',       '1' ], [ '-0.5', '-0.5' ],
+        [ '0.5',    '0.5' ], [ '1.5',   '1.5' ], [ '-1.5', '-1.5' ],
+        [ '3.14',  '3.14' ], [ '-3.14','-3.14'], [ '0.1',   '0.1' ],
+        [ '-0.1',  '-0.1' ],
+        [ '0.30000000000000004', '0.30000000000000004' ],
+        [ '1e20',   '100000000000000000000' ],
+        [ '-1e20', '-100000000000000000000' ],
+        [ '1e-20',  '0.00000000000000000001' ],
+        [ 'NaN',     'NaN' ], [ 'Inf',  '+Inf' ], [ '-Inf', '-Inf' ],
+    );
+
+    for my $row (@ladder) {
+        my ($plaintext, $expected) = @$row;
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $plaintext, type => 'float', key => $key, aad => '',
+        );
+        is($enc->decrypt_bytes(key => $key, aad => ''), $plaintext,
+            "[$plaintext] the fixture really carries that plaintext");
+        my $value = $enc->decrypt_value(key => $key, aad => '');
+        is(File::SOPS::Encrypted->value_to_bytes($value), $expected,
+            "[$plaintext] re-derives $expected");
+    }
+
+    # The sign is restored from the plaintext, so it must be restored for
+    # every spelling that names the same double -- and for a negative that
+    # underflows to zero, which Go's ParseFloat also returns as -0.
+    for my $negative_zero (qw( -0 -0.0 -0.00 -0e0 -0.0e10 -1e-400 )) {
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $negative_zero, type => 'float', key => $key, aad => '',
+        );
+        ok(signbit($enc->decrypt_value(key => $key, aad => '')),
+            "[$negative_zero] comes back negative");
+    }
+
+    # And a POSITIVE zero must not acquire one.
+    for my $positive_zero (qw( 0 0.0 +0 +0.0 1e-400 )) {
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $positive_zero, type => 'float', key => $key, aad => '',
+        );
+        ok(!signbit($enc->decrypt_value(key => $key, aad => '')),
+            "[$positive_zero] stays positive");
     }
 };
 

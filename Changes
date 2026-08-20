@@ -1,6 +1,25 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix an encrypted negative zero losing its sign on the READ path. A
+    type:float plaintext was converted with `$data + 0.0`, which is positive
+    zero twice over: Perl settles the text -0 as an INTEGER zero, which has no
+    sign to keep, and IEEE round-to-nearest makes even a genuine -0.0 + 0.0
+    come out +0.0. Go's strconv.ParseFloat("-0", 64) is negative zero. The MAC
+    could not catch it - the digest covers decrypt_bytes, the plaintext "-0",
+    not the deserialized value - so every document verified while our own
+    rotate turned `negzero: -0` into `negzero: 0`, exit 0, in both formats and
+    without a word. Unlike the unencrypted case of karr #62, sops CAN write
+    this value: an encrypted leaf never reaches its float emitter,
+    so `sops -e` on a plaintext -0.0 produces a document it reads back at exit
+    0. Measured against sops 3.13.3, both formats, starting from that fixture:
+    decrypt now keeps the sign, rotate leaves `-0` where sops wrote it, and
+    decrypt_file writes it out too. Nothing else on the float read ladder
+    moves: 33 type:float plaintexts through the conversion and back out
+    through value_to_bytes, the five spellings of negative zero change and the
+    other 28 rows are identical. Pinned by t/24-float-precision.t section 10,
+    against the binary. See karr #72 and the karr #72 amendment in
+    docs/adr/0006.
   - Fix a YAML document carrying an unencrypted negative zero. YAML::XS
     renders an NV -0.0 as `0` while the MAC digest covers `-0`, so the
     document and its own MAC stated different numbers: self-MAC FAIL,

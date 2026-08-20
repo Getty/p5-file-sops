@@ -411,6 +411,15 @@ C<type:bytes> is the one exception: it is SOPS's binary type, so it is returned
 as raw bytes with nothing decoded. A C<type:str> whose plaintext is not valid
 UTF-8 is also returned as bytes rather than being mangled.
 
+A C<type:float> plaintext of C<-0> comes back as a B<negative> zero, which is
+what Go's C<strconv.ParseFloat> returns for it and what the document meant.
+Perl's own C<+ 0.0> does not: it settles that text as an integer zero, which
+has no sign to keep, and IEEE round-to-nearest turns even a genuine C<-0.0 +
+0.0> into C<+0.0>. Nothing in Perl shows the difference -- C<==> and C<print>
+cannot tell the two zeroes apart -- but L</value_to_bytes> can, so the value
+writes back out as C<-0> where it used to write C<0> and silently change a
+document sops itself had produced. See karr #72.
+
 Dies if authentication fails (wrong key, corrupted data, or mismatched AAD).
 
 Also dies, rather than guessing, on a plaintext that does not match its label:
@@ -1037,7 +1046,38 @@ sub _deserialize_value {
             unless $data =~ /\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)
                              (?:[eE][+-]?[0-9]+)?\z/x
                 || $data =~ /\A[+-]?(?:Inf(?:inity)?|NaN)\z/i;
-        return $data + 0.0;
+
+        my $number = $data + 0.0;
+
+        # strconv.ParseFloat("-0", 64) is NEGATIVE zero in Go. The conversion
+        # above is positive zero twice over: grok_number settles the text -0 as
+        # an INTEGER zero, which has no sign to keep, and IEEE round-to-nearest
+        # makes even a genuine -0.0 + 0.0 come out +0.0. So the sign has to
+        # come back from the plaintext, which is the only place it survived.
+        #
+        # The MAC does not catch this -- the digest covers decrypt_bytes, the
+        # plaintext "-0", not what this returns -- so every document involved
+        # verified while our own rotate turned a sops-written `negzero: -0`
+        # into `negzero: 0`, exit 0, both formats (karr #72).
+        #
+        # Reading a value's TEXT is what ADR 0002 forbids; this is not that.
+        # The type is not being guessed here, it came from the type: label on
+        # the wire, and $data is authenticated plaintext this module just
+        # decrypted, not a caller's scalar. The condition is "negative sign,
+        # and the conversion produced a zero", so a negative underflow such as
+        # -1e-400 lands on -0 too, which is what Go parses it to.
+        if ($data =~ /\A-/) {
+            # The zero test runs on a THROWAWAY copy, and that is load-bearing.
+            # Perl's == calls SvIV_please on an NV whose value is integral and
+            # sets the PUBLIC IOK flag in place, so comparing $number itself
+            # retypes it: measured, a type:float plaintext of 0.0 came back as
+            # a value detect_type calls int, and the next write relabelled the
+            # leaf type:int. ADR 0002, from the other side.
+            my $is_zero = $number;
+            return -0.0 if $is_zero == 0;
+        }
+
+        return $number;
     }
 
     if ($type eq 'bool') {

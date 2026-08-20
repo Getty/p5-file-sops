@@ -175,6 +175,47 @@ same double.**
   unreachable on the encrypt path anyway (`assert_representable` refuses
   them); only the plaintext emitters can still reach the walk with one.
 
+  **Amended by karr #72 — the READ side dropped the same sign, and no longer
+  does.** The amendment above carried a negative zero *out* of the library;
+  `File::SOPS::Encrypted::_deserialize_value` was still losing it on the way
+  *in*. It converted a `type:float` plaintext with `$data + 0.0`, which is
+  positive zero twice over: Perl's `grok_number` settles the text `-0` as an
+  **integer** zero, which has no sign to keep, and IEEE round-to-nearest makes
+  even a genuine `-0.0 + 0.0` come out `+0.0`. Go's
+  `strconv.ParseFloat("-0", 64)` is negative zero.
+
+  Unlike the unencrypted case above, **sops can write this one**: an encrypted
+  leaf never reaches its float emitter, so the sign survives into the
+  ciphertext. Measured against sops 3.13.3, `negzero: -0.0` encrypted by `sops
+  -e` itself, YAML and JSON alike:
+
+  | step | before | after |
+  |---|---|---|
+  | `sops -e`, then `sops -d` | `-0` | `-0` |
+  | our `decrypt` of that document | `+0` (signbit 0) | `-0` (signbit 1) |
+  | our `rotate`, then `sops -d` | `0`, exit 0, silently | `-0`, exit 0 |
+
+  The MAC never noticed, in either direction: the digest covers
+  `decrypt_bytes`, which is the plaintext `-0`, not the deserialized value. So
+  every document involved verified, and what drifted was the value handed to
+  the caller — and therefore the document, on the next write.
+
+  **The sign is restored from the plaintext's leading `-`, not from the
+  numeric conversion**, because the conversion is where it is destroyed and
+  the text is the only place it survives. That is a test on a value's *text*,
+  which ADR 0002 forbids — but ADR 0002 forbids it for choosing a value's
+  TYPE, from a scalar a caller handed us. Neither half applies here: the type
+  came from the `type:` label on the wire, the text is authenticated
+  plaintext this module just decrypted, and the question put to it is the one
+  thing IEEE arithmetic cannot answer about its own result. The rule is
+  "negative sign, and the conversion produced a zero", so it is also right for
+  a negative underflow (`-1e-400`), which Go parses to `-0` as well.
+
+  Nothing else on the ladder moves: 33 `type:float` plaintexts through
+  `_deserialize_value` and back out through `value_to_bytes`, exactly one row
+  changes (`-0`: `0` → `-0`), and it is joined by the four spellings — `-0.0`,
+  `-0.00`, `-0e0`, `-0.0e10` — that name the same double.
+
 The acceptance condition is **zero wire-byte movement**: for every value that
 produces a document sops accepts today, the bytes are unchanged.
 
@@ -238,6 +279,13 @@ floats — start working. No API, no argument and no error message changes.
 A caller who was relying on File::SOPS writing `0.3` where sops writes
 `0.30000000000000004` was relying on a document neither implementation could
 read.
+
+Under the karr #72 amendment a caller that read an encrypted `-0` back out of
+`decrypt` gets `-0.0` where it used to get `+0.0`. `==`, `<` and `sprintf
+"%s"` cannot tell the two apart in Perl — `print -0.0` writes `0` — so this is
+visible only to code that asks for the sign explicitly (`POSIX::signbit`,
+`sprintf "%.1f"`), or that writes the value back out, which is the case the
+amendment is about.
 
 ## Rejected alternatives
 
