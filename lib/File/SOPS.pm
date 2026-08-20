@@ -304,6 +304,13 @@ says it.
     $data->{port}  = 0 + $data->{port}; # type:int
     $data->{ratio} = 0.0 + $data->{ratio};  # type:float
     $data->{flag}  = JSON->true;        # type:bool
+    $data->{admin} = ($level > 3);      # type:bool too, on perl 5.36+
+
+The last line works because Perl marks its own booleans on the scalar since
+5.36 -- C<!!1>, C<!!0> and every comparison's result -- and both emitters write
+such an SV as a bare C<true>/C<false>. Until 0.003 it was C<type:int>, and the
+resulting file failed its own MAC. See
+L<File::SOPS::Encrypted/detect_type> and karr #90.
 
 The case that makes this worth spelling out is the one
 L<File::SOPS::Encrypted/detect_type> warns about. Perl marks a string as
@@ -2262,8 +2269,18 @@ sub _encrypt_tree {
         # as a plaintext '', after _compute_mac had already hashed 'False' --
         # so the document failed its own MAC check on the next read. sops
         # encrypts false as type:bool with plaintext 'False'.
+        #
+        # The type check is the same rule for the other false boolean, which is
+        # NOT blessed and so walks straight past that guard: Perl's own boolean
+        # SV (!!0, $x > 9, builtin::false), whose PV really is the empty string.
+        # Same defect, same symptom -- a plaintext '' in the document against a
+        # digest of 'False', sops -d exit 51 -- and it went unnoticed because
+        # karr #90 was filed from the unencrypted slot. The eq runs first, so
+        # the type ladder is consulted only for a leaf that does stringify
+        # empty. See docs/adr/0016.
         return undef if !defined $node;
-        return ''    if !blessed($node) && $node eq '';
+        return ''    if !blessed($node) && $node eq ''
+                     && File::SOPS::Encrypted->detect_type($node) ne 'bool';
 
         my $aad = _path_to_aad($path);
         my $enc = eval {

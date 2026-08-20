@@ -1914,4 +1914,112 @@ JSON
     }
 };
 
+###############################################################################
+# Test 32: PERL'S OWN BOOLEAN SV, both directions (karr #90, ADR 0016).
+#
+# `!!1`, `$x > 3`, `builtin::true` and every other comparison result carry
+# SvIsBOOL, and both emitters write such an SV as a bare true/false while
+# detect_type used to call it an int and digest `1`/`0`. Measured at 2724e1d
+# over ten sentinel leaves x two slots x both handlers: 12 documents `sops -d`
+# accepted while handing back the integer 1, 20 it refused with exit 51, and 8
+# this library refused to write.
+#
+# The binary is what makes this a proof. Three of those four combinations broke
+# the document's OWN MAC, so the library could see them -- but the row `sops -d`
+# accepted, an encrypted true sentinel stored as type:int, is only visible from
+# the other implementation: the file verifies and returns a value the caller
+# never wrote.
+###############################################################################
+subtest "Perl's boolean SV is a bool to sops, in both directions" => sub {
+    my $has_bool_sv = do {
+        no warnings;
+        eval q{
+            no warnings 'experimental::builtin';
+            use builtin qw(is_bool);
+            is_bool(!!1) ? 1 : 0
+        } || 0;
+    };
+    plan skip_all => "perl $] has no boolean SV (SvIsBOOL arrived in 5.36), "
+        . "so neither emitter can write one as a bare true/false"
+        unless $has_bool_sv;
+
+    my $x = 5;
+
+    # ONE DOCUMENT PER COMBINATION. A shared document would let the one
+    # combination that CROAKED before this change (a false sentinel in an
+    # unencrypted slot) mask the three that were written silently -- and the
+    # silent ones are what the binary is here for.
+    for my $format (qw(yaml json)) {
+        for my $case (
+            [ 'true, encrypted'    => ($x > 3), 'flag',             'true'  ],
+            [ 'true, unencrypted'  => ($x > 3), 'flag_unencrypted', 'true'  ],
+            [ 'false, encrypted'   => ($x > 9), 'flag',             'false' ],
+            [ 'false, unencrypted' => ($x > 9), 'flag_unencrypted', 'false' ],
+        ) {
+            my ($what, $leaf, $key, $expected) = @$case;
+
+            # Evalled so a refusal is a failed assertion rather than an aborted
+            # interop run.
+            my $encrypted = eval { File::SOPS->encrypt(
+                data       => { $key => $leaf },
+                recipients => [$public],
+                format     => $format,
+            ) };
+            ok(defined $encrypted, "[$format] $what is writable")
+                or do { diag($@); next };
+
+            like($encrypted, qr/ENC\[AES256_GCM,[^\]]*,type:bool\]/,
+                "[$format] $what is type:bool on the wire")
+                if $key eq 'flag';
+
+            my $file = "$tempdir/bool_sentinel.$format";
+            write_file($file, $encrypted);
+
+            my $output = `$sops_bin -d $file 2>&1`;
+            my $exit = $? >> 8;
+            is($exit, 0, "[$format] sops decrypted $what")
+                or diag("sops output: $output");
+            next unless $exit == 0;
+
+            # Asserted on the TEXT sops printed, not on a reparse of it: `1`
+            # and `true` are both true to Perl, and the integer is exactly what
+            # this defect stored. (A bare YAML::XS::Load here would hand back
+            # boolean SENTINELS rather than JSON::PP::Booleans -- which is the
+            # ticket's own route in, one layer up.)
+            like($output, $format eq 'yaml' ? qr/^\Q$key\E: $expected$/m
+                                            : qr/"\Q$key\E"\s*:\s*$expected/,
+                "[$format] sops read $what back as $expected");
+        }
+    }
+
+    # The other direction: sops writes the booleans, we read them. This half
+    # never broke, and it is here so that a change to the type ladder has to
+    # keep both ends of the same value agreeing.
+    for my $format (qw(yaml json)) {
+        my $plain = "$tempdir/bool_plain.$format";
+        write_file($plain, $format eq 'yaml'
+            ? "flag: true\nflag_unencrypted: true\nnope: false\n"
+            : encode_json({ flag => JSON->true, flag_unencrypted => JSON->true,
+                            nope => JSON->false }));
+        my $enc = "$tempdir/bool_plain_enc.$format";
+        system("$sops_bin -e --age $public --input-type $format "
+             . "--output-type $format $plain > $enc 2>/dev/null");
+        is($? >> 8, 0, "[$format] sops encrypted a plaintext boolean document");
+        next unless $? >> 8 == 0;
+
+        like(read_file($enc), qr/ENC\[AES256_GCM,[^\]]*,type:bool\]/,
+            "[$format] sops writes a bare boolean as type:bool");
+
+        my $decrypted = File::SOPS->decrypt(
+            encrypted  => scalar read_file($enc),
+            identities => [$secret],
+            format     => $format,
+        );
+        isa_ok($decrypted->{flag}, 'JSON::PP::Boolean',
+            "[$format] we read a sops boolean back as a boolean");
+        ok($decrypted->{flag}, "[$format] and it is true");
+        ok(!$decrypted->{nope}, "[$format] and false is false");
+    }
+};
+
 done_testing;

@@ -1,6 +1,53 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE, and a fix: PERL'S OWN BOOLEAN was written as an integer.
+    Perl has no boolean type, but since 5.36 it has a boolean SV - `!!1`,
+    `!!0`, `$x > 3`, `'a' eq 'a'`, `defined $x`, `builtin::true` and every
+    comparison's result carry it, and the mark survives assignment and storage
+    in a hash. It publishes the public SVf_IOK, so detect_type called it an int
+    and the MAC digest covered `1`/`0` - while BOTH emitters write such an SV
+    as a bare true/false. The document said one thing and its own MAC covered
+    another, and the route in is ordinary caller code:
+    `encrypt(data => { admin => ($user->{level} > 3) })`, or a tree the caller
+    loaded with their own YAML::XS::Load (our parse localises
+    $YAML::XS::Boolean, a caller's does not). Measured against sops 3.13.3 over
+    ten such leaves x two slots x both handlers, before: 12 documents sops -d
+    accepted while handing back the integer 1, 20 it refused with exit 51, and
+    8 this library refused to write. After: 40 of 40 exit 0, reading back true
+    and false. Such a scalar is now type:bool with a plaintext of True/False,
+    which is byte-for-byte what `sops -e` writes for a plaintext `admin: true`.
+    The predicate is builtin::is_bool - the same one both emitters use, and the
+    only way to reach SvIsBOOL from Perl. Not a flag lookalike: measured,
+    dualvar(1, '1') carries the same IV, the same PV and the same PUBLIC flags
+    as !!1, and both emitters write it as `1`, so a B-based test would have
+    typed it bool and introduced this defect while fixing it. Nothing looks at
+    the value's text - this is a mark Perl put on the scalar, read the way
+    SVf_IOK is read. On a perl older than 5.36 there is no such SV for either
+    emitter to recognise, and detect_type still answers int there. A second
+    mechanism, not in the ticket, is closed with it: a FALSE sentinel in an
+    ENCRYPTED slot reached the document as a plaintext '' against a digest of
+    False, because _encrypt_tree skips a leaf that is an empty string and
+    `!!0`'s PV is the empty string - the same defect the JSON->false guard
+    beside it was added for, one value class over, and the !blessed() test does
+    not cover a sentinel. Measured over a 192-row emitter corpus (48 leaves x 2
+    slots x both handlers), before and after: 40 rows move and every one holds
+    a boolean sentinel; 0 of the other 152 change, in either format or either
+    slot. Wire bytes DO move for one case that verified before: an encrypted
+    `!!1` was type:int with a plaintext of 1 and sops -d handed the caller back
+    the integer 1 for a value they wrote as a boolean; it is now type:bool, and
+    a round trip through this library returns JSON->true rather than 1. The
+    read path is untouched - a type:bool still comes back a JSON::PP::Boolean,
+    and an older type:int document still reads back as the integer it says it
+    is. The two boolean routes now write IDENTICAL documents in both formats
+    and both slots, sentinel and JSON->true alike. Five encrypts of the same
+    tree in one process produce one document and leave every neighbouring
+    scalar's type untouched. The karr #86 guard becomes consistent as a side
+    effect: it used to compare Go's resolution of the leaf's STRINGIFICATION
+    (`1`) against our digest text (`1`), agree, and return before asking the
+    emitter which token it writes - the one leaf class where those two are
+    different strings. With the digest text now True it asks, gets `true`,
+    resolves it to True and agrees for the right reason. karr #90, docs/adr/0016.
   - BEHAVIOUR CHANGE, and a fix: a NEGATIVE ZERO on which Perl had cached an
     integer was written as the integer 0. Perl sets the public SVf_IOK on a
     float whenever the cast back round-trips, and for -0.0 it decides the cast

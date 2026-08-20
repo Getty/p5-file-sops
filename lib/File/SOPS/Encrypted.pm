@@ -459,6 +459,59 @@ those cases, which is how a value is recovered from such a file.
 
 =cut
 
+# Perl's own boolean SV -- the value !!1, $x > 3, 'a' eq 'a' and
+# builtin::true produce -- asked through the same predicate BOTH emitters ask.
+#
+# YAML::XS and Cpanel::JSON::XS write exactly such an SV as a bare true/false,
+# and they use SvIsBOOL to decide it. That is not a flag pattern this module
+# could reimplement: measured on YAML::XS 0.910.0 and Cpanel::JSON::XS 4.43,
+# dualvar(1, '1') carries the same IV, the same PV and the same PUBLIC flags as
+# !!1, and both emitters write it as `1`. The two differ only in whether the PV
+# buffer is perl's own static PL_Yes, which B does not expose. A lookalike test
+# here would therefore type a dualvar `bool` and digest `True` while the
+# document said `1` -- this defect again, introduced by its own fix.
+#
+# builtin::is_bool is the only way to reach SvIsBOOL from Perl. It arrived with
+# the SV mark in 5.36; on an older perl there is no such SV for either emitter
+# to recognise, so `sub { 0 }` is the whole answer there and not a degraded
+# one. Loaded through a string eval because `use builtin` and
+# `no warnings 'experimental::builtin'` are each a compile-time error on a perl
+# that has neither, and this distribution declares 5.010.
+#
+# This is NOT a return to the pattern match ADR 0002 removed: nothing looks at
+# the value's text. It reads a mark Perl itself put on the scalar, exactly as
+# _sv_kind reads IOK. See docs/adr/0016.
+my $IS_BOOL_SV = do {
+    my $probe = eval q{
+        no warnings 'experimental::builtin';
+        use builtin qw(is_bool);
+        sub { is_bool($_[0]) }
+    };
+
+    # VERIFIED, not assumed: it has to say yes to both sentinels and no to the
+    # integer and the string that share their flags and their PV. A predicate
+    # that answers anything else is not the one the emitters use, and typing a
+    # leaf by it would write a document that fails its own MAC.
+    $probe = undef unless $probe
+        && $probe->(!!1) && $probe->(!!0)
+        && !$probe->(1)  && !$probe->(0)
+        && !$probe->('') && !$probe->('1');
+
+    # Below 5.36 there is no boolean SV, so "no" is the whole answer and the
+    # emitters agree. At or above it there is one, both emitters write it as a
+    # bare true/false, and having no way to recognise it means every boolean
+    # this process encrypts is a document nothing can read -- which is a thing
+    # to say at load time, not to discover from a MAC mismatch.
+    croak "File::SOPS::Encrypted: perl $] has a boolean SV (SvIsBOOL) but "
+        . "builtin::is_bool is not usable here, so a Perl boolean cannot be "
+        . "told from the integer 1. Every such value would be written as "
+        . "type:int while both emitters write it as a bare true/false, and the "
+        . "document would fail its own MAC. See docs/adr/0016."
+        if !$probe && $] >= 5.036;
+
+    $probe || sub { 0 };
+};
+
 sub detect_type {
     my ($class, $value) = @_;
     return 'str' unless defined $value;
@@ -470,6 +523,10 @@ sub detect_type {
     # _encrypt_tree leaf branch.
     return 'bool' if blessed($value) && $value->isa('JSON::PP::Boolean');
     return 'str'  if ref $value;
+    # Before the flag ladder: a boolean sentinel publishes IOK, so _sv_kind
+    # would call it an int and value_to_bytes would digest 1 / 0 against a
+    # document both emitters write as true / false. karr #90.
+    return 'bool' if $IS_BOOL_SV->($value);
     return _sv_kind($value);
 }
 
@@ -485,6 +542,10 @@ itself> rather than from a pattern match on its text.
 
 =item * a L<JSON::PP::Boolean> (C<JSON-E<gt>true>, C<JSON-E<gt>false>, or a
 C<true>/C<false> loaded by L<YAML::XS> or L<JSON::MaybeXS>) is C<bool>
+
+=item * a scalar B<Perl itself marks as a boolean> -- C<!!1>, C<!!0>,
+C<$x E<gt> 3>, C<builtin::true>, any comparison's result -- is C<bool> too,
+on perl 5.36 and newer. See below.
 
 =item * a scalar Perl holds as an integer is C<int>
 
@@ -506,8 +567,24 @@ C<"0">, C<"007"> and C<"1.50"> are B<all> C<type:str>.
 
 The corollary is that Perl's own literals decide the type for a structure
 passed straight to L<File::SOPS/encrypt>: C<5432> is C<int> and C<'5432'> is
-C<str>. Perl has no native boolean, so C<type:bool> needs a
-L<JSON::PP::Boolean> or an explicit C<type>; the string C<'true'> is a string.
+C<str>. The string C<'true'> is a string.
+
+Perl has no boolean B<type>, but since 5.36 it has a boolean B<SV>, and that
+is what C<type:bool> reads on a plain scalar. C<!!1>, C<!!0>, C<$x E<gt> 3>,
+C<'a' eq 'a'>, C<defined $x> and C<builtin::true> all produce it, the mark
+survives assignment and storage in a hash, and both emitters write such an SV
+as a bare C<true>/C<false>. It is asked for through C<builtin::is_bool>, which
+is the same predicate the emitters use -- a C<Scalar::Util/dualvar> carrying
+C<1> and C<'1'> is indistinguishable from C<!!1> in every public flag, and is
+B<not> a boolean to any of the three. On a perl older than 5.36 there is no
+such SV, and there C<type:bool> still needs a L<JSON::PP::Boolean> or an
+explicit C<type>.
+
+Until 0.003 such a scalar was an C<int>: the digest covered C<1>/C<0> while the
+document said C<true>/C<false>, so C<File::SOPS-E<gt>encrypt(data =E<gt> {
+admin =E<gt> ($user-E<gt>{level} E<gt> 3) })> wrote a file that failed its own
+MAC. See karr #90 and
+L<docs/adr/0016|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0016-perls-own-boolean-is-a-bool-not-an-int.md>.
 
 Note that Perl marks a scalar as numeric B<in place> the first time it is used
 in numeric context, so C<if ($cfg-E<gt>{port} E<gt> 1024)> before encrypting
@@ -861,6 +938,18 @@ sub _canonical_floats {
         return $node;
     }
     return $node unless defined $node;
+
+    # A boolean sentinel, before the kind ladder. It publishes IOK, so
+    # _sv_kind calls it an int and the guard below would ask the emitter about
+    # every boolean in every document -- an emit and a reparse per leaf, to
+    # arrive at "yes, it writes it faithfully". detect_type calls it a bool
+    # (karr #90), both emitters write a bare true/false, and that token is what
+    # the digest's True/False resolves from: nothing here to repair or refuse.
+    # No text is derived on the way past, for the same reason the string branch
+    # below derives none -- the handler's check has its own gate and its own
+    # call to the one conversion.
+    return _written_leaf($node, undef, $reject_scalar, $path)
+        if __PACKAGE__->detect_type($node) eq 'bool';
 
     my $kind = _sv_kind($node);
 
