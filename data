@@ -1,0 +1,56 @@
+---
+class: standard
+completed: 2026-08-20T05:46:14Z
+created: 2026-08-20T01:33:21Z
+id: 83
+priority: low
+started: 2026-08-20T05:46:14Z
+status: done
+tags:
+- yaml
+- format
+- pod
+- interop
+title: Every YAML file we write starts with ---, sops writes none
+updated: 2026-08-20T05:46:14Z
+---
+
+Measured, sops 3.13.3, HEAD ee16750.
+
+YAML::XS::Dump always emits a leading document-start marker, so *every* YAML
+file this distribution writes carries one on line 1 -- the encrypted document
+from encrypt/encrypt_file/encrypt_in_place/rotate/edit, and the plaintext from
+decrypt_file. sops writes neither:
+
+    our encrypt_file    -> "---\nhalf: ENC[...]"
+    sops -e             -> "whole: ENC[...]"
+    our decrypt_file    -> "---\nhalf: 1.5"
+    sops -d             -> "whole: 2"
+
+Benign as far as anything can tell: YAML resolves a document with or without
+the marker identically, sops -d accepts our files (t/04-interop.t, 31/31), and
+the MAC covers values, not the serialized text. So this is a cosmetic
+divergence, not a compatibility one.
+
+What makes it a ticket rather than a shrug is that it is nowhere in the POD.
+lib/File/SOPS.pm and lib/File/SOPS/Format/YAML.pm both describe what a written
+file looks like in detail -- "How a file is written", the emit() POD, the
+decrypt_file output paragraph -- and none of them mentions that line 1 is not
+what the reference implementation writes. A caller diffing our output against
+sops -d, or feeding it to something stricter than a YAML parser, meets it with
+no warning.
+
+Two possible answers, and picking between them is the work:
+
+  - document it (one sentence, cheapest, and consistent with how the other
+    deliberate divergences in this distribution are handled), or
+  - stop emitting it. That is a Format/YAML.pm emitter change, which is
+    file-sops-wire territory rather than file-sops-format, because the encrypt
+    side of the MAC depends on the emitter -- see ADR 0001. Also needs a check
+    of whether the marker matters for the multi-document model in karr #31,
+    where a leading separator is already dropped on parse.
+
+Found while adding the ADR 0009 cross-reference to decrypt_file's POD; not
+touched there, out of scope.
+landed in 02afc79, documentation only, per the orchestrator's decision to document rather than remove. Three places: a new =head3 under 'How a file is written' in File::SOPS, a sentence in decrypt_file's output paragraph, and a paragraph in Format::YAML's emit(). Re-measured at 3.13.3 before writing: our encrypt_file and decrypt_file both start with ---, sops -e and sops -d write none, and sops -d accepts ours (exit 0). dzil build: the woven POD has the same single pre-existing unrelated link error it had before, and the new =head3 and both links to it resolve.
+ERLEDIGT 2026-08-20, Commit 02afc79, reine POD nach Orchestrator-Entscheidung (dokumentieren, nicht entfernen). Vorher neu gemessen: unser encrypt_file und decrypt_file beginnen beide mit ---, sops -e und sops -d schreiben keins, sops -d akzeptiert unsere Dateien exit 0. Drei Stellen: neuer =head3 unter 'How a file is written' und ein Satz im Ausgabeabsatz von decrypt_file in lib/File/SOPS.pm, plus ein Absatz in der emit()-POD von Format/YAML.pm.
