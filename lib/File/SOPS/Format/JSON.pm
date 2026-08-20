@@ -2,10 +2,12 @@ package File::SOPS::Format::JSON;
 # ABSTRACT: JSON format handler for SOPS
 our $VERSION = '0.003';
 use Moo;
+use B ();
 use Carp qw(croak);
 use Cpanel::JSON::XS ();
+use Cpanel::JSON::XS::Type qw(JSON_TYPE_INT);
 use Math::BigFloat ();
-use Scalar::Util qw(blessed);
+use Scalar::Util qw(blessed dualvar);
 use File::SOPS::Encrypted;
 use namespace::clean;
 
@@ -106,7 +108,11 @@ sub parse {
     my ($class, $content) = @_;
     croak "content required" unless defined $content;
 
-    my $data = $json->decode($content);
+    # The second argument is an OUTPUT parameter: Cpanel fills $types with a
+    # parallel tree of type constants and hands back exactly the data it would
+    # have handed back without it (measured -- structurally identical, and the
+    # duplicate-key refusal below is unchanged). See _restore_wide_numbers.
+    my $data = $json->decode($content, my $types);
     croak "JSON did not parse to a hash" unless ref $data eq 'HASH';
 
     my $metadata;
@@ -114,6 +120,12 @@ sub parse {
         require File::SOPS::Metadata;
         $metadata = File::SOPS::Metadata->from_hash(delete $data->{sops});
     }
+
+    # AFTER the sops section is split off, so the metadata is never rewritten:
+    # its version and lastmodified are strings the reference wrote and this
+    # walk has no business touching. $types still carries a `sops` branch, and
+    # the walk never reaches it because it descends $data.
+    _restore_wide_numbers($data, $types);
 
     return ($data, $metadata);
 }
@@ -148,7 +160,146 @@ deleted from the tree and reported as no metadata at all, so
 L<File::SOPS/encrypt_file> wrote the document back without it. See
 L<File::SOPS::Metadata/from_hash>, which is where the refusal lives.
 
+B<A bare JSON integer literal too wide for a Perl integer comes back as a
+float>, carrying its source spelling -- the same leaf L<YAML::XS> has always
+returned for the same digits, a L<Scalar::Util/dualvar>. L<Cpanel::JSON::XS>
+returns such a literal as a plain string SV, indistinguishable from the same
+digits B<quoted>, so C<100000000000000000000> was typed C<str> and
+L<File::SOPS/rotate> wrote it back into the document as a JSON B<string>: the
+schema of a file the reference implementation had written changed, silently,
+and nothing failed because a string's digest is its own text either way. There
+is no big integer in the SOPS data model -- past C<int64> a JSON number is a
+C<float64> to Go, and sops writes such a leaf as C<type:float> -- so the value
+is now a float here too, and the document keeps the bare number it came with.
+
+A B<quoted> C<"100000000000000000000"> is unaffected and stays a C<str>: the
+two are told apart by the decoder's own type map, never by a pattern match on
+the text (ADR 0002). So is every value the decoder could hold, C<undef>, every
+boolean and every reference -- and every B<float>, which is why the C<0.3>
+handling above is untouched. A document this library has already written
+carries the value quoted, so it keeps verifying and keeps reading back exactly
+as before.
+
+Two consequences worth naming. The value the caller receives is now numeric as
+well as printable, and C<value_to_bytes> re-derives its digits from the double,
+so a literal that is not its own double's canonical decimal --
+C<99999999999999999999>, which no C<sops -e> writes, because sops rounds it to
+C<100000000000000000000> itself -- rounds the same way here. And a literal that
+overflows a double, C<1> followed by 400 zeros, now dies in
+L<File::SOPS::Encrypted/assert_representable> where it used to be written as a
+string; sops refuses that document itself, at unmarshal time. See karr #63 and
+L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
+
 =cut
+
+# Give back the leaf YAML::XS has always given back for the same digits.
+#
+# Cpanel::JSON::XS returns a bare JSON integer literal it cannot hold in an IV
+# or a UV as a plain PV -- a STRING -- so `100000000000000000000` reached the
+# tree indistinguishable from `"100000000000000000000"` (measured: bit-identical
+# SVs, FLAGS 0x4403, POK alone). detect_type therefore called it `str`, and
+# rotate wrote a document sops had written with a NUMBER there back with a
+# string. Silent schema drift on the reference's own file, karr #63.
+#
+# There is no big integer in the SOPS data model: past int64 a JSON number is a
+# float64 to Go, and sops writes such a leaf as type:float in an encrypted slot
+# and loses the digits itself in an unencrypted one (`sops -e` on
+# 99999999999999999999 writes 100000000000000000000). YAML::XS already hands
+# back the right shape for the same literal -- the double, carrying its source
+# spelling, i.e. a dualvar -- which is a leaf class this distribution handles
+# end to end. So the fix is only that THIS parser gives what the OTHER one
+# gives; nothing in Format::YAML moves, and nothing in emit() moves either,
+# because ADR 0011's repair path already writes such a leaf as a bare number.
+# See docs/adr/0020.
+#
+# The ORACLE is the decoder's own type map, read from the same $json object the
+# document goes through (ADR 0005: the backend is named, so its options are
+# ours) -- never allow_bignum, which would hand back Math::BigFloat objects for
+# every ordinary float and retype every document, and costs two orders of
+# magnitude more besides (docs/adr/0020 has the figures). A plain-PV leaf is a
+# plain PV for exactly two reasons, a JSON string or a bare integer too wide for
+# an IV/UV, and the map separates them without fail: re-measured here across
+# every IV/UV boundary and a set of pathological literals (400-digit integers,
+# 400-digit fractions, 1e309, thirty ones), every plain-PV leaf is either
+# JSON_TYPE_INT or JSON_TYPE_STRING and there is no third case. karr #63's
+# parking note dismissed this mechanism over encode($data, $type) rewriting the
+# value as UINT64_MAX; that is the ENCODE side, and the map is read here and
+# handed to no encoder.
+#
+# The GATE is the plain tree, not the map. A leaf is touched only where the
+# plain decode left a defined, unreferenced scalar carrying the public SVf_POK
+# and NEITHER SVf_IOK NOR SVf_NOK; everywhere else the map is not even read.
+# That is what keeps the float path out of this: a bare float literal decodes
+# NOK and fails the first test. It is also why no Math::BigInt ever enters the
+# tree, so _reject_referenced_leaf below keeps refusing one, unchanged.
+sub _restore_wide_numbers {
+    my ($node, $type) = @_;
+
+    if (ref $node eq 'HASH') {
+        my $map = ref $type eq 'HASH' ? $type : undef;
+        for my $key (keys %$node) {
+            my $wide = _wide_number($node->{$key}, $map ? $map->{$key} : undef);
+            $node->{$key} = $wide if defined $wide;
+        }
+    }
+    elsif (ref $node eq 'ARRAY') {
+        my $map = ref $type eq 'ARRAY' ? $type : undef;
+        for my $index (0 .. $#$node) {
+            my $wide = _wide_number($node->[$index],
+                $map ? $map->[$index] : undef);
+            $node->[$index] = $wide if defined $wide;
+        }
+    }
+
+    return;
+}
+
+# The dualvar for a leaf the decoder could not hold, or undef for a leaf that
+# is to be left EXACTLY as the decoder returned it -- containers included, which
+# are walked in place instead of being handed back.
+#
+# undef rather than the leaf itself so that an untouched slot is never assigned
+# to at all. Storing a leaf back over itself preserves every flag that carries
+# meaning -- measured, IOK/NOK/POK and their private twins identical across
+# floats, integers, strings, -0.0, booleans, null and a UTF-8 string -- but it
+# does set the pad housekeeping bits on an SV this walk had no business
+# touching, and a parse path that leaves fingerprints on leaves it did not fix
+# is one a later flag-level regression test cannot read.
+sub _wide_number {
+    my ($node, $type) = @_;
+
+    if (ref $node eq 'HASH' || ref $node eq 'ARRAY') {
+        _restore_wide_numbers($node, $type);
+        return;
+    }
+
+    return unless _plain_pv_leaf($node);
+    return unless defined $type && !ref $type && $type == JSON_TYPE_INT;
+
+    # The numification runs on a COPY of the PV. Perl marks a scalar numeric IN
+    # PLACE the first time it is read as a number, so numifying the leaf itself
+    # would set a flag on an SV the decoder still holds -- the trap ADR 0002
+    # and karr #72/#73 are about, one frame earlier.
+    my $digits = "$node";
+    my $number = $digits + 0;
+
+    return dualvar($number, $digits);
+}
+
+# Did the plain decode leave this leaf a bare string SV?
+#
+# A question about the DECODER's output, not about the SOPS type -- the type
+# ladder stays in File::SOPS::Encrypted::detect_type and is not repeated here.
+# The public SVf_POK for the same reason Encrypted::_has_public_pv reads it:
+# merely stringifying a number sets the PRIVATE pPOK, and reading that would
+# call an integer a string because someone had logged it.
+sub _plain_pv_leaf {
+    return 0 if !defined $_[0] || ref $_[0];
+
+    my $flags = B::svref_2object(\$_[0])->FLAGS;
+    return 0 unless $flags & B::SVf_POK();
+    return $flags & (B::SVf_IOK() | B::SVf_NOK()) ? 0 : 1;
+}
 
 sub serialize {
     my ($class, %args) = @_;

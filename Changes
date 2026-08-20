@@ -1,6 +1,30 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a bare JSON integer literal too wide for a Perl integer
+    is now read as a FLOAT carrying its source spelling, where it used to be
+    read as a string. Cpanel::JSON::XS hands such a literal back as a plain
+    string SV, bit-identical to the same digits quoted, so
+    `100000000000000000000` was typed str and `rotate` wrote it back into the
+    document as a JSON STRING - the schema of a file the reference
+    implementation had written changed, silently, and nothing failed because a
+    string digests as its own text either way. There is no big integer in the
+    SOPS data model: past int64 a JSON number is a float64 to Go, sops writes
+    such a leaf as type:float, and YAML::XS has always returned the right shape
+    here - the double with its digits as a string half. So this parser now
+    gives what that one gives; nothing in the YAML handler and nothing in
+    either emitter moved. A QUOTED "100000000000000000000" is unaffected and
+    stays a str, told apart by the decoder's own type map and never by a
+    pattern match on the text, as is every float, boolean, null and reference.
+    A document this library has already written carries the value quoted, so
+    it keeps verifying and reading back exactly as before. Two consequences:
+    the value a caller gets back is now numeric as well as printable, and its
+    digits are re-derived from the double, so a literal that is not its own
+    double's canonical decimal (99999999999999999999, which no `sops -e`
+    writes - sops rounds it to 100000000000000000000 itself) rounds the same
+    way here; and a literal that overflows a double now dies where it used to
+    be written as a string, which is what sops does with the same document at
+    unmarshal time. See karr #63 and docs/adr/0020.
   - Documentation only, no behaviour change: extract's POD said where its
     float dualvar's spelling differs from what `sops -d --extract` prints, and
     said it with one example and no boundary - so a caller could not tell
