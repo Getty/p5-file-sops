@@ -1,6 +1,24 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Documentation only, no behaviour change: four POD statements described
+    what this library did before 0.003. `Saying what a value is` in
+    File::SOPS gave `0.0 + $x` as the way to hand encrypt() a type:float -
+    which is a type:int for a whole number, because the addition sets the
+    public SVf_IOK on an integral result and that flag is what the type is
+    read from (measured: `0.0 + 2` and `0.0 + '2'` both detect as int). It
+    now gives unpack('d', pack('d', $x)), the conversion this library makes
+    on the read side for the same reason. decrypt_bytes still named `+ 0.0`
+    as decrypt_value's float conversion, which karr #73 replaced.
+    value_to_bytes still called the UTF-8 encoding of a character string
+    "flag-guarded", the rule ADR 0003 replaced with an unconditional one -
+    two paragraphs after the sentence in its own POD that says so, and
+    pointing at encrypt_value, which documents the opposite. And rotate -
+    the example the karr #73 entry below is written around - now says that
+    an encrypted whole number keeps its type:float label across a rotation,
+    which until then only decrypt_value's POD said. See karr #95 and karr
+    #94; the other two carry no ticket, they were found while checking
+    those.
   - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document with
     mac_only_encrypted set now WARNS about an unencrypted leaf whose spelling
     sops resolves differently, where it used to say nothing. With that option

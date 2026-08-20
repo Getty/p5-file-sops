@@ -255,7 +255,7 @@ numeric or boolean it reads:
     File::SOPS->encrypt(data => { v => JSON->true })  # type:bool, plaintext True
 
 The C<JSON-E<gt>true>/C<JSON-E<gt>false> in the last line is a class-method
-call on the C<JSON> package -- it is not imported by L</use File::SOPS;>
+call on the C<JSON> package -- it is not imported by C<use File::SOPS;>
 (nothing is; namespace::clean strips it back out), and it works under a bare
 C<use File::SOPS;> only by accident, because CryptX loads JSON.pm on the
 way to L<Crypt::AuthEnc::GCM>. Rely on the accident and your code breaks
@@ -302,7 +302,7 @@ says it.
     use JSON::MaybeXS qw(JSON);          # JSON->true is not exported by File::SOPS
     $data->{port}  = "$data->{port}";   # type:str
     $data->{port}  = 0 + $data->{port}; # type:int
-    $data->{ratio} = 0.0 + $data->{ratio};  # type:float
+    $data->{ratio} = unpack('d', pack('d', $data->{ratio}));  # type:float
     $data->{flag}  = JSON->true;        # type:bool
     $data->{admin} = ($level > 3);      # type:bool too, on perl 5.36+
 
@@ -311,6 +311,15 @@ The last line works because Perl marks its own booleans on the scalar since
 such an SV as a bare C<true>/C<false>. Until 0.003 it was C<type:int>, and the
 resulting file failed its own MAC. See
 L<File::SOPS::Encrypted/detect_type> and karr #90.
+
+The C<ratio> line goes through C<pack>/C<unpack> rather than the more obvious
+C<+ 0.0> because addition sets Perl's public C<SVf_IOK> on an B<integral>
+result, and that flag is what decides the type: measured, C<0.0 + 2> is
+C<type:int>, and so is C<0.0 + '2'>. C<pack('d', ...)> lays the value out as a
+native double and C<unpack> builds a fresh scalar from those bytes, which is a
+float and nothing else -- the same conversion
+L<File::SOPS::Encrypted/decrypt_value> makes for the same reason. A literal
+C<2.0> written in your own source is already a float and needs none of this.
 
 The case that makes this worth spelling out is the one
 L<File::SOPS::Encrypted/detect_type> warns about. Perl marks a string as
@@ -1079,6 +1088,17 @@ later sops adds -- are carried over; the wrapped data keys, the MAC and
 C<lastmodified> are regenerated. Until 0.003 none of that was carried: rotate
 called L</encrypt>, which built fresh metadata with the defaults, so a file
 that customised any of it was rewritten under the default rules.
+
+The values keep their C<type:> labels too, and C<type:float> on a B<whole
+number> is the one that did not. Rotation re-encrypts every leaf, so each label
+is re-derived from the scalar the decryption produced, and until 0.003 that
+scalar came back carrying Perl's public C<SVf_IOK> whenever the plaintext was
+integral: a C<whole: 2.0> that sops itself had written was rotated back out as
+C<type:int>, at exit 0 and with the MAC holding either way, because the
+plaintext is C<2> under both labels. What moved was the document's own type
+field, silently. L<File::SOPS::Encrypted/decrypt_value> has the conversion this
+now uses instead. See karr #73 and
+L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 =head3 Files rotate refuses
 

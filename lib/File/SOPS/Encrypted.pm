@@ -373,15 +373,15 @@ L</encrypt_value> uses, so the two sides derive the same AAD from the same key
 path however Perl happens to be storing it.
 
 This is what the MAC is computed over. L</decrypt_value> runs the same bytes
-through a type conversion (C<0 + $x>, C<+ 0.0>, C<JSON::PP::Boolean>) whose
-inverse is not exact in Perl: C<'007'> comes back as C<7>, C<'1.50'> as
-C<1.5>, and the C<100000000000000000000> that Go writes for C<1e20>
-restringifies as C<1e+20>. Feeding a re-serialization of the converted value
-to the digest therefore produces a different hash than the one the producer
-computed over the plaintext. Anything hashing a decrypted value must use this
-method, not L</decrypt_value> -- the one exception being C<type:bool>, where
-SOPS's C<ToBytes> titlecases whatever spelling it parsed, so the caller
-normalises C<true>/C<false> to C<True>/C<False>.
+through a type conversion (C<0 + $x>, C<unpack('d', pack('d', $x))>,
+C<JSON::PP::Boolean>) whose inverse is not exact in Perl: C<'007'> comes back
+as C<7>, C<'1.50'> as C<1.5>, and the C<100000000000000000000> that Go writes
+for C<1e20> restringifies as C<1e+20>. Feeding a re-serialization of the
+converted value to the digest therefore produces a different hash than the one
+the producer computed over the plaintext. Anything hashing a decrypted value
+must use this method, not L</decrypt_value> -- the one exception being
+C<type:bool>, where SOPS's C<ToBytes> titlecases whatever spelling it parsed,
+so the caller normalises C<true>/C<false> to C<True>/C<False>.
 
 Dies if authentication fails (wrong key, corrupted data, or mismatched AAD).
 
@@ -655,7 +655,7 @@ sub assert_representable {
 
     # karr #59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on
     # the wire. value_to_bytes writes +Inf / -Inf / NaN -- the same text
-    # Yo's strconv.FormatFloat produces -- but neither emitter can carry it:
+    # Go's strconv.FormatFloat produces -- but neither emitter can carry it:
     # Cpanel::JSON::XS writes it as `null` (the document is silently rounded),
     # JSON::XS writes bare `inf` (invalid JSON, sops refuses with "invalid
     # character i"), and YAML::XS writes bare `Inf` (self-MAC OK, sops -d exit
@@ -739,7 +739,7 @@ defect karr #59 exists to close. Store the value as a B<string> instead --
 that is C<type:str>, written verbatim, and the same number (or its
 deliberate stringification) is round-tripped exactly through both
 implementations. Reading is unaffected: a C<type:float> plaintext of
-C<+Inf> or C<NaN> is accepted by L</_deserialize_value> today, and sops
+C<+Inf> or C<NaN> is accepted by L</decrypt_value> today, and sops
 itself writes such a value, so the read path has to keep accepting it.
 
 =item B<An integer outside Go's C<int64> range.> Perl's integers reach
@@ -855,7 +855,7 @@ wrong is not merely odd-looking: Go recomputes the MAC by re-serializing the
 value it parsed out of the plaintext, so C<007> stored under C<type:int>
 digests as C<7> on the reading side and C<sops -d> rejects the whole file.
 
-Character strings are UTF-8 encoded on the way out, by the same flag-guarded
+Character strings are UTF-8 encoded on the way out, by the same unconditional
 rule L</encrypt_value> documents.
 
 The return is a B<plain string> -- a scalar carrying its text and not the
