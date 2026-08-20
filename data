@@ -1,0 +1,42 @@
+---
+class: standard
+completed: 2026-08-20T08:31:30Z
+created: 2026-08-20T00:34:04Z
+id: 79
+priority: low
+started: 2026-08-20T08:31:30Z
+status: done
+tags:
+- float
+- api
+- interop
+title: extract's canonical decimal is not the spelling sops --extract prints at the
+  extremes
+updated: 2026-08-20T08:35:02Z
+---
+
+Recorded while landing ADR 0010 (karr #61 half 2), which chose the canonical
+decimal from value_to_bytes as the string half of extract`s dualvar.
+
+value_to_bytes writes Go`s strconv.FormatFloat(v, "f", -1, 64) -- shortest
+round-tripping digits, ALWAYS positional. `sops -d --extract` prints the
+value`s YAML/JSON serialization instead, which switches to an exponent where
+Go`s %g does. Measured, one document, sops 3.13.3:
+
+  leaf                  on the wire (and from us)   sops --extract prints
+  0.30000000000000004   0.30000000000000004         0.30000000000000004
+  1.5                   1.5                         1.5
+  1e20                  100000000000000000000       1e+20
+  1e-7                  0.0000001                   1e-07
+
+Same double either way, no digits lost either way, so this is cosmetic. ADR
+0010 takes the wire`s spelling because it is the text the document contains
+and the digest covers, and because matching sops would mean a SECOND float
+formatter (Go`s %g rules next to the %f rules we have) -- the duplication this
+distribution keeps paying for.
+
+Open only in case the maintainer prefers the printed form after all. Doing it
+would need the %g formatter to be the ONLY new conversion and to be pinned by
+a measured table, as _float_bytes is.
+CLOSED on a re-measurement, not a change (commit fb02fcc). The ticket's numbers hold and were incomplete in two ways. (1) The divergence is FORMAT-DEPENDENT: sops prints an exponent from a YAML document when the decimal exponent is >= 6 or < -4, and from a JSON document only when it is >= 21 or < -6. So the ticket's own example does NOT diverge in JSON -- 1e20 is 100000000000000000000 on both sides there -- while in YAML a plain 1000000.0 already prints as 1e+06, far below the 1e20 the ADR illustrated with. (2) The exponent's own spelling differs between the formats: 1e-05 in YAML, 1e-7 in JSON, so 'Go's %g' is two rules and matching sops would need two formatters beside our %f, not one. Extremes measured, nobody had named them: DBL_MAX is 309 positional digits here against 1.7976931348623157e+308 from sops; DBL_MIN and the subnormals 1e-320 and 5e-324 are 0. plus up to 323 zeros against 5e-324; -0.0 prints as -0 on BOTH sides. Nothing loses a digit anywhere: from 5e-324 through DBL_MAX, in both formats and both slot kinds, every spelling either side prints parses back to the identical double, and extract returned a dualvar in every row. The decision (the wire's spelling, which is the text the digest covers) stands. Documentation completed where a caller looks: extract's POD now carries the boundary table, the format dependence, the no-digits-lost measurement and the length cost, and docs/adr/0010's table is labelled as the YAML measurement it was, with an amendment carrying the boundaries. prove -lr t/ 833/833; SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32, executed.
+ERLEDIGT 2026-08-20, Commit fb02fcc, reine Doku. Die Zahlen des Tickets reproduzieren, waren aber in zwei Punkten unvollstaendig. (1) ES IST FORMATABHAENGIG, und weder POD noch ADR sagten das: sops druckt in YAML einen Exponenten ab Dezimalexponent >= 6 oder < -4, in JSON erst ab >= 21 oder < -6. Das eigene Beispiel des Tickets divergiert in JSON also GAR NICHT -- 1e20 ist beidseitig 100000000000000000000, die beiden stimmen bis 1e21 ueberein. (2) Die YAML-Grenze liegt weit unter 1e20: schon ein gewoehnliches 1000000.0 divergiert (sops: 1e+06). Ausserdem unterscheidet sich die Schreibweise des Exponenten zwischen den Formaten (1e-05 vs 1e-7), 'Gos %g' waeren also ZWEI zusaetzliche Formatierer, nicht einer. EXTREMSTELLEN, die niemand genannt hatte, alle gemessen: DBL_MAX sind bei uns 309 Stellen gegen 1.7976931348623157e+308; DBL_MIN, 1e-320 und die kleinste Subnormale 5e-324 sind '0.' plus bis zu 323 Nullen; -0.0 druckt beidseitig -0. KEINE ZIFFER GEHT IRGENDWO VERLOREN -- von 5e-324 bis DBL_MAX, in beiden Formaten, parst jede Schreibweise beider Seiten zum identischen Double zurueck, und extract lieferte in jeder Zeile einen dualvar. Entscheidung steht (die Schreibweise der Leitung ist der Text, den der Digest deckt); die Doku war auffindbar aber unvollstaendig und wurde vervollstaendigt statt ueber die Luecke hinweg geschlossen: extracts POD traegt jetzt die Grenztabelle, ADR 0010 ist als die YAML-Messung gekennzeichnet, die es war.
