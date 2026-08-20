@@ -1,4 +1,5 @@
 # ADR 0006 — Floats are emitted in a form that parses back to the same double
+
 - Status: accepted
 - Date: 2026-08-09
 - Tags: float, mac, interop, wire-format, json, yaml, dependencies

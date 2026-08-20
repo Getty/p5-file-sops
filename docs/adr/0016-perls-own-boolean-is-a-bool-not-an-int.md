@@ -4,13 +4,13 @@
 - Date: 2026-08-20
 - Tags: bool, types, mac, wire-format, yaml, json, interop
 - Resolves karr #90
-- Depends on ADR 0002 (the type comes from the scalar's public flags, which is
-  why such a leaf was an `int`; this ADR adds one rule to that ladder and
-  keeps the ladder single), ADR 0008 and ADR 0012 (the rule that a leaf an
-  emitter cannot write as the text the digest covers must not be written
-  silently — the same disagreement, here **repaired** rather than refused) and
-  ADR 0013 (the karr #86 guard, which cannot see this leaf and is measured
-  again below)
+- Amends ADR 0002 (the type ladder gains a rung for Perl's own boolean SV; its
+  rule is untouched — the type comes from the scalar's public flags, which is
+  why such a leaf was an `int` — and the ladder stays single)
+- Depends on ADR 0008 and ADR 0012 (the rule that a leaf an emitter cannot
+  write as the text the digest covers must not be written silently — the same
+  disagreement, here **repaired** rather than refused) and ADR 0013 (the karr
+  #86 guard, which cannot see this leaf and is measured again below)
 
 ## Context
 

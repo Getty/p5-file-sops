@@ -153,6 +153,25 @@ Four things about this are deliberate:
   exact bytes under this label", which is what `t/07-mac.t`'s hand-built
   fixtures need in order to test the decrypt side without a binary.
 
+**Amended by karr #89 — the ladder gains its one exception, and the rule above
+is what decides it.** Perl caches an `IV` on an `NV` whenever the cast
+round-trips and sets the **public** `IOK` when it does, so a **negative zero**
+reached the `int` rung and the sign was gone from the wire and from the digest.
+The rung now asks, of a scalar publishing both halves, whether its float half
+is a negative zero — the one value whose cached integer is a different number.
+Still the scalar deciding and not its text, still one ladder: one value, one
+rung, one extra question. See ADR 0015.
+
+**Amended by karr #90 — Perl's own boolean SV is a `bool`, and it is asked
+above `int`.** Since 5.36, `!!1`, `!!0` and every comparison's result carry
+`SvIsBOOL`, which publishes `IOK`, so the `int` rung claimed them: the digest
+covered `1`/`0` while both emitters wrote a bare `true`/`false`, and the
+document failed its own MAC. The ladder gains a rung above `int` that asks
+`builtin::is_bool` — the same predicate the emitters ask, so the type and the
+token cannot drift apart. This is not a return to the pattern match either:
+nothing reads the value's text, only a mark Perl put on the scalar. See ADR
+0016.
+
 ### Canonical numeric plaintext
 
 Taking the type from the scalar forces the second half. Once a bare YAML
