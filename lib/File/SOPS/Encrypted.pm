@@ -760,6 +760,14 @@ digests as C<7> on the reading side and C<sops -d> rejects the whole file.
 Character strings are UTF-8 encoded on the way out, by the same flag-guarded
 rule L</encrypt_value> documents.
 
+The return is a B<plain string> -- a scalar carrying its text and not the
+number that text spells. This matters to a caller who feeds the result back in:
+L</detect_type> reads the SV and not the characters (ADR 0002), so a return
+still carrying its numeric half went back onto the wire as C<type:float>, or as
+C<type:int> for the text C<-0>, where the caller meant the C<type:str> they
+were holding. karr #80; the bytes were never affected, only what the scalar
+says it is.
+
 =cut
 
 # Canonical texts no emitter has an agreed wire form for, left exactly as they
@@ -1138,6 +1146,15 @@ sub _has_public_pv {
 # stringification is neither: it is roughly %.15g, so it exponentiates 1e20
 # and truncates 0.1+0.2 to 0.3, and both of those disagree with what the Go
 # side re-derives when it recomputes the MAC.
+#
+# The shortest-form test is `0 + "$g"` and NOT the obvious `$g + 0`, which
+# numifies $g IN PLACE: the digits then left the loop carrying the double as
+# well, so value_to_bytes returned a scalar detect_type called a float -- and
+# for a negative zero an INT, since the text `-0` numifies to an IV. Text in,
+# a number back out, from the one method whose whole job is to say what the
+# wire carries. karr #72 and #73 are the same mechanism on the input side;
+# this is karr #80 on the output side. Stringifying first numifies a COPY and
+# leaves the digits a string, which is what they are.
 sub _float_bytes {
     my ($n) = @_;
 
@@ -1148,7 +1165,7 @@ sub _float_bytes {
     my $g;
     for my $precision (1 .. 17) {                   # 17 always round-trips a double
         $g = sprintf('%.*g', $precision, $n);
-        last if $g + 0 == $n;
+        last if 0 + "$g" == $n;
     }
 
     return _expand_exponent($g);

@@ -1,6 +1,18 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix: File::SOPS::Encrypted->value_to_bytes returned text in a scalar that
+    also carried the number that text spells, so detect_type called its own
+    output a float - and an int for the text -0, which numifies to an IV. The
+    shortest-form search in _float_bytes compared with `$g + 0`, which
+    numifies in place: the same in-place retyping karr #72 and #73 fixed on
+    the input side, this time on the output side. It bit the caller who sends
+    a value through value_to_bytes and hands the result back to encrypt, where
+    a string is what they meant and a float is what they got - a different
+    type on the wire and a different digest. The comparison now stringifies
+    first, so the digits leave as digits. No wire bytes move: measured over
+    18216 value_to_bytes rows (3036 leaves x 6 type labels, including 3000
+    random doubles) and a 228-row emitter corpus, 0 differences. See karr #80.
   - Fix: a negative zero that came out of a YAML parse and is written as JSON
     died in the float carrier with a message that named the wrong cause -
     "Math::BigFloat did not render a float leaf at full precision. Check for a

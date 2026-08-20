@@ -262,6 +262,72 @@ for my $format (qw(yaml json)) {
     }
 }
 
+# ----------------------------------------------------------------------------
+# 5. value_to_bytes returns TEXT, and the scalar has to say so (karr #80).
+#
+# The shortest-form search in _float_bytes compared with `$g + 0 == $n`, which
+# numifies $g IN PLACE -- the same in-place retyping karr #72 and #73 are
+# about, on the OUTPUT side. So the digits came back carrying the double as
+# well as the text, and detect_type, which reads the public SV flags and
+# nothing else (ADR 0002), called value_to_bytes's own return a `float`. For a
+# negative zero it called it an `int`, because the text `-0` numifies to an IV.
+#
+# Harmless where the return is used inside this distribution -- plaintext
+# bytes, digest input, an `eq` in the round-trip checks, all string contexts,
+# and the wire bytes are byte-identical either way (measured: 18216
+# value_to_bytes rows and a 228-row emitter corpus, 0 differences). It bites
+# the caller who sends a value through value_to_bytes and hands the result back
+# to encrypt: they mean a string and would get a float, with a different type
+# on the wire and a different digest.
+#
+# The assertion is on the TYPE of the return, not on its bytes, because the
+# bytes were never wrong.
+# ----------------------------------------------------------------------------
+
+{
+    my @cases = (
+        [ 'float needing 17 digits', 0.1 + 0.2,  undef,   '0.30000000000000004' ],
+        [ 'float 1.5',               1.5,        undef,   '1.5'                 ],
+        [ 'float forced type',       1.5,        'float', '1.5'                 ],
+        [ 'float 2.0',               2.0,        undef,   '2'                   ],
+        [ 'negative zero',           -0.0,       undef,   '-0'                  ],
+        [ 'float 1e20 (expanded)',   1e20,       undef,   '100000000000000000000' ],
+        [ 'float 1e-7 (expanded)',   1e-7,       undef,   '0.0000001'           ],
+        [ 'integer',                 5432,       undef,   '5432'                ],
+        [ 'string',                  '007',      undef,   '007'                 ],
+        [ 'boolean',                 JSON->true, undef,   'True'                ],
+        [ 'forced bytes',            'raw',      'bytes', 'raw'                 ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $value, $type, $expected) = @$case;
+        my $bytes = File::SOPS::Encrypted->value_to_bytes($value, $type);
+
+        is($bytes, $expected, "[$label] value_to_bytes still writes '$expected'");
+        is(File::SOPS::Encrypted->detect_type($bytes), 'str',
+            "[$label] and returns it as a STRING, not as the number it spells");
+    }
+
+    # The caller path the ticket is about, end to end: a value that went
+    # through value_to_bytes and came back must reach the wire as type:str.
+    my $key   = "\x01" x 32;
+    my $bytes = File::SOPS::Encrypted->value_to_bytes(0.1 + 0.2);
+    my $enc   = File::SOPS::Encrypted->encrypt_value(
+        value => $bytes, key => $key, aad => 'a:',
+    );
+    is($enc->type, 'str',
+        'a value round-tripped through value_to_bytes encrypts as type:str');
+    is($enc->decrypt_bytes(key => $key, aad => 'a:'), '0.30000000000000004',
+        'and its plaintext is the digits verbatim');
+
+    # And the source scalar is not retyped either -- the input side of the same
+    # rule, which is what karr #72 and #73 fixed.
+    my $float = 0.1 + 0.2;
+    File::SOPS::Encrypted->value_to_bytes($float);
+    is(File::SOPS::Encrypted->detect_type($float), 'float',
+        "and the caller's own scalar is still a float afterwards");
+}
+
 # The round trip through the public API, which is what a caller sees change:
 # a string that reads like something else stays that string.
 for my $format (qw(yaml json)) {
