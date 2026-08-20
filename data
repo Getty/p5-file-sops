@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-20T07:59:07Z
+created: 2026-08-20T07:40:42Z
+id: 97
+priority: low
+started: 2026-08-20T07:59:07Z
+status: done
+tags:
+- docs
+title: 'Changes: karr #78 float-repair entry not marked BEHAVIOUR CHANGE, unlike its
+  sibling #73'
+updated: 2026-08-20T07:59:07Z
+---
+
+Changes line 240 (the karr #78 / ADR 0011 entry, 'Fix a float leaf that carries its own string form reaching a JSON document as a QUOTED STRING') is labelled plain 'Fix', not 'BEHAVIOUR CHANGE'. It fits the same shape the file elsewhere calls a behaviour change: the document was self-consistent and verifying BEFORE the fix ('Nothing failed - the digest covers the canonical decimal either way, so the MAC held and sops -d exited 0'), and the fix moves wire bytes for such a leaf ('a 244-row corpus through both handlers moves 20 rows') from a quoted JSON string to a bare number - a real type-visible difference for any external reader of that JSON, sops included. Compare directly with the entry immediately below it, Changes line 277 (karr #73 / ADR 0009, rotate keeping the type:float label), which reasons identically ('Nothing failed, which is why it lived ... What changed was the document's own type field, silently') and IS marked BEHAVIOUR CHANGE. Either #78 should carry the same label, or the Changes convention for when 'Fix' vs 'BEHAVIOUR CHANGE' applies to a previously-verifying-but-wrong-type document needs to be made explicit so the two neighbouring entries read consistently. No code change needed - a Changes wording question only. Found during the pre-release consistency audit at HEAD b318c10.
+ERLEDIGT 2026-08-20, Commit 78bafdd. Der #78-Eintrag hat die Markierung bekommen ('BEHAVIOUR CHANGE, and a fix:'), mit Begruendung statt mechanischer Angleichung: die Wire-Bytes bewegen sich fuer ein Dokument, das vorher geschrieben UND bei exit 0 zurueckgelesen wurde (JSON quoted string -> bare number, 20 von 244 Korpuszeilen), und ein nachgelagerter JSON-Konsument sieht den Typ unter sich wechseln. Der einzige echte Unterschied zu #73: dort aendert sich auch ein WERT, hier nur eine Schreibweise -- aber diese Datei reserviert die Markierung nicht fuer verlorene Werte (#84 und #86 tragen sie fuer Ablehnungen, #61 fuer die Stringifizierung eines Rueckgabewerts). Der angewandte Test ist 'sieht ein Aufrufer etwas anderes', und beide bestehen ihn.
