@@ -123,7 +123,8 @@ Shows tasks grouped by status with WIP utilization.
 ```bash
 karr dashboard                                # scan the current directory
 karr dashboard ~/projects --depth 2           # scan elsewhere, shallower
-karr dashboard --hide-no-board                # drop the no-board summary
+karr dashboard --hide-no-board                # drop the no-board list entirely
+karr dashboard --show-no-board                # always list board-less repos by name
 karr dashboard --json                         # structured output
 ```
 
@@ -133,6 +134,11 @@ repository, a block per open task coloured by status, several repositories
 side by side per terminal row. Configuration-free — unlike `karr-foundation
 --status`, it needs no fleet config, it just finds boards and shows where
 tickets are. Read-only: never fetches, pushes, or writes.
+
+No line ever exceeds the terminal width. Where there are more board-less
+repositories than fit one line, they collapse to a count
+(`No board: 46 repos (--show-no-board to list them)`) rather than wrapping
+over half the screen and burying the summary.
 
 ### Pick next task (multi-agent)
 
