@@ -1,0 +1,46 @@
+---
+class: standard
+completed: 2026-08-20T07:21:17Z
+created: 2026-08-20T05:00:40Z
+id: 87
+priority: medium
+started: 2026-08-20T07:21:17Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+title: 'mac_only_encrypted: an unencrypted leaf still resolves differently for sops
+  than for us'
+updated: 2026-08-20T07:25:29Z
+---
+
+Found while closing karr #86 (ADR 0013), not caused by it, and deliberately left
+out of that guard.
+
+ADR 0013 refuses a YAML spelling libyaml and Go resolve differently, because the
+document then fails its own MAC. With mac_only_encrypted set, the digest covers
+encrypted values only, so an unencrypted leaf CANNOT break the MAC -- and the
+guard is therefore not installed for such a document (Format::YAML::serialize
+passes mac_covered => 0). Measured, sops 3.13.3, leaf mode_unencrypted: 0755:
+
+  mac_only_encrypted = 0   sops -d exit 51 (MAC mismatch)   -> refused since #86
+  mac_only_encrypted = 1   sops -d exit 0,  reads 493       -> written today
+
+What remains in the second row: the file says 0755, sops reads the integer 493,
+File::SOPS reads 755. Nothing fails; the two implementations simply disagree
+about a value in a document neither of them complains about. Same for 0o10,
+0x1f, 1_000, .inf, Null, TRUE and a bare 2015-01-01.
+
+Refusing it would be a behaviour change for documents that work today, which is
+why #86 stopped where the MAC stops. The open question is whether a value
+divergence with no MAC symptom is worth a refusal, a warning, or nothing at all.
+
+Note the same divergence exists on the READ path in principle, but not in
+practice: sops normalises the spelling when IT writes (a plaintext mode: 0755
+becomes 493 in its output, measured), so a sops-written document never carries
+one.
+
+Wire lane. Measured with sops 3.13.3, Crypt::Age 0.002.
+ERLEDIGT 2026-08-20, Commit b318c10, ADR 0018. WARNUNG, nicht Ablehnung und nicht nur Doku -- beides gemessen. Gemessen ueber 217 mac_only_encrypted-Dokumente mit dem Check erzwungen und seiner Ablehnung mitgeschrieben statt geworfen: 66 wuerden warnen und ALLE 66 divergieren wirklich; 0 Fehlwarnungen; 0 Dokumente hoeren auf, geschrieben zu werden. 60 zeigen es im Round-Trip (0o10 -> 8, 2015-01-01 -> 2015-01-01T00:00:00Z, 1_000 -> 1000, Null -> null); die uebrigen 6 sind die .inf/.nan-Familie, wo sops dieselbe Schreibweise zurueckschreibt -- 'sops -d --output-type json' beweist es: exit 4, 'json: unsupported value: +Inf', Go haelt dort einen Float, wir einen String. 2 Dokumente lehnt sops selbst ab (uint64, exit 25), unveraendert, und sie warnen. Gegenmessung: Korpus 225 Leaves x 2 Slots x beide Handler = 900 mac_only_encrypted-Zeilen, vorher/nachher in EINEM Prozess: 900 Dokumente byte-identisch, 0 bewegt, dieselben 28 croaks, und alle 68 gewarnten Zeilen sind YAML im unverschluesselten Slot -- keine JSON-Zeile, kein verschluesselter Slot. 0 von 900 hoeren auf zu funktionieren. Implementierung: EIN Check, zwei Urteile (croak/carp) statt einer zweiten Kopie; carp wegen @CARP_NOT an der Aufruferzeile; Meldung nennt den Key-Path, nie den Wert; mit lokalem $SIG{__WARN__} still zu bekommen. Doku ZUSAETZLICH dort, wo mac_only_encrypted beschrieben ist: File::SOPS::Metadata (=attr) und File::SOPS/encrypt, nicht nur im ADR. Neuer Test t/34, t/30s Subtest prueft die Warnung jetzt statt sie zu verlieren. Gegenprobe: mit serialize wieder auf mac_covered => 0 fallen 5 von 9 Subtests und 11 Assertions in t/34, plus t/30. Abgespalten: karr #92 (True/False-String ist fuer Go ein bool, fuer uns ein str, bei gleichen Digest-Bytes -- 4 der 217 Zeilen, vom Check korrekt akzeptiert).
+ERLEDIGT 2026-08-20, Commit b318c10, ADR 0018, t/34 neu. Eine Warnung IST machbar, und sie raet nicht: 217 mac_only_encrypted-YAML-Dokumente mit erzwungener Pruefung -- 66 wuerden warnen, alle 66 divergieren tatsaechlich, 0 Fehlalarme, 0 Dokumente hoeren auf geschrieben zu werden. Die 6, die ein YAML-Round-Trip nicht unterscheiden konnte, sind die .inf/.nan-Familie; sops -d --output-type json beweist die Divergenz dort (exit 4, 'json: unsupported value: +Inf', Go haelt also einen float wo wir einen String halten). Implementiert als EINE Pruefung mit zwei Urteilen (_foreign_resolution_token plus croak/carp) statt einer zweiten Kopie; carp, damit \@CARP_NOT die Zeile des Aufrufers meldet; die Meldung nennt den Key-Pfad und nie den Wert; $SIG{__WARN__} schaltet sie stumm. Dokumentiert DORT WO mac_only_encrypted beschrieben ist -- Metadata =attr und File::SOPS/encrypt -- plus Format::YAML/serialize. Gegenmessung: 0 von 900, alle 900 Dokumente byte-identisch, dieselben 28 croaks, und alle 68 gewarnten Zeilen sind YAML in unverschluesseltem Slot, keine einzige JSON-Zeile, kein verschluesselter Slot. Gegenprobe: serialize wieder mit mac_covered=>0 -> 5 von 9 subtests und 11 Assertionen rot, plus t/30s mac_only_encrypted-subtest. Orchestrator hat nachgeprueft: ein mode_unencrypted 0755 wird geschrieben, warnt einmal, nennt Key-Pfad und konkrete Abhilfe (493), und zeigt auf die Zeile des AUFRUFERS.
