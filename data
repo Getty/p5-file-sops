@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-08-20T07:59:40Z
+created: 2026-08-20T07:40:36Z
+id: 96
+priority: low
+started: 2026-08-20T07:59:40Z
+status: done
+tags:
+- docs
+title: Encrypted.pm:658 comment says 'Yo's strconv.FormatFloat' instead of 'Go's'
+updated: 2026-08-20T07:59:40Z
+---
+
+lib/File/SOPS/Encrypted.pm line 658, a comment in the non-finite-float refusal path (assert_representable, karr #59 era) reads "Yo's strconv.FormatFloat produces" where every other reference in the file says "Go's strconv.FormatFloat" (e.g. the value_to_bytes POD and comments elsewhere). Cosmetic typo, no code or doc-generation effect since it is an inline # comment, not POD. Found during the pre-release consistency audit at HEAD b318c10.
+ERLEDIGT 2026-08-20, Commit 576a903. 'Yo's' -> 'Go's' in Encrypted.pm:658. Stand seit dem 16.08. im Koordinationsticket #70 als kosmetischer Fund, der 'mit #62 mitlaufen' sollte -- ist er nicht, und das ist der Grund, warum solche Sammelnotizen nicht tragen: was keinem Ticket gehoert, macht niemand.
