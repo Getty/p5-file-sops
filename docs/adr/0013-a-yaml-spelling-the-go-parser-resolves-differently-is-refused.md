@@ -111,7 +111,8 @@ because sops normalised it away. Measured, a sops-written `mode_unencrypted:
   `0755` document is `sops -d` exit 0 with the flag set. What remains is that
   sops reads `493` from it where this library reads `755` — a real divergence
   about a value, not about the MAC, and refusing it would refuse a document that
-  works today. Filed as karr #87.
+  works today. Filed as karr #87, and **since ADR 0018 the same check runs there
+  and warns** — still refusing nothing, still writing the same bytes.
 
 ## Decision
 

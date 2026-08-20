@@ -280,6 +280,18 @@ same document.
 C<undef> or false is emitted as no key at all in the C<sops> section, which is
 what the Go implementation writes.
 
+B<What it costs, in YAML:> a leaf the MAC no longer covers is one no reader
+verifies, and this distribution and sops do not resolve every YAML spelling the
+same way. C<mode_unencrypted: 0755> is the realistic case -- sops reads the
+integer B<493>, this module reads 755, and with C<mac_only_encrypted> set
+neither the MAC nor C<sops -d> reports anything (measured, sops 3.13.3, exit 0).
+The same holds for C<0o10>, C<0x1f>, C<1_000>, C<.inf>, C<Null>, C<TRUE> and a
+date that is not exactly RFC3339. Without this option such a leaf is B<refused>
+at encrypt time, because the document would fail its own MAC; with it set the
+document is written and the divergence is B<warned> about instead, naming the
+leaf's key path. See L<File::SOPS::Format::YAML/serialize> for the full rule and
+docs/adr/0018 for the measurement.
+
 =cut
 
 has extra => (is => 'rw', default => sub { {} });

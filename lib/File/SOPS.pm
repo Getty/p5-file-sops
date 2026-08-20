@@ -544,6 +544,16 @@ which rule to verify under. See
 L<File::SOPS::Metadata/mac_only_encrypted>. Off by default, which is what sops
 defaults to as well.
 
+Turning it on has a consequence in YAML that is easy to miss, so it is warned
+about rather than left to be discovered: an B<unencrypted> leaf is then covered
+by no MAC at all, and this distribution and sops do not read every YAML spelling
+the same way. C<mode_unencrypted: 0755> is the integer B<493> to sops and 755
+here, and with C<mac_only_encrypted> set nothing fails -- C<sops -d> exits 0 and
+hands back a different number. Encrypting such a document C<carp>s once per
+such leaf, naming its key path and never its value; without the option the same
+leaf is refused outright, since the document would fail its own MAC. See
+L<File::SOPS::Format::YAML/serialize>.
+
 =head3 Choosing what gets encrypted
 
 C<unencrypted_suffix>, C<encrypted_suffix>, C<unencrypted_regex> and

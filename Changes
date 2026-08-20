@@ -1,6 +1,29 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document with
+    mac_only_encrypted set now WARNS about an unencrypted leaf whose spelling
+    sops resolves differently, where it used to say nothing. With that option
+    the MAC covers encrypted values only, so such a leaf cannot make the
+    document fail its own verification - which is why karr #86's guard was not
+    installed there, and that stays: nothing is refused and no document
+    changes. What was left was a divergence about a VALUE with no symptom at
+    all: a `mode_unencrypted: 0755` is the integer 493 to sops and 755 here,
+    sops -d exits 0, and neither implementation complains. Measured over 217
+    such documents: 66 warn and every one of them really does diverge
+    (0o10 -> 8, 2015-01-01 -> 2015-01-01T00:00:00Z, 1_000 -> 1000, Null ->
+    null, and the .inf family, where sops writes the same spelling back but its
+    own JSON dump proves it holds a float: exit 4, "json: unsupported value:
+    +Inf"). 0 warn about a leaf the two agree on, and 0 documents stop being
+    written. Counter-measurement over 225 leaves x 2 slots x both handlers =
+    900 rows: 900 documents byte-identical before and after, 0 moved, the same
+    28 croaks, and all 68 warned rows are YAML in an unencrypted slot - not one
+    JSON row and not one encrypted slot. The warning names the leaf's key path
+    and never its value; carp, so it reports the caller's line, and a local
+    $SIG{__WARN__} silences it. It is one check with two verdicts rather than a
+    second copy of the check. Documented where mac_only_encrypted is described,
+    in File::SOPS::Metadata and in File::SOPS/encrypt, rather than in an ADR
+    nobody looks for. See karr #87 and docs/adr/0018.
   - Internal, and no document moves: the YAML foreign-resolution guard - the
     karr #86 rule that refuses a spelling Go's parser resolves differently -
     now takes its verdict from the TOKEN this emitter writes. It used to take

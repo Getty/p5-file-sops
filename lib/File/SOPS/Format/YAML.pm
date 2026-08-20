@@ -2,7 +2,7 @@ package File::SOPS::Format::YAML;
 # ABSTRACT: YAML format handler for SOPS
 our $VERSION = '0.003';
 use Moo;
-use Carp qw(croak);
+use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar);
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
@@ -200,12 +200,16 @@ sub serialize {
     #
     # mac_covered turns on the foreign-resolution guard (karr #86, ADR 0013):
     # this document carries a MAC, and sops recomputes that MAC from the values
-    # ITS parser resolves out of these bytes. Not set for mac_only_encrypted,
-    # where the digest covers encrypted values only -- an unencrypted leaf
-    # cannot make such a document disagree with its own MAC, measured, and
-    # refusing it would refuse a document that works today.
+    # ITS parser resolves out of these bytes.
+    #
+    # For mac_only_encrypted the digest covers encrypted values only, so an
+    # unencrypted leaf cannot make such a document disagree with its own MAC and
+    # refusing it would refuse a document that works today -- measured, sops -d
+    # exit 0. It still reads 493 out of a `0755` this module reads as 755, so
+    # the same check runs there and WARNS instead (karr #87, ADR 0018).
     return _quote_sops_timestamp($class->emit(\%output,
-        mac_covered => $metadata->mac_only_encrypted ? 0 : 1));
+        $metadata->mac_only_encrypted ? (warn_foreign_resolution => 1)
+                                      : (mac_covered            => 1)));
 }
 
 # YAML::XS emits plain (unquoted) scalars for anything its resolver does not
@@ -286,11 +290,24 @@ the same digest bytes from each of them.
 
 The rule does not apply to an B<encrypted> slot (an C<ENC[...]> string carries
 any spelling verbatim), to L</emit> on its own (a plaintext document has no MAC
-for a reader to disagree with), to the C<sops> metadata section (the digest does
-not cover it), or to a C<mac_only_encrypted> document (there the digest does not
-cover an unencrypted leaf either). See
+for a reader to disagree with), or to the C<sops> metadata section (the digest
+does not cover it). See
 L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
 and karr #86.
+
+B<In a C<mac_only_encrypted> document the same leaf is warned about rather than
+refused.> There the digest covers encrypted values only, so an unencrypted leaf
+cannot make the document disagree with its own MAC -- measured, the same
+C<mode_unencrypted: 0755> is C<sops -d> exit 0 with the flag set. What remains
+is that sops reads B<493> out of it where this module reads 755, in a file
+neither of them complains about, so the check runs and C<carp>s instead of
+refusing: the document is written exactly as before. The warning names the
+leaf's key path and never the value. Silence it with a local C<$SIG{__WARN__}>
+if the divergence is known and accepted. Measured over 217 such documents: 66
+warn, all 66 really do diverge, none is refused, and 0 warn about a leaf the two
+implementations agree on. See
+L<docs/adr/0018|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0018-a-mac-only-encrypted-document-warns-where-it-cannot-refuse.md>
+and karr #87.
 
 =cut
 
@@ -321,11 +338,17 @@ sub emit {
         carrier    => \&_float_carrier,
         reject     => \&_reject_unwritable_leaf,
 
-        # Only a document that carries a MAC has a reader to disagree with it.
-        # serialize sets this; the plaintext emitters (decrypt_file, edit) do
-        # not, and must not -- refusing there would refuse to WRITE OUT a
-        # document this module reads correctly. See docs/adr/0013.
-        ($args{mac_covered} ? (reject_scalar => \&_reject_foreign_resolution) : ()),
+        # Only a document that a reader re-derives values from has anything to
+        # disagree with. serialize sets one of these; the plaintext emitters
+        # (decrypt_file, edit) set neither, and must not -- refusing there would
+        # refuse to WRITE OUT a document this module reads correctly, and
+        # warning would warn about a file with no MAC and no second reader. The
+        # two differ in the verdict only: croak where the MAC covers the leaf,
+        # carp where mac_only_encrypted means it does not. See docs/adr/0013 and
+        # docs/adr/0018.
+        ($args{mac_covered}              ? (reject_scalar => \&_reject_foreign_resolution)
+       : $args{warn_foreign_resolution}  ? (reject_scalar => \&_warn_foreign_resolution)
+       :                                   ()),
     ));
 }
 
@@ -707,7 +730,14 @@ sub _go_might_look_at {
     return File::SOPS::Encrypted->detect_type($leaf) eq 'bool' ? 1 : 0;
 }
 
-# A leaf whose SPELLING this module cannot prove Go resolves the way it does.
+# The token this emitter writes for a leaf whose SPELLING this module cannot
+# prove Go resolves the way it does -- and undef when there is nothing to say.
+#
+# ONE check, two verdicts. What a document does with the answer depends on
+# whether its MAC covers the leaf (refuse: the file would fail its own MAC) or
+# not (warn: the two implementations simply read different values). A second
+# copy of the check for the second verdict is the defect class this whole layer
+# keeps producing, so there is one. See docs/adr/0018.
 #
 # Runs on the encrypt path only, and never over the `sops` branch: the digest
 # does not cover the metadata, and the one leaf there that Go resolves
@@ -717,11 +747,11 @@ sub _go_might_look_at {
 # Encrypted slots cannot reach this at all: _encrypt_tree has replaced every
 # encrypted leaf with an ENC[...] string long before the emitter runs, and that
 # string starts with `E`, which no resolver looks twice at.
-sub _reject_foreign_resolution {
-    my ($leaf, $where, $path, $text) = @_;
+sub _foreign_resolution_token {
+    my ($leaf, $path, $text) = @_;
 
-    return if @$path && $path->[0] eq 'sops';
-    return unless _go_might_look_at($leaf);
+    return undef if @$path && $path->[0] eq 'sops';
+    return undef unless _go_might_look_at($leaf);
 
     # WHAT THE EMITTER WRITES is the only thing Go gets to resolve, so it is the
     # only thing asked about. The leaf's stringification decided this until
@@ -732,14 +762,25 @@ sub _reject_foreign_resolution {
     # quoted or multi-line scalar is a string to every YAML reader, and undef
     # here says so. See docs/adr/0017.
     my $token = _emitted_plain_scalar($leaf);
-    return unless defined $token;
+    return undef unless defined $token;
 
     # THE one conversion -- the text the MAC digest covers. The walk hands it
     # over where it already derived one (and for a carrier that is the ORIGINAL
     # value's text, which is what the digest has); otherwise it comes from the
     # same method on the same scalar. Never a second rendering derived here.
     $text //= File::SOPS::Encrypted->value_to_bytes($leaf);
-    return if _go_agrees($token, $text);
+    return undef if _go_agrees($token, $text);
+
+    return $token;
+}
+
+# The document carries a MAC that covers this leaf, so the disagreement is with
+# the file's own verification and there is nothing to write.
+sub _reject_foreign_resolution {
+    my ($leaf, $where, $path, $text) = @_;
+
+    my $token = _foreign_resolution_token($leaf, $path, $text);
+    return unless defined $token;
 
     croak "$where: cannot write this leaf to a SOPS YAML document: its spelling "
         . "is " . _foreign_resolution_reason($token) . ". The MAC digest covers "
@@ -751,6 +792,32 @@ sub _reject_foreign_resolution {
         . "that decimal is what to pass here. To keep the spelling as text, "
         . "encrypt the leaf -- an ENC[...] string carries it verbatim and is "
         . "unaffected by this rule";
+}
+
+# mac_only_encrypted: the digest covers encrypted values only, so this leaf
+# cannot make the document disagree with its own MAC and refusing it would
+# refuse a file that works. What is left is that the two implementations read
+# different VALUES out of a document neither of them complains about -- measured
+# for `mode_unencrypted: 0755`, sops -d exit 0 and it reads 493 where this
+# module reads 755. Nothing tells the caller that but this line. See karr #87
+# and docs/adr/0018.
+#
+# carp rather than warn, for the same reason the refusals croak: the line worth
+# printing is the caller's, and @CARP_NOT above already walks out of the emitter
+# and the walk. The value never appears here -- a warning goes to logs.
+sub _warn_foreign_resolution {
+    my ($leaf, $where, $path, $text) = @_;
+
+    my $token = _foreign_resolution_token($leaf, $path, $text);
+    return unless defined $token;
+
+    carp "$where: this leaf's spelling is " . _foreign_resolution_reason($token)
+        . ", so sops resolves a different value from the one this module reads "
+        . "(measured: a `mode: 0755` is 493 to sops and 755 here). With "
+        . "mac_only_encrypted set the MAC does not cover this leaf, so nothing "
+        . "will fail -- the document is written and sops reads it. Pass the "
+        . "value sops itself would write (the decimal for `0755` is 493), or "
+        . "encrypt the leaf, to make the two agree";
 }
 
 ###############################################################################
@@ -840,8 +907,11 @@ YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included. The
 guard L</serialize> installs against those is deliberately not here: a plaintext
 document carries no MAC for a reader to disagree with, and refusing them would
 refuse to write out documents this module reads correctly. L</serialize> turns
-it on by passing C<< mac_covered => 1 >>, which is the only argument this method
-takes beyond the tree.
+it on with one of the two arguments this method takes beyond the tree --
+C<< mac_covered => 1 >> to refuse such a leaf, or
+C<< warn_foreign_resolution => 1 >> to warn about it, which is what a
+C<mac_only_encrypted> document gets. They install the same check and differ only
+in the verdict.
 
 L</serialize> is this method plus the metadata section, so both go through the
 same emitter options rather than two copies of them. Those options are not

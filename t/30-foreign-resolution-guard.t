@@ -390,18 +390,23 @@ subtest 'the plaintext emitters still write every spelling' => sub {
         'decrypt_file writes a decrypted 0755 back out rather than refusing');
 };
 
-subtest 'mac_only_encrypted is not guarded, and still verifies' => sub {
+subtest 'mac_only_encrypted is not refused, and still verifies' => sub {
     # There the digest covers encrypted values only, so an unencrypted leaf
     # cannot make the document disagree with its own MAC. Measured: exit 0 with
     # the spelling in the file. sops reads 493 where we read 755 -- a divergence
-    # about a value, not about the MAC, and filed as karr #87 rather than
-    # refused here, because refusing it would refuse a document that works.
+    # about a value, not about the MAC, so it is WARNED about rather than
+    # refused (karr #87, docs/adr/0018): refusing it would refuse a document
+    # that works. The warning itself is t/34's subject; what matters here is
+    # that this document is still written and still read by sops.
+    my @warnings;
     my $document = eval {
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
         File::SOPS->encrypt(data => { mode_unencrypted => yaml_leaf('0755'), s => 'x' },
             recipients => [$public], format => 'yaml', mac_only_encrypted => 1);
     };
     is($@, '', 'the document is written') or diag("died: $@");
     like($document, qr/^mode_unencrypted: 0755$/m, 'with the spelling intact');
+    is(scalar @warnings, 1, 'and one warning about it');
 
     my ($exit, $out) = sops_decrypt($document, 'yaml');
     is($exit, 0, 'and sops -d accepts it') or diag("sops: $out");
