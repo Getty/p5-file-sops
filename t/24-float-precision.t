@@ -1548,4 +1548,136 @@ subtest 'a float that was merely printed never reaches the carrier (karr #78)' =
     }
 };
 
+###############################################################################
+# 15. karr #88 / ADR 0014: a NEGATIVE ZERO out of a YAML parse, written as
+#     JSON. Section 9 above carries the same value in YAML and section 3 in
+#     JSON from a bare NV; this is the one cell of the four that died.
+#
+#     YAML::XS keeps the source text of every scalar it parses, so the leaf is
+#     a float with a public PV of `-0.0`; Cpanel::JSON::XS quotes such a
+#     scalar, so _float_roundtrips answers no (ADR 0011) and the leaf goes to
+#     the carrier -- where Math::BigFloat->new('-0') stringifies as `0`,
+#     because it has no signed zero, and the carrier's own assertion fired.
+#     Its message named a global accuracy/precision setting that was never in
+#     play. Measured: of 2018 canonical texts from value_to_bytes, `-0` is the
+#     only one Math::BigFloat does not reproduce.
+#
+#     The route in is ordinary caller code: read a YAML file, write JSON.
+#
+#     `-0.0` is also the only spelling that works, exactly as in YAML.
+#     Measured, sops 3.13.3, JSON leaf whose digest is `-0`:
+#
+#       -0.0    sops -d exit 0, reads back -0
+#       -0      sops -d exit 51 -- Go reads a JSON -0 as an INTEGER, digest 0
+#
+#     The second subtest is the one that would have caught the first version of
+#     this fix: every ARITHMETIC way of stripping the PV (`0 + $v`, `$v * 1`,
+#     `$v * 1.0`) loses the sign, because Perl's arithmetic ops set the private
+#     IOK on the caller's scalar IN PLACE and the next multiplication then
+#     takes the integer path. The first document in a process came out right
+#     and every later one wrong. pack 'd' reads the NV and nothing else.
+###############################################################################
+
+subtest '[json] a -0.0 out of a YAML parse is written, not refused (karr #88)' => sub {
+    for my $spelling ('-0.0', '-0.00', '-0.000') {
+        my $leaf = Load("v: $spelling\n")->{v};
+
+        my $encrypted = eval {
+            File::SOPS->encrypt(
+                data       => { negzero_unencrypted => $leaf, secret => 'shh' },
+                recipients => [$public],
+                format     => 'json',
+            );
+        };
+        is($@, '', "[$spelling] the JSON emitter writes it instead of dying")
+            or diag("died: $@");
+        next unless defined $encrypted;
+
+        like($encrypted, qr/"negzero_unencrypted" : -0\.0/,
+            "[$spelling] the written bytes are -0.0, the same a bare NV produces");
+        unlike($encrypted, qr/"negzero_unencrypted" : "/,
+            "[$spelling] and specifically not a quoted string");
+        unlike($encrypted, qr/"negzero_unencrypted" : -0,/,
+            "[$spelling] nor the canonical -0, which Go reads as an integer");
+
+        my $self = eval {
+            File::SOPS->decrypt(
+                encrypted => $encrypted, identities => [$secret], format => 'json',
+            );
+        };
+        is($@, '', "[$spelling] self-MAC holds") or diag("died: $@");
+        ok(signbit($self->{negzero_unencrypted}),
+            "[$spelling] and the value decrypts back negative") if $self;
+
+        my $file = scratch_file('json');
+        write_file($file, $encrypted);
+        my $out = `$sops_bin -d $file 2>&1`;
+        is($? >> 8, 0, "[$spelling] sops -d accepts it") or diag("sops output: $out");
+        like($out, qr/"negzero_unencrypted"\s*:\s*-0\b/,
+            "[$spelling] and sops reads it back as the negative zero") if $? == 0;
+    }
+};
+
+subtest '[json] the -0 carrier is stable across repeated writes (karr #88)' => sub {
+    # The trap this pins: an arithmetic PV strip sets the private IOK on the
+    # LEAF, so the SECOND emit of the same tree in the same process returned a
+    # plain 0 and wrote a document that failed its own MAC. Measured with
+    # `$v * 1`: -0, then 0, then 0.
+    my $leaf = Load("v: -0.0\n")->{v};
+    my $tree = { negzero_unencrypted => $leaf, secret => 'shh' };
+
+    my @rounds = map {
+        my $out = eval { File::SOPS::Format::JSON->emit($tree) };
+        is($@, '', "round $_ emits") or diag("died: $@");
+        $out;
+    } 1 .. 3;
+
+    is($rounds[1], $rounds[0], 'the second write is byte-identical to the first');
+    is($rounds[2], $rounds[0], 'and so is the third');
+    like($rounds[2], qr/"negzero_unencrypted" : -0\.0/,
+        'all three carry the sign');
+
+    # The leaf itself must not have been retyped by the walk (ADR 0002).
+    is(File::SOPS::Encrypted->detect_type($leaf), 'float',
+        'and the caller\'s scalar is still a float afterwards');
+};
+
+subtest '[json] the -0 branch does not touch the neighbouring float cases' => sub {
+    # The counter-measurement, as assertions: everything the carrier already
+    # wrote correctly has to come out byte-identical. Of a 228-row emitter
+    # corpus, 6 rows moved and every one of them was a croak.
+    my $emitted = File::SOPS::Format::JSON->emit({
+        a_bare_nv_neg_zero => -0.0,                      # never reaches the carrier
+        b_pos_zero         => 0.0,                       # never reaches it either
+        c_yaml_pos_zero    => Load("v: 0.0\n")->{v},     # DOES: BigFloat writes 0
+        d_17_digits        => $full_precision_value,     # the ADR 0006 case
+        e_two_point_zero   => 2.0,
+        f_string_neg_zero  => '-0.0',                    # a STRING, not a float
+    });
+
+    like($emitted, qr/"a_bare_nv_neg_zero" : -0\.0/, 'a bare NV -0.0 is unchanged');
+    like($emitted, qr/"b_pos_zero" : 0\.0/,
+        'a bare NV positive zero still writes Cpanel\'s own 0.0 (ADR 0005)');
+    like($emitted, qr/"c_yaml_pos_zero" : 0(?!\.)/,
+        'while one out of a YAML parse still goes through the carrier and writes 0');
+    like($emitted, qr/"d_17_digits" : \Q$full_precision_text\E/,
+        'the 17-digit carrier is untouched');
+    like($emitted, qr/"e_two_point_zero" : 2\.0/,     'and an integral float, 2.0');
+    like($emitted, qr/"f_string_neg_zero" : "-0\.0"/,
+        "the STRING '-0.0' stays a quoted string (ADR 0002: the type is the SV's)");
+
+    # And the same leaf in an ENCRYPTED slot never reaches the carrier at all.
+    my $encrypted = File::SOPS->encrypt(
+        data       => { negzero => Load("v: -0.0\n")->{v}, secret => 'shh' },
+        recipients => [$public],
+        format     => 'json',
+    );
+    my $file = scratch_file('json');
+    write_file($file, $encrypted);
+    my $out = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops -d accepts an encrypted -0.0 from a YAML parse')
+        or diag("sops output: $out");
+    like($out, qr/"negzero"\s*:\s*-0\b/, 'and reads the plaintext back as -0');
+};
+
 done_testing;

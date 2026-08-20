@@ -1,6 +1,25 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix: a negative zero that came out of a YAML parse and is written as JSON
+    died in the float carrier with a message that named the wrong cause -
+    "Math::BigFloat did not render a float leaf at full precision. Check for a
+    global Math::BigFloat->accuracy or ->precision setting", with no such
+    setting in play. Math::BigFloat has no signed zero, so new('-0')
+    stringifies as 0 and the assertion fired on a sign it cannot carry. Read a
+    YAML file, write it as JSON is ordinary caller code, and it was the one
+    cell of four that failed: the same value written from a bare Perl NV, and
+    the same value written as YAML, have always worked. A negative zero is now
+    carried by the double itself, which Cpanel::JSON::XS writes as -0.0 -
+    byte-identical to what a bare NV of that value already produced, and the
+    only spelling that works: measured against sops 3.13.3, a JSON leaf of
+    -0.0 is exit 0 and read back as -0, while the canonical -0 is exit 51,
+    because Go reads a JSON -0 as an INTEGER and digests 0. The same split
+    karr #62 measured in YAML. Nothing that worked changes: of a 228-row
+    emitter corpus, 6 rows move and every one of them was a croak; no document
+    changes bytes in either format. Of 2018 canonical texts from
+    value_to_bytes, -0 is the only one Math::BigFloat does not reproduce, so
+    the branch is that narrow. See karr #88 and docs/adr/0014.
   - BEHAVIOUR CHANGE: a YAML leaf whose SPELLING Go's parser resolves
     differently from libyaml is now refused when a document that carries a MAC
     is written. sops parses with gopkg.in/yaml.v3, whose resolver strips `_`

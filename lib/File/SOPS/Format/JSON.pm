@@ -343,19 +343,64 @@ sub _float_roundtrips {
 # deciding our wire bytes again, which is the whole subject of ADR 0005. A
 # subclass would be immune to that, but allow_bignum matches the class name
 # exactly and refuses one.
+#
+# The ONE canonical float text it cannot carry is a NEGATIVE ZERO: Math::BigFloat
+# has no signed zero, so new('-0') stringifies as `0` and the assertion below
+# fired -- on a sign, with a message about a precision setting that was never in
+# play (karr #88). Measured: of 2018 canonical texts from value_to_bytes, `-0` is
+# the only one it does not reproduce.
+#
+# So a negative zero is carried by the DOUBLE ITSELF, stripped of the string half
+# that sent it here. Cpanel writes a bare NV -0.0 as `-0.0` (ADR 0005 names that
+# as the reason this handler binds Cpanel and not JSON::XS), and that text parses
+# back to the same double -- which is what ADR 0006 asks of an emitted decimal,
+# not that it be spelled canonically. Measured against sops 3.13.3, an
+# unencrypted JSON leaf whose digest is `-0`:
+#
+#   -0.0     sops -d exit 0, reads back -0     <- this, and what a bare NV writes
+#   -0       sops -d exit 51 (MAC mismatch)    <- Go reads a JSON -0 as an INTEGER
+#
+# The same split the YAML carrier measured in karr #62, in the other format: `-0`
+# is the canonical text and the one spelling neither implementation reads back.
+#
+# The copy goes through pack/unpack, and NO arithmetic route works. Measured on
+# a leaf out of a YAML parse, three rounds each:
+#
+#   0 + $v      -0 once, then 0     $v * 1     -0 once, then 0
+#   $v * 1.0    0 every round       $v - 0.0   0 every round
+#   unpack d pack d                 -0 every round
+#
+# Two mechanisms, and the second is the dangerous one. IEEE-754 makes
+# -0.0 + 0.0 a POSITIVE zero, so adding zero drops the sign outright. And
+# Perl's arithmetic ops call SvIV_please on their operands, which sets the
+# PRIVATE IOK on the CALLER'S scalar in place -- so the next multiplication of
+# the same leaf takes the integer path and returns a plain 0. That is karr #72
+# and #73 again, one frame further in: the first document written would have
+# been right and every later one wrong, in the same process, from the same
+# tree. pack 'd' reads the NV and nothing else.
+#
+# The strip is not cosmetic: with the PV still on it, Cpanel quotes the leaf and
+# the document holds a string where the caller passed a number.
 sub _float_carrier {
     my ($value, $text) = @_;
 
-    my $big = Math::BigFloat->new($text, undef, undef);
+    my $carrier = $text eq '-0' ? unpack('d', pack('d', $value))
+                                : Math::BigFloat->new($text, undef, undef);
 
-    # The bypass above is measured, but the failure it prevents is silent and
-    # produces a document that fails its own MAC, so it is asserted rather than
-    # trusted. No value in the message: it is the plaintext.
-    croak "Math::BigFloat did not render a float leaf at full precision. "
-        . "Check for a global Math::BigFloat->accuracy or ->precision setting."
-        unless "$big" eq $text;
+    # Both bypasses above are measured, but the failure they prevent is silent
+    # and produces a document that fails its own MAC, so it is asserted rather
+    # than trusted -- through value_to_bytes, so the assertion means what the
+    # digest means. No value in the message: it is the plaintext.
+    croak "the JSON float carrier did not reproduce the text the MAC digest "
+        . "covers, so nothing was written. Everything but a negative zero is "
+        . "carried by a Math::BigFloat, where the cause is a global "
+        . "Math::BigFloat->accuracy or ->precision setting that survived the "
+        . "explicit undef, undef; a negative zero is carried by the double "
+        . "itself, where it is a build whose arithmetic drops the sign of a "
+        . "signed zero"
+        unless File::SOPS::Encrypted->value_to_bytes($carrier) eq $text;
 
-    return $big;
+    return $carrier;
 }
 
 =method emit
