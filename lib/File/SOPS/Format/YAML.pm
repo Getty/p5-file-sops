@@ -682,6 +682,31 @@ sub _foreign_resolution_reason {
     return 'a spelling the two resolvers do not agree on';
 }
 
+# Could Go's resolver look at what the emitter will write for this leaf? A gate,
+# never an answer: it decides whether the emit below is worth paying for, and
+# the verdict is taken from the token that emit returns.
+#
+# The stringification stands in for the token here, and it may: for a leaf that
+# is not a boolean the two are the same string, or the token is quoted. Probed
+# over 2119 non-bool leaves -- every printable ASCII character alone and in
+# either position, 600 integers, 900 floats over 30 orders of magnitude, the
+# int64 and subnormal edges, dualvars, embedded newlines, leading whitespace,
+# non-ASCII -- 2 tokens start with a different byte, and both are the UTF-8
+# encoding of a non-ASCII first character. Neither can matter: every UTF-8 byte
+# is >= \x80 and every byte in $GO_LOOKS_AT is ASCII.
+#
+# A BOOLEAN is the exception and gets the second clause. Its stringification is
+# `1` or the empty string while both emitters write a bare `true`/`false`
+# (docs/adr/0016), so the empty one slipped past this gate entirely. detect_type
+# is the same ladder the digest goes through and the same predicate the emitters
+# use -- not a second answer to the question of what a boolean is.
+sub _go_might_look_at {
+    my ($leaf) = @_;
+
+    return 1 if "$leaf" =~ $GO_LOOKS_AT;
+    return File::SOPS::Encrypted->detect_type($leaf) eq 'bool' ? 1 : 0;
+}
+
 # A leaf whose SPELLING this module cannot prove Go resolves the way it does.
 #
 # Runs on the encrypt path only, and never over the `sops` branch: the digest
@@ -696,18 +721,24 @@ sub _reject_foreign_resolution {
     my ($leaf, $where, $path, $text) = @_;
 
     return if @$path && $path->[0] eq 'sops';
-    return unless "$leaf" =~ $GO_LOOKS_AT;
+    return unless _go_might_look_at($leaf);
+
+    # WHAT THE EMITTER WRITES is the only thing Go gets to resolve, so it is the
+    # only thing asked about. The leaf's stringification decided this until
+    # karr #91 -- it is the same string for every leaf class but a boolean, and
+    # for a boolean it was wrong in both directions: karr #90 reached a document
+    # through exactly that step, because `1` resolved to the `1` the digest then
+    # covered and the guard returned before asking the emitter anything. A
+    # quoted or multi-line scalar is a string to every YAML reader, and undef
+    # here says so. See docs/adr/0017.
+    my $token = _emitted_plain_scalar($leaf);
+    return unless defined $token;
 
     # THE one conversion -- the text the MAC digest covers. The walk hands it
     # over where it already derived one (and for a carrier that is the ORIGINAL
     # value's text, which is what the digest has); otherwise it comes from the
     # same method on the same scalar. Never a second rendering derived here.
     $text //= File::SOPS::Encrypted->value_to_bytes($leaf);
-    return if _go_agrees("$leaf", $text);
-
-    # It disagrees if written bare. Ask the emitter whether it is written bare.
-    my $token = _emitted_plain_scalar($leaf);
-    return unless defined $token;
     return if _go_agrees($token, $text);
 
     croak "$where: cannot write this leaf to a SOPS YAML document: its spelling "

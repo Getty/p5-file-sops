@@ -183,6 +183,15 @@ decide, it says so and the leaf is refused: `9223372036854775808` and
 refuses to write at all (`Error walking tree: Cannot walk value, unknown type:
 uint64`, exit 23) — measured, so refusing is not a guess.
 
+**Amended by karr #91 — steps 2 and 4 above have become one step, and it is the
+one that asks the emitter.** The leaf's stringification was a proxy for the
+token in both the gate and the verdict, and it is the same string for every leaf
+class but a boolean, whose token is `true`/`false` while it stringifies to `1`
+or to nothing. karr #90 came through the verdict half by exactly that route. The
+gate survives — the cost measurement above is why — with one clause for the leaf
+class whose token is not its stringification; the verdict is now taken from the
+token alone. Measured: 0 of 900 corpus rows move. See ADR 0017.
+
 **Amended by karr #89 — the model shared a conversion with the code it was
 checking, and lost the same sign.** `_go_float` derived its float with
 `value_to_bytes($p * 1.0)`, the arithmetic copy ADR 0014 measured and rejected

@@ -1,6 +1,24 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Internal, and no document moves: the YAML foreign-resolution guard - the
+    karr #86 rule that refuses a spelling Go's parser resolves differently -
+    now takes its verdict from the TOKEN this emitter writes. It used to take
+    it from the leaf's stringification and to ask the emitter only once that
+    stringification had already disagreed. The two are the same string for
+    every leaf class but one: a boolean SV stringifies to `1` or to the empty
+    string while both emitters write a bare true/false, and karr #90 reached a
+    document through exactly that step - back then the digest text was `1`,
+    _go_agrees("1", "1") said yes, and the guard returned before asking the
+    emitter anything while the file carried `true`. The false half did not even
+    reach that step, because an empty string is not a spelling Go's resolver
+    looks at. Measured over 225 leaves x 2 slots x both handlers = 900 rows,
+    before and after in one process: 900 identical outcomes and 0 moved, 804
+    written and 96 refused on both sides, sops -d exit 0 on all 804. The price
+    is one emitter probe per leaf Go's resolver looks at - +2.4ms on a 400-leaf
+    document - while a string it ignores still stops at the gate for 0.8ms per
+    1000, and a boolean got cheaper (24.9ms -> 17.5ms per 1000). No message
+    text and no argument changes. See karr #91 and docs/adr/0017.
   - BEHAVIOUR CHANGE, and a fix: PERL'S OWN BOOLEAN was written as an integer.
     Perl has no boolean type, but since 5.36 it has a boolean SV - `!!1`,
     `!!0`, `$x > 3`, `'a' eq 'a'`, `defined $x`, `builtin::true` and every
