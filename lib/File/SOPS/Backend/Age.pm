@@ -7,6 +7,12 @@ use Crypt::Age;
 use MIME::Base64 qw(encode_base64 decode_base64);
 use namespace::clean;
 
+# Same reason as in the two format handlers (karr #71): every frame between a
+# caller and this backend is File::SOPS's own, so "could not decrypt the data
+# key" named a line in SOPS.pm rather than the line the caller wrote decrypt()
+# on. The house rule is that an error reports the caller's line, not ours.
+our @CARP_NOT = qw( File::SOPS );
+
 =head1 SYNOPSIS
 
     use File::SOPS::Backend::Age;

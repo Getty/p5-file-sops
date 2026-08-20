@@ -10,6 +10,8 @@ use File::SOPS::Metadata;
 use File::SOPS::Format::YAML;
 use JSON::MaybeXS;
 use Crypt::Age;
+use Scalar::Util qw(dualvar);
+use YAML::XS qw(Load);
 
 # ----------------------------------------------------------------------------
 # Failures have to say WHERE and WHY (karr #19).
@@ -298,6 +300,90 @@ my $KEY = "\3" x 32;
         $@;
     };
     like($err, qr/caf\x{e9}:\x{f6}ffentlich/, 'a non-ASCII path is reported as characters');
+}
+
+# ----------------------------------------------------------------------------
+# 9. A refusal is reported at the CALLER's line, not at ours (karr #71).
+#
+# croak names the caller of the frame it stands in, and between a caller and
+# these guards every frame is this distribution's own: File::SOPS::encrypt
+# calls emit(), emit() calls Encrypted->canonical_float_tree, and the walk
+# calls the handler's guards BACK. So the message ended "at
+# lib/File/SOPS/Encrypted.pm line NNN" -- the walk's own recursion -- which is
+# exactly what the house rule "croak, never die; errors report the caller's
+# line, not ours" exists to prevent. It is fixed with @CARP_NOT in the two
+# handlers and in the age backend, and Carp skips a frame when EITHER side
+# trusts the other, so the same list also covers the guard that croaks from
+# inside the walk.
+#
+# Asserted here because nothing else can see it: the frames are invisible to
+# every other test in this suite, and a later refactor that moves a guard into
+# a new frame would put the library's own line back with no test going red.
+#
+# Measured over 32 refusal paths: 9 locations move, all of them out of lib/,
+# and NOT ONE message text changes -- the path prefixes karr #68 added are
+# untouched, which the last subtest asserts alongside the location.
+# ----------------------------------------------------------------------------
+
+{
+    my $file = __FILE__;
+    my $dualvar = dualvar(5, 'five');
+    my $blessed = bless {}, 'Foo';
+    my $sealed  = File::SOPS->encrypt(
+        data => { a => 1 }, recipients => [$public], format => 'yaml',
+    );
+
+    my @cases;
+    my ($err, $line);
+
+    eval { $line = __LINE__; File::SOPS::Format::YAML->emit({ a => $blessed }) };
+    push @cases, [ 'YAML emit, blessed leaf', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS::Format::JSON->emit({ a => $blessed }) };
+    push @cases, [ 'JSON emit, blessed leaf', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS::Format::JSON->emit({ a => \1 }) };
+    push @cases, [ 'JSON emit, unblessed ref', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS::Format::YAML->emit({ a => $dualvar }) };
+    push @cases, [ 'YAML emit, int-half guard (croaks inside the walk)', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS::Format::JSON->emit({ a => $dualvar }) };
+    push @cases, [ 'JSON emit, int-half guard (croaks inside the walk)', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS->encrypt(data => { a_unencrypted => $blessed }, recipients => [$public], format => 'yaml') };
+    push @cases, [ 'encrypt(), blessed leaf', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS->encrypt(data => Load("a_unencrypted: 0x1f\n"), recipients => [$public], format => 'yaml') };
+    push @cases, [ 'encrypt(), foreign-resolution guard', $@, $line ];
+
+    eval { $line = __LINE__; File::SOPS->decrypt(encrypted => $sealed, identities => []) };
+    push @cases, [ 'decrypt(), no usable identity (age backend)', $@, $line ];
+
+    for my $case (@cases) {
+        my ($label, $error, $at) = @$case;
+        ok($error, "[$label] refuses") or next;
+        like($error, qr/\Qat $file line $at\E\b/,
+            "[$label] and reports the caller's own line");
+        unlike($error, qr{at \S*lib/File/SOPS\S*\.pm line},
+            "[$label] and names no file of ours");
+    }
+}
+
+# And the location is not bought with the key path karr #68 added: both have
+# to be in the same message.
+{
+    my $err = do {
+        local $@;
+        eval {
+            File::SOPS::Format::YAML->emit({ outer => { inner => bless({}, 'Foo') } });
+        };
+        $@;
+    };
+    like($err, qr/^outer:inner: cannot write a leaf blessed into Foo/,
+        'the message still opens with the key path');
+    like($err, qr/at \Q@{[ __FILE__ ]}\E line \d+/,
+        'and still ends at the caller');
 }
 
 done_testing;

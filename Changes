@@ -1,6 +1,20 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Fix: a refusal now reports the line the CALLER wrote encrypt(), emit() or
+    decrypt() on, instead of a line inside this distribution. croak names the
+    caller of the frame it stands in, and every frame between a caller and the
+    guards is our own - File::SOPS::encrypt calls emit(), emit() calls
+    Encrypted->canonical_float_tree, and the walk calls the handler's guards
+    back - so a refused leaf ended "at lib/File/SOPS/Encrypted.pm line NNN",
+    which is what the house rule "croak, never die" exists to prevent. The
+    same applied to "Could not decrypt data key with any of the provided
+    identities", which named a line in SOPS.pm. Fixed with @CARP_NOT in
+    Format::YAML, Format::JSON and Backend::Age. Nothing a message SAYS
+    changes: measured over 32 refusal paths, 10 locations move and all 10 move
+    out of lib/, while 0 message texts differ - the key paths karr #68 added
+    are untouched, and a test now asserts both in the same message. See
+    karr #71.
   - Fix: File::SOPS::Encrypted->value_to_bytes returned text in a scalar that
     also carried the number that text spells, so detect_type called its own
     output a float - and an int for the text -0, which numifies to an IV. The

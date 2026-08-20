@@ -9,6 +9,19 @@ use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
 use namespace::clean;
 
+# Carp reports the caller of the frame croak stands in, and every frame between
+# a caller and this module is this distribution's own: File::SOPS::encrypt calls
+# emit(), emit() calls File::SOPS::Encrypted->canonical_float_tree, and the walk
+# calls the guards below BACK. So a refusal named a line in Encrypted.pm -- the
+# walk's own recursion -- where the house rule asks for the line the caller
+# wrote encrypt() or emit() on (karr #71). Naming both packages here makes Carp
+# walk out of them: it skips a frame when either side trusts the other, so this
+# one list also fixes the guard that croaks from inside the walk.
+#
+# It is the frames, not the messages, that this changes. Every message still
+# names the leaf's key path (karr #68), which is what a caller acts on.
+our @CARP_NOT = qw( File::SOPS File::SOPS::Encrypted );
+
 # 'JSON::PP' here is one of YAML::XS's own two mode names (the other is
 # 'boolean'), not a module this distribution loads or talks to. It makes
 # Load/Dump round-trip YAML true/false as JSON::PP::Boolean objects -- the same
