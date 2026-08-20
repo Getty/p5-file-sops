@@ -50,3 +50,10 @@ on test => sub {
     # t/22-creation-rules.t builds .sops.yaml fixture trees several levels deep.
     requires 'File::Path';
 };
+
+on develop => sub {
+    # xt/author/pod-links.t checks L<> resolution over the WOVEN pod (Test::Pod,
+    # a separate develop-phase prereq registered by [PodSyntaxTests] itself,
+    # only checks syntax) -- see karr #98.
+    requires 'Pod::Checker';
+};
