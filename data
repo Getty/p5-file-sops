@@ -1,0 +1,49 @@
+---
+class: standard
+completed: 2026-08-20T02:47:40Z
+created: 2026-08-20T01:38:53Z
+id: 84
+priority: high
+started: 2026-08-20T02:47:40Z
+status: done
+tags:
+- wire
+- json
+- yaml
+- mac
+title: A dualvar INT leaf makes a document fail its own MAC, in both formats
+updated: 2026-08-20T02:53:47Z
+---
+
+Found while closing karr #78, not caused by it. Separate defect class, strictly
+worse than #78: that one produced a document that VERIFIES (only the value type
+changed); this one produces a document that fails its own MAC, in YAML as well
+as JSON.
+
+detect_type reads SVf_NOK before SVf_IOK, so a dualvar whose numeric half is an
+integer is an `int`, and value_to_bytes derives the digest text from the NUMBER.
+Both emitters write the STRING half. Measured, sops 3.13.3, leaf x_unencrypted:
+
+  dualvar(5, "five")   digest 5   json: "x_unencrypted" : "five"   exit 51 MAC mismatch
+  dualvar(5, "five")   digest 5   yaml: x_unencrypted: five        exit 51 MAC mismatch
+  dualvar(0, "zero")   digest 0   json: "x_unencrypted" : "zero"   exit 51 MAC mismatch
+  dualvar(0, "zero")   digest 0   yaml: x_unencrypted: zero        exit 51 MAC mismatch
+  dualvar(7, "7")      digest 7   both: 7                          exit 0 (agrees by luck)
+
+Nothing catches it. Encrypted::_canonical_floats only inspects leaves whose
+_sv_kind is `float`, so an int leaf never reaches either handlers roundtrips or
+carrier callback and never reaches the karr #78 guard added in Format::JSON.
+The reject callback only fires for references.
+
+Note this is NOT reachable from extract: canonical_float_dualvar wraps floats
+only (ADR 0010). It needs a caller who builds a dualvar itself, or any other
+route to a public IOK|POK scalar whose two halves disagree. Lower likelihood
+than #78, higher severity -- the file is unreadable to sops and to us.
+
+Same question is open for a str-typed leaf whose PV and emitted form could
+diverge; not measured yet.
+
+Wire lane: any fix here decides what the digest covers or what the emitter
+writes for a leaf class that currently has neither guard.
+Closed by 543b59d: refused at emit time in Encrypted::_canonical_floats, through the same measured round-trip the float branch uses -- so the two formats refuse different sets: YAML only a contradicting string half, JSON also a source spelling it has to quote (007, +7, -0, 1e3). The message names the key path and neither half of the value. 244-row emitter corpus: 28 rows move (20 JSON, 8 YAML), every one this leaf class. All 14 newly refused leaves were sops -d exit 51 before, so nothing that worked stops working. t/29-int-leaf-string-half-guard.t, 15 subtests, binary required; counter-check with the guard disabled fails 10 of 15. Decision (refuse, not repair) and its measurements in docs/adr/0012. The str-leaf question this ticket left open is answered there in the rejected alternatives: a string's value_to_bytes is its own text, so document and digest cannot disagree -- but karr #86 found the mirror image, a leaf OUR parser types str and Go types int. Adjacent drift filed as karr #85 and karr #86.
+ERLEDIGT 2026-08-20, Commit 543b59d, ADR 0012. Entscheidung der Wire-Lane: REFUSEN, nicht reparieren -- und die Begruendung ist eine Messung, keine Praeferenz. Eine Reparatur existiert (0 + value), Verfuegbarkeit ist also nicht die Frage, sondern der Preis: bei dualvar(5,'five') -- und $! hat exakt diese Form -- zerstoert die Reparatur still die Haelfte, die oft die gemeinte ist, waehrend sie bei '007' nur eine Schreibweise kostet. NICHTS TRENNT DIE BEIDEN FAELLE MESSBAR: eine Schreibweise von einem Widerspruch zu unterscheiden hiesse, die String-Haelfte zu numifizieren, und dualvar(0,'zero') numifiziert zu 0 -- genau der Zahl, gegen die verglichen wuerde. Das hat die Hybrid-Loesung getoetet, und Typisierung nach Textmuster ist genau das, was ADR 0002 abgeschafft hat. PRAEMISSE DES TICKETS KORRIGIERT: der Fall ist NICHT nur ueber einen caller-gebauten dualvar erreichbar. YAML::XS haengt an JEDEN geparsten int die Quell-PV, also trifft es einen YAML-Baum, der als JSON verschluesselt wird -- '007', '+7', '-0', '1e3' gemessen. Implementierung in _canonical_floats: ein int-Leaf mit OEFFENTLICHEM SVf_POK, dessen PV von value_to_bytes abweicht, geht durch den bestehenden roundtrips-Callback und wird abgelehnt, wenn der Emitter nicht den Text des Digests schreibt -- YAML lehnt so nur Widersprueche ab, JSON zusaetzlich die Schreibweisen, die es quoten muss. Bewusst zur Emit-Zeit statt in assert_representable (ADR 0008s Ausnahme neu gemessen: derselbe dualvar in einem VERSCHLUESSELTEN Slot funktioniert weiterhin, exit 0, beide Formate). NICHTS WAS FUNKTIONIERTE HOERT AUF ZU FUNKTIONIEREN: alle 14 neu abgelehnten Leaves waren vorher sops -d exit 51, alle 7 vorher akzeptierten sind byte-unveraendert und weiterhin exit 0. Korpus 28 von 244 Zeilen bewegt (20 JSON, 8 YAML), ausschliesslich diese Klasse. Kosten gemessen: 1000 YAML-geparste int-Leaves 14ms statt 11ms (YAML) und 5ms statt 2ms (JSON). Neue Datei t/29-int-leaf-string-half-guard.t, 15 subtests, Binary erforderlich; Gegenprobe: Guard aus -> 10 von 15 rot. Verifiziert 694/694 PASS, t/04 31/31 AUSGEFUEHRT.
