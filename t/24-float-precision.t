@@ -993,4 +993,165 @@ for my $format (qw(yaml json)) {
     };
 }
 
+###############################################################################
+# 12. karr #73: an encrypted type:float whose plaintext is a WHOLE number came
+#     back as a value detect_type calls int, so the next write relabelled the
+#     leaf type:int -- on a document sops itself had written.
+#
+#     _deserialize_value converted with `$data + 0.0`. For an integral result
+#     that addition sets the PUBLIC SVf_IOK flag (grok_number settles a text
+#     like `2` as an integer; pp_add calls SvIV_please), and SVf_IOK is exactly
+#     what _sv_kind reads. ADR 0002 was working as specified; the SV it read
+#     had been manufactured by our own conversion rather than by a parser.
+#
+#     Nothing failed, which is why it lived: the plaintext is `2` under either
+#     label, the digest covers `2` either way, and `sops -d` exits 0 before and
+#     after. What changed was the document's own type field. Measured, both
+#     formats, three of five type:float leaves relabelled by our rotate.
+#
+#     The fix is `unpack('d', pack('d', $data))` -- a conversion that goes
+#     through the float64 Go parses into and leaves the SV NOK and nothing
+#     else. ADR 0009. The ladder below is the karr #72 ladder with the type
+#     asserted as well: 12 of its 37 rows reported int before the fix.
+###############################################################################
+
+subtest 'a type:float plaintext stays a float, whatever its digits spell (karr #73)' => sub {
+    # Straight through File::SOPS::Encrypted for the same reason section 10
+    # does it: one plaintext -> one value -> one type and one set of wire
+    # bytes, with no document in between to add noise.
+    my $key = "\x02" x 32;
+
+    # plaintext => the bytes value_to_bytes must re-derive. Every row is
+    # type:float, because the row's own label says so and nothing this library
+    # does to the value may contradict it.
+    my @ladder = (
+        # The twelve rows that reported int before the fix.
+        [ '0',      '0' ], [ '+0',     '0' ], [ '1',       '1' ],
+        [ '-1',    '-1' ], [ '2',      '2' ], [ '-2',     '-2' ],
+        [ '1e2',  '100' ], [ '100',  '100' ], [ '-100', '-100' ],
+        [ '1e-400', '0' ],
+        # A float64 cannot hold either of these integers, and Go's
+        # strconv.ParseFloat does not pretend otherwise -- it returns the
+        # nearest double, which is what we now return and digest. Before the
+        # fix Perl kept the exact integer in an IV and wrote it out under a
+        # type:int label, a number and a type the reference implementation
+        # would never have produced from this plaintext.
+        [ '9007199254740993',    '9007199254740992'    ],
+        [ '9223372036854775807', '9223372036854776000' ],
+        # Controls: rows that were already float and must not move.
+        [ '2.0',  '2' ], [ '0.0',   '0' ], [ '1.5', '1.5' ],
+        [ '-1.5', '-1.5' ], [ '0.1', '0.1' ],
+        [ '0.30000000000000004', '0.30000000000000004' ],
+        [ '1e20', '100000000000000000000' ],
+        [ '1e-20', '0.00000000000000000001' ],
+        [ '-0',   '-0' ], [ '-1e-400', '-0' ],
+        [ 'NaN', 'NaN' ], [ 'Inf', '+Inf' ], [ '-Inf', '-Inf' ],
+    );
+
+    for my $row (@ladder) {
+        my ($plaintext, $expected) = @$row;
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $plaintext, type => 'float', key => $key, aad => '',
+        );
+        my $value = $enc->decrypt_value(key => $key, aad => '');
+        is(File::SOPS::Encrypted->detect_type($value), 'float',
+            "[$plaintext] comes back as a float, so the next write keeps type:float");
+        is(File::SOPS::Encrypted->value_to_bytes($value), $expected,
+            "[$plaintext] re-derives $expected");
+    }
+};
+
+for my $format (qw(yaml json)) {
+    subtest "[$format] an integral type:float keeps its label through sops -> rotate -> sops (karr #73)" => sub {
+        my $plain = scratch_file($format);
+        write_file($plain, $format eq 'json'
+            ? qq({\n  "whole": 2.0,\n  "negwhole": -2.0,\n  "zero": 0.0,\n  "half": 1.5\n}\n)
+            :  "whole: 2.0\nnegwhole: -2.0\nzero: 0.0\nhalf: 1.5\n");
+
+        my $enc_file = scratch_file($format);
+        system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+        is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+        my $fixture = read_file($enc_file);
+        for my $leaf (qw( whole negwhole zero half )) {
+            like($fixture, qr/\Q$leaf\E"?\s*:\s*"?ENC\[AES256_GCM,[^\]]*type:float\]/,
+                "sops wrote $leaf as an encrypted type:float")
+                or diag("fixture:\n$fixture");
+        }
+
+        # The read side, which is where the label was lost.
+        my $data = File::SOPS->decrypt(
+            encrypted => $fixture, identities => [$secret], format => $format,
+        );
+        for my $leaf (qw( whole negwhole zero half )) {
+            is(File::SOPS::Encrypted->detect_type($data->{$leaf}), 'float',
+                "$leaf is still a float after decrypt (measured before the fix: "
+              . ($leaf eq 'half' ? 'float' : 'int') . ')');
+        }
+        cmp_ok($data->{whole}, '==', 2, 'and it is still the number 2');
+
+        # The write side, which is where it became a changed document.
+        File::SOPS->rotate(file => $enc_file, identities => [$secret]);
+        my $rotated = read_file($enc_file);
+        for my $leaf (qw( whole negwhole zero half )) {
+            like($rotated, qr/\Q$leaf\E"?\s*:\s*"?ENC\[AES256_GCM,[^\]]*type:float\]/,
+                "$leaf is still type:float after our rotate")
+                or diag("rotated document:\n$rotated");
+        }
+        unlike($rotated, qr/type:int/,
+            'no leaf acquired a type:int label (measured before the fix: three did)');
+
+        my $out = `$sops_bin -d $enc_file 2>&1`;
+        is($? >> 8, 0, 'sops -d accepts the rotated document') or diag("sops: $out");
+        like($out, qr/whole"?\s*:\s*2\b/,   'and reads the same value back');
+        like($out, qr/negwhole"?\s*:\s*-2\b/, 'including the negative one');
+        like($out, qr/half"?\s*:\s*1\.5\b/,  'and the neighbouring non-integral float');
+    };
+}
+
+subtest 'decrypt_file renders an integral float as ADR 0009 measured it' => sub {
+    # The same retyping decided how the plaintext emitters rendered the value,
+    # so the fix moves one of them: Cpanel::JSON::XS writes a bare NV of 2 as
+    # 2.0, YAML::XS writes it as 2. The JSON form differs from what `sops -d`
+    # prints (2) and is kept deliberately -- it parses back as a float, so
+    # decrypt_file -> edit -> encrypt_file keeps the leaf a type:float, where
+    # `2` silently makes it a type:int. Pinned here because it is a documented
+    # consequence, not an accident, and the obvious "fix" is to undo it.
+    for my $format (qw(yaml json)) {
+        my $plain = scratch_file($format);
+        write_file($plain, $format eq 'json'
+            ? qq({\n  "whole": 2.0,\n  "half": 1.5\n}\n)
+            :  "whole: 2.0\nhalf: 1.5\n");
+
+        my $enc_file = scratch_file($format);
+        system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+        is($? >> 8, 0, "[$format] sops -e wrote the fixture") or next;
+
+        my $our_output = scratch_file($format);
+        File::SOPS->decrypt_file(
+            input      => $enc_file,
+            output     => $our_output,
+            identities => [$secret],
+            format     => $format,
+        );
+        my $content = read_file($our_output);
+
+        if ($format eq 'json') {
+            like($content, qr/"whole"\s*:\s*2\.0\b/,
+                '[json] decrypt_file writes 2.0, which parses back as a float')
+                or diag("our output:\n$content");
+        }
+        else {
+            like($content, qr/whole:\s*2\s*$/m,
+                '[yaml] decrypt_file writes 2, exactly as sops -d does')
+                or diag("our output:\n$content");
+        }
+
+        # Whatever the spelling, it is the same number sops reads.
+        my $decoded = $format eq 'json' ? decode_json($content) : Load($content);
+        cmp_ok($decoded->{whole}, '==', 2, "[$format] and it is the number 2");
+        cmp_ok($decoded->{half}, '==', 1.5, "[$format] the neighbour is untouched");
+    }
+};
+
 done_testing;

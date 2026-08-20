@@ -411,11 +411,26 @@ C<type:bytes> is the one exception: it is SOPS's binary type, so it is returned
 as raw bytes with nothing decoded. A C<type:str> whose plaintext is not valid
 UTF-8 is also returned as bytes rather than being mangled.
 
+A C<type:float> value comes back as a scalar Perl calls a float B<even when its
+digits spell a whole number>, so C<detect_type> still says C<float> and the
+next write keeps the C<type:float> label the document already carried. The
+conversion is C<unpack('d', pack('d', $plaintext))> rather than C<+ 0.0>,
+because the addition sets the public C<SVf_IOK> flag on an integral result and
+that flag is what L</detect_type> reads: a C<whole: 2.0> written by sops came
+back out of our own C<rotate> as C<type:int>, in both formats, at exit 0 and
+without a word. See karr #73 and
+L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
+
+That conversion is a C<float64>, as Go's is, so a plaintext carrying more
+integer precision than a double can hold comes back rounded to the double Go
+also reads -- C<9007199254740993> as C<9007199254740992>. L</decrypt_bytes>
+still returns the plaintext digits verbatim.
+
 A C<type:float> plaintext of C<-0> comes back as a B<negative> zero, which is
 what Go's C<strconv.ParseFloat> returns for it and what the document meant.
-Perl's own C<+ 0.0> does not: it settles that text as an integer zero, which
-has no sign to keep, and IEEE round-to-nearest turns even a genuine C<-0.0 +
-0.0> into C<+0.0>. Nothing in Perl shows the difference -- C<==> and C<print>
+Neither conversion gets there on its own: both settle that text as an integer
+zero, which has no sign to keep, and C<+ 0.0> additionally lost it a second
+time to IEEE round-to-nearest (C<-0.0 + 0.0> is C<+0.0>). Nothing in Perl shows the difference -- C<==> and C<print>
 cannot tell the two zeroes apart -- but L</value_to_bytes> can, so the value
 writes back out as C<-0> where it used to write C<0> and silently change a
 document sops itself had produced. See karr #72.
@@ -432,8 +447,8 @@ went through Perl's C<int()>, which is exact up to C<2**64-1> on a 64-bit Perl
 and silently rounds above it, so the same document produced one answer here and
 C<value out of range> in sops.
 
-=item * a C<type:float> plaintext that is not a number, which C<+ 0.0> turned
-into C<0> without a word and C<strconv.ParseFloat> rejects.
+=item * a C<type:float> plaintext that is not a number, which Perl's numeric
+conversion turns into C<0> without a word and C<strconv.ParseFloat> rejects.
 
 =item * an unrecognised C<type:> altogether -- C<Unknown datatype>, as Go says.
 
@@ -1040,20 +1055,38 @@ sub _deserialize_value {
         return 0 + $data;
     }
     # Go reads this back with strconv.ParseFloat, which fails on anything that
-    # is not a number. Perl's + 0.0 turns it into 0 and says nothing.
+    # is not a number. Perl's numeric conversion turns it into 0 and says
+    # nothing.
     if ($type eq 'float') {
         croak "type:float plaintext is not a number"
             unless $data =~ /\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)
                              (?:[eE][+-]?[0-9]+)?\z/x
                 || $data =~ /\A[+-]?(?:Inf(?:inity)?|NaN)\z/i;
 
-        my $number = $data + 0.0;
+        # NOT `$data + 0.0`. That addition hands back a scalar carrying the
+        # PUBLIC SVf_IOK flag whenever the result is integral -- grok_number
+        # settles a text like `2` as an integer and pp_add calls SvIV_please --
+        # so detect_type called the value an int and the next write relabelled
+        # a leaf the document itself had marked type:float. Measured on a
+        # document sops wrote: three of five type:float leaves came back
+        # type:int after our rotate, exit 0 both times, silently (karr #73).
+        #
+        # pack 'd' lays the scalar's numeric value out as a native double and
+        # unpack builds a fresh SV from those bytes with sv_setnv, so the
+        # result is NOK and nothing else. It is also float64 whatever this
+        # Perl's NV is, which is the width Go's strconv.ParseFloat works in.
+        # No arithmetic form does this: `0.0 + $data` and `$data * 1.0` set IOK
+        # too, and a dualvar INHERITS it from its numeric argument. See ADR
+        # 0009.
+        my $number = unpack('d', pack('d', $data));
 
         # strconv.ParseFloat("-0", 64) is NEGATIVE zero in Go. The conversion
-        # above is positive zero twice over: grok_number settles the text -0 as
-        # an INTEGER zero, which has no sign to keep, and IEEE round-to-nearest
-        # makes even a genuine -0.0 + 0.0 come out +0.0. So the sign has to
-        # come back from the plaintext, which is the only place it survived.
+        # above still is not: grok_number settles the text -0 as an INTEGER
+        # zero, which has no sign to keep, so pack sees a plain 0 and measured
+        # hands back a POSITIVE zero -- exactly as `+ 0.0` did before it, which
+        # additionally lost the sign a second time to IEEE round-to-nearest
+        # (-0.0 + 0.0 is +0.0). So the sign has to come back from the
+        # plaintext, which is the only place it survived.
         #
         # The MAC does not catch this -- the digest covers decrypt_bytes, the
         # plaintext "-0", not what this returns -- so every document involved

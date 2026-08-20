@@ -1,6 +1,27 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Keep the type:float label on an encrypted whole number. The READ path
+    converted a type:float plaintext with `$data + 0.0`, which sets the
+    public SVf_IOK flag whenever the result is integral, so detect_type
+    called the value an int and the next write relabelled the leaf
+    type:int - on a document sops itself had written. Measured, both
+    formats: `sops -e` of `whole: 2.0` came back out of our rotate as
+    type:int, three of five type:float leaves relabelled, `sops -d` exit 0
+    before and after and printing `whole: 2` both times. Nothing failed,
+    which is why it lived: the plaintext is `2` under either label and the
+    digest covers `2` either way. What changed was the document's own type
+    field, silently. The conversion is now
+    `unpack('d', pack('d', $plaintext))`, which goes through the float64 Go
+    parses into and leaves the scalar a float. Two consequences are
+    deliberate and measured: a plaintext carrying more integer precision
+    than a double can hold (9007199254740993) now re-derives the double Go
+    also reads (9007199254740992) instead of an exact integer under a wrong
+    label, and decrypt_file writes an integral float as `2.0` in JSON, where
+    it wrote `2` before and `sops -d` writes `2` - `2.0` parses back as a
+    float, so decrypt_file, edit, encrypt_file keeps the leaf a type:float.
+    The YAML side still writes `2`, exactly as sops does. See karr #73 and
+    docs/adr/0009.
   - Pin decrypt_file's handling of an ENCRYPTED float against the sops
     binary. No code change: the ADR 0006 emitter fix (karr #58) already made
     both formats write the canonical decimal, so a document sops wrote with
