@@ -184,7 +184,15 @@ sub serialize {
 
     # The timestamp fixup applies to the metadata section only, so it sits here
     # rather than in emit -- a plaintext document has no `sops:` block to fix.
-    return _quote_sops_timestamp($class->emit(\%output));
+    #
+    # mac_covered turns on the foreign-resolution guard (karr #86, ADR 0013):
+    # this document carries a MAC, and sops recomputes that MAC from the values
+    # ITS parser resolves out of these bytes. Not set for mac_only_encrypted,
+    # where the digest covers encrypted values only -- an unencrypted leaf
+    # cannot make such a document disagree with its own MAC, measured, and
+    # refusing it would refuse a document that works today.
+    return _quote_sops_timestamp($class->emit(\%output,
+        mac_covered => $metadata->mac_only_encrypted ? 0 : 1));
 }
 
 # YAML::XS emits plain (unquoted) scalars for anything its resolver does not
@@ -250,6 +258,27 @@ covered the discarded value.
 
 Returns a YAML string with the C<sops> section appended.
 
+B<A leaf whose YAML spelling Go's parser resolves differently is refused here,
+and only here.> The document this method writes carries a MAC, and sops
+recomputes that MAC from the values C<gopkg.in/yaml.v3> resolves out of these
+bytes -- so a leaf that libyaml and Go read differently makes the file
+disagree with its own MAC. C<mode: 0755> is the realistic case: this module
+reads 755, Go reads 493, and the file was written silently and rejected later
+with C<MAC mismatch>. Refused as well: C<0o10>, C<0x1f>, C<0b101>, C<1_000>,
+C<.inf>, C<.nan>, C<Null>, C<TRUE> and a date that is not already exactly
+RFC3339 -- all spellings libyaml leaves a string and Go resolves to something
+else. C<007>, C<08>, C<1e3>, C<True>, C<null>, C<yes>, C<1:30> and
+C<2015-01-01T12:00:00Z> are B<not> refused: measured, the two resolvers derive
+the same digest bytes from each of them.
+
+The rule does not apply to an B<encrypted> slot (an C<ENC[...]> string carries
+any spelling verbatim), to L</emit> on its own (a plaintext document has no MAC
+for a reader to disagree with), to the C<sops> metadata section (the digest does
+not cover it), or to a C<mac_only_encrypted> document (there the digest does not
+cover an unencrypted leaf either). See
+L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
+and karr #86.
+
 =cut
 
 # The one place this distribution turns a Perl tree into YAML. serialize() is
@@ -269,7 +298,7 @@ Returns a YAML string with the C<sops> section appended.
 # what it emits changes the encrypted document too, so it is not a plaintext
 # formatting knob.
 sub emit {
-    my ($class, $data) = @_;
+    my ($class, $data, %args) = @_;
     croak "data required" unless defined $data;
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
@@ -278,6 +307,12 @@ sub emit {
         roundtrips => \&_float_roundtrips,
         carrier    => \&_float_carrier,
         reject     => \&_reject_unwritable_leaf,
+
+        # Only a document that carries a MAC has a reader to disagree with it.
+        # serialize sets this; the plaintext emitters (decrypt_file, edit) do
+        # not, and must not -- refusing there would refuse to WRITE OUT a
+        # document this module reads correctly. See docs/adr/0013.
+        ($args{mac_covered} ? (reject_scalar => \&_reject_foreign_resolution) : ()),
     ));
 }
 
@@ -338,6 +373,327 @@ sub _reject_unwritable_leaf {
         . "boolean has to be an exact JSON::PP::Boolean (JSON->true / "
         . "JSON->false); a subclass of it is written as a tag as well";
 }
+
+###############################################################################
+# The reader on the other side of the file (karr #86, docs/adr/0013)
+#
+# Everything above asks THIS distribution's emitter what it does. This asks what
+# Go's gopkg.in/yaml.v3 -- the parser sops uses -- makes of the bytes we are
+# about to write, because sops recomputes the MAC from the values ITS parser
+# resolves. YAML::XS is libyaml, whose resolver is YAML 1.1 as libyaml
+# implements it; yaml.v3's is neither 1.1 nor 1.2 but its own. Where the two
+# land on different values, the document and its own MAC state different things.
+#
+# Measured against sops 3.13.3, leaf under _unencrypted, one document per row:
+#
+#   source   we read        Go reads    sops -d
+#   0755     int 755        493         exit 51    <- `mode: 0755`, the real case
+#   010      int 10         8           exit 51
+#   007      int 7          7           exit 0     <- agrees, 7 is 7 in both bases
+#   08       int 8          float 8     exit 0     <- agrees, same digest bytes
+#   0o10     str "0o10"     int 8       exit 51    <- the mirror case: WE say str
+#   0x1f     str            int 31      exit 51
+#   1_000    str            int 1000    exit 51
+#   .inf     str            +Inf        exit 51
+#   Null     str            null        exit 51
+#   TRUE     str            bool        exit 51
+#   True     str "True"     bool        exit 0     <- agrees, Go digests `True`
+#   2015-01-01            str  time     exit 51    <- rendered 2015-01-01T00:00:00Z
+#   2015-01-01T12:00:00Z  str  time     exit 0     <- rendered identically
+#
+# sops itself resolves a plaintext `mode: 0755` to the INTEGER 493 and writes
+# that, so the spelling never survives a `sops -e` -- which is why the read path
+# needs nothing here, and why the message can name 493 as what to pass instead.
+#
+# This is NOT typing by text (ADR 0002). detect_type still reads the SV and
+# nothing else, and this runs after it. What is inspected here is what a foreign
+# parser will make of bytes -- a question the SV cannot answer, because the SV is
+# on this side of the file. _quote_sops_timestamp two hundred lines up has
+# matched a text pattern in the emitted document for the same reason since 0.003.
+
+# Go's resolveTable: the first byte decides whether the resolver looks at a
+# plain scalar at all. Anything else is a string to it, immediately -- which is
+# what keeps `localhost` and `supersecret` from paying for any of this.
+my $GO_LOOKS_AT = qr/\A[-+.0-9yYnNtTfFoO~]/;
+
+# Go's resolveMap, mapped to the bytes sops's ToBytes derives from each value.
+# A bool is Title-cased (the same rule Encrypted::value_to_bytes follows) and a
+# null contributes nothing -- measured: a sops-written `x_unencrypted: null`
+# verifies against this module's own digest, which covers the empty string.
+my %GO_CONSTANT = (
+    'true'  => 'True',  'True'  => 'True',  'TRUE'  => 'True',
+    'false' => 'False', 'False' => 'False', 'FALSE' => 'False',
+    ''      => '',      '~'     => '',
+    'null'  => '',      'Null'  => '',      'NULL'  => '',
+    '.inf'  => '+Inf',  '.Inf'  => '+Inf',  '.INF'  => '+Inf',
+    '+.inf' => '+Inf',  '+.Inf' => '+Inf',  '+.INF' => '+Inf',
+    '-.inf' => '-Inf',  '-.Inf' => '-Inf',  '-.INF' => '-Inf',
+    '.nan'  => 'NaN',   '.NaN'  => 'NaN',   '.NAN'  => 'NaN',
+);
+
+# strconv.ParseInt/ParseUint with base 0, as a digit string. The magnitude is
+# accumulated in Perl's own integer space, guarded by a STRING comparison
+# against the base's uint64 maximum -- dividing to test for overflow is exactly
+# where a double stops being exact, and a wrong answer here is a document
+# refused or written for the wrong reason.
+my %GO_BASE_MAX = (
+    2  => '1111111111111111111111111111111111111111111111111111111111111111',
+    8  => '1777777777777777777777',
+    10 => '18446744073709551615',
+    16 => 'ffffffffffffffff',
+);
+my $INT64_MAGNITUDE = 9223372036854775808;   # 2**63: int64 min is -this
+
+sub _go_digits {
+    my ($digits, $base) = @_;
+
+    (my $d = lc $digits) =~ s/\A0+(?=.)//;
+    my $max = $GO_BASE_MAX{$base};
+    return undef if length($d) > length($max);
+    return undef if length($d) == length($max) && $d gt $max;
+
+    my $v = 0;
+    $v = $v * $base + index('0123456789abcdef', $_) for split //, $d;
+    return $v;
+}
+
+# undef: not an integer to Go. 'RANGE': an integer it reads as a uint64, which
+# sops has no case for -- measured, `sops -e` on a plaintext 9223372036854775808
+# fails with `Cannot walk value, unknown type: uint64`, exit 23. Otherwise the
+# decimal text sops would digest.
+sub _go_int {
+    my ($p) = @_;
+
+    my $neg = ($p =~ s/\A-//) ? 1 : 0;
+    $p =~ s/\A\+//;
+    return undef unless length $p;
+
+    my $v;
+    if    ($p =~ /\A0[xX]([0-9a-fA-F]+)\z/) { $v = _go_digits($1, 16) }
+    elsif ($p =~ /\A0[bB]([01]+)\z/)        { $v = _go_digits($1, 2) }
+    elsif ($p =~ /\A0[oO]([0-7]+)\z/)       { $v = _go_digits($1, 8) }
+    elsif ($p =~ /\A0([0-7]*)\z/)           { $v = _go_digits($1, 8) }
+    elsif ($p =~ /\A[1-9][0-9]*\z/)         { $v = _go_digits($p, 10) }
+    else                                    { return undef }
+
+    return undef unless defined $v;         # past uint64: Go falls through to float
+    # `-0` is the integer 0 to Go, sign and all: strconv.Itoa(0) is `0`, and a
+    # document holding `-0` verifies against a digest covering `0` (measured,
+    # exit 0). The sign only survives on a FLOAT, which is ADR 0006's -0.0.
+    return $neg && $v ? "-$v" : "$v"
+        if $neg ? $v <= $INT64_MAGNITUDE : $v < $INT64_MAGNITUDE;
+    return undef if $neg;                   # ParseUint rejects a sign
+    return 'RANGE';
+}
+
+# strconv.ParseFloat, through the one conversion this distribution has for a
+# double. The CANONICAL TEXT decides whether Go got a number, never a numeric
+# comparison of the scalar: `$nv == 0` sets the public IOK on an integral NV and
+# takes the sign off -0.0 with it, which is ADR 0002's contamination in the one
+# place that must not have it.
+sub _go_float {
+    my ($p) = @_;
+
+    my $bytes = File::SOPS::Encrypted->value_to_bytes($p * 1.0);
+    return undef if $bytes =~ /\A[-+]Inf\z/;   # Go: ErrRange, so not a float to it
+    return $bytes;
+}
+
+# Go's parseTimestamp: four layouts, and sops digests what comes out of it as
+# RFC3339 NANO -- always a capital T, `Z` for a zero offset, and a fractional
+# second that keeps at most nine digits and no trailing zero. So a token agrees
+# with itself only when it is already spelled exactly that way; every other shape
+# Go PARSES renders differently, and every shape it does not parse is a string to
+# it and agrees for free. Measured, leaf under _unencrypted:
+#
+#   2015-01-01T12:00:00Z            exit 0    <- already RFC3339
+#   2015-01-01T12:00:00.5Z          exit 0    <- Nano keeps the fraction
+#   2015-01-01T12:00:00.123456789Z  exit 0
+#   2015-01-01T12:00:00.50Z         exit 51   <- trailing zero trimmed
+#   2015-01-01T12:00:00.0Z          exit 51   <- fraction disappears entirely
+#   2015-01-01T12:00:00.1234567891Z exit 51   <- truncated to nine digits
+#   2015-01-01T12:00:00+00:00       exit 51   <- a zero offset renders as Z
+#   2015-01-01                      exit 51   <- becomes 2015-01-01T00:00:00Z
+#   2015-1-01T12:00:00Z             exit 51   <- a short field is padded
+#   2016-02-29                      exit 51   <- a real date, so it is parsed
+#   2015-02-29                      exit 0    <- not a date, so Go leaves a string
+#   2015-01-01T24:00:00Z            exit 0    <- hour 24: same, a string
+#
+# The calendar check is what tells 2016-02-29 from 2015-02-29 -- one is a date
+# and the other is not -- and it is why `2024-13-45` and `1234-5678` are not
+# refused either.
+sub _go_timestamp {
+    my ($s) = @_;
+
+    my ($y, $mo, $d, $h, $mi, $sec, $frac, $zone);
+    if ($s =~ /\A([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})[Tt]([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})(?:\.([0-9]+))?(Z|[-+][0-9]{2}:[0-9]{2})\z/) {
+        ($y, $mo, $d, $h, $mi, $sec, $frac, $zone) = ($1, $2, $3, $4, $5, $6, $7, $8);
+    }
+    elsif ($s =~ /\A([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) ([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})(?:\.([0-9]+))?\z/) {
+        ($y, $mo, $d, $h, $mi, $sec, $frac, $zone) = ($1, $2, $3, $4, $5, $6, $7, 'Z');
+    }
+    elsif ($s =~ /\A([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})\z/) {
+        ($y, $mo, $d, $h, $mi, $sec, $frac, $zone) = ($1, $2, $3, 0, 0, 0, undef, 'Z');
+    }
+    else { return undef }
+
+    return undef if $mo < 1 || $mo > 12 || $d < 1 || $h > 23 || $mi > 59 || $sec > 59;
+    my @length = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
+    my $last = $mo == 2 && (($y % 4 == 0 && $y % 100 != 0) || $y % 400 == 0)
+        ? 29 : $length[$mo - 1];
+    return undef if $d > $last;
+
+    my $nano = '';
+    if (defined $frac) {
+        (my $digits = substr($frac, 0, 9)) =~ s/0+\z//;
+        $nano = ".$digits" if length $digits;
+    }
+    $zone = 'Z' if $zone =~ /\A[-+]00:00\z/;
+    return sprintf('%04d-%02d-%02dT%02d:%02d:%02d%s%s',
+                   $y, $mo, $d, $h, $mi, $sec, $nano, $zone);
+}
+
+# The bytes sops digests for this token when it stands BARE in a YAML document,
+# or undef for "this module cannot prove what Go does with it".
+#
+# A model, and treated as one: written from yaml.v3's resolve() and sops's
+# ToBytes, and verified branch by branch against the binary rather than trusted.
+# There is no oracle to ask instead -- the reader is in another process, in
+# another language, and YAML::PP, this distribution's second parser, resolves
+# 0755 as 755 like libyaml and unlike Go, so it agrees with the side that is
+# already wrong.
+sub _go_scalar_bytes {
+    my ($s) = @_;
+
+    return '' unless length $s;
+    return $s unless $s =~ $GO_LOOKS_AT;
+    return $GO_CONSTANT{$s} if exists $GO_CONSTANT{$s};
+
+    my $first = substr($s, 0, 1);
+
+    # Hinted only because it could have been a constant, and it was not.
+    return $s if index('yYnNtTfFoO~', $first) >= 0;
+
+    # Go's case '.': ParseFloat on the token as it stands, underscores included --
+    # they are part of a Go float literal, but only BETWEEN digits, which is why
+    # `._5` is a string to it and `.5_0` is the number 0.5. `.`, `..`,
+    # `.gitignore` and `.env` match nothing here and stay strings, as they are on
+    # both sides (measured, exit 0).
+    if ($first eq '.') {
+        (my $stripped = $s) =~ tr/_//d;
+        return _go_float($stripped) // $s
+            if $s =~ /\A\.[0-9]+(?:_[0-9]+)*(?:[eE][-+]?[0-9]+(?:_[0-9]+)*)?\z/;
+        return $s;
+    }
+
+    # A timestamp is tried before any number, and only for exactly four leading
+    # digits followed by `-` (Go's own quick check), so `12345-01-01` is not one.
+    return _go_timestamp($s) // $s if $s =~ /\A[0-9]{4}-/;
+
+    my $plain = $s;
+    $plain =~ tr/_//d;                       # Go strips every underscore first
+
+    my $int = _go_int($plain);
+    if (defined $int) {
+        return undef if $int eq 'RANGE';
+        return $int;
+    }
+
+    # yamlStyleFloat, the regexp resolve.go gates ParseFloat with.
+    return _go_float($plain) // $s
+        if $plain =~ /\A[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?\z/;
+
+    return $s;
+}
+
+# What YAML::XS actually writes for this leaf, when it writes it as a bare
+# single-line plain scalar -- and undef when it does not, because a quoted or
+# block scalar is a string to every YAML reader and cannot be resolved into
+# anything else. Measured rather than modelled: libyaml quotes a string its OWN
+# resolver would read as a number, a boolean or a null ('007', '5432', 'yes',
+# '1:30' all come back quoted), and that is most of the reason this guard fires
+# as rarely as it does.
+sub _emitted_plain_scalar {
+    my ($leaf) = @_;
+
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
+    my $dump = eval { Dump({ v => $leaf }) };
+    return undef unless defined $dump && $dump =~ /\A---\nv: (.*)\n\z/;
+
+    my $token = $1;
+    return undef if $token =~ /\A['"|>&*!]/;
+    return $token;
+}
+
+sub _go_agrees {
+    my ($token, $text) = @_;
+
+    my $bytes = _go_scalar_bytes($token);
+    return defined $bytes && $bytes eq $text ? 1 : 0;
+}
+
+# WHY the two disagree, for the message. A property of the spelling, never the
+# spelling itself: an error goes into bug reports.
+sub _foreign_resolution_reason {
+    my ($token) = @_;
+
+    return 'a leading-zero integer, which libyaml reads as decimal and Go as octal'
+        if $token =~ /\A[-+]?0[0-9]+\z/;
+    return 'a 0o / 0x / 0b prefixed number, which Go resolves and libyaml does not'
+        if $token =~ /\A[-+]?0[obxOBX]/;
+    return 'a number written with _ digit separators, which Go strips and libyaml does not'
+        if $token =~ /_/;
+    return 'a date or timestamp, which Go resolves to a time and renders back in RFC3339'
+        if $token =~ /\A[0-9]{4}-/;
+    return 'a YAML 1.2 constant -- an infinity, a not-a-number, a null, or a '
+        . 'boolean spelled in a case libyaml leaves a string'
+        if $token =~ /\A[-+]?\./ || exists $GO_CONSTANT{$token};
+    return 'a number outside the int64 range, which sops refuses to write at all'
+        unless defined _go_scalar_bytes($token);
+    return 'a spelling the two resolvers do not agree on';
+}
+
+# A leaf whose SPELLING this module cannot prove Go resolves the way it does.
+#
+# Runs on the encrypt path only, and never over the `sops` branch: the digest
+# does not cover the metadata, and the one leaf there that Go resolves
+# differently -- lastmodified, which it reads as a time -- is already handled,
+# by _quote_sops_timestamp and the other way round, by quoting it.
+#
+# Encrypted slots cannot reach this at all: _encrypt_tree has replaced every
+# encrypted leaf with an ENC[...] string long before the emitter runs, and that
+# string starts with `E`, which no resolver looks twice at.
+sub _reject_foreign_resolution {
+    my ($leaf, $where, $path, $text) = @_;
+
+    return if @$path && $path->[0] eq 'sops';
+    return unless "$leaf" =~ $GO_LOOKS_AT;
+
+    # THE one conversion -- the text the MAC digest covers. The walk hands it
+    # over where it already derived one (and for a carrier that is the ORIGINAL
+    # value's text, which is what the digest has); otherwise it comes from the
+    # same method on the same scalar. Never a second rendering derived here.
+    $text //= File::SOPS::Encrypted->value_to_bytes($leaf);
+    return if _go_agrees("$leaf", $text);
+
+    # It disagrees if written bare. Ask the emitter whether it is written bare.
+    my $token = _emitted_plain_scalar($leaf);
+    return unless defined $token;
+    return if _go_agrees($token, $text);
+
+    croak "$where: cannot write this leaf to a SOPS YAML document: its spelling "
+        . "is " . _foreign_resolution_reason($token) . ". The MAC digest covers "
+        . "the value this module resolves, while sops re-reads the document with "
+        . "Go's yaml.v3 and resolves a different one, so the file would fail its "
+        . "own MAC and neither sops nor this module could read it back (measured, "
+        . "sops -d exit 51). sops itself resolves such a spelling when it writes: "
+        . "a plaintext `mode: 0755` becomes the integer 493 in its output, and "
+        . "that decimal is what to pass here. To keep the spelling as text, "
+        . "encrypt the leaf -- an ENC[...] string carries it verbatim and is "
+        . "unaffected by this rule";
+}
+
+###############################################################################
 
 # Does YAML::XS's own rendering of this float come back as the same double?
 #
@@ -410,6 +766,14 @@ writes and what L<File::SOPS/edit> hands to the editor.
 Returns UTF-8 encoded bytes, unconditionally: L<YAML::XS> encodes regardless of
 whether the strings it is given carry Perl's UTF-8 flag. See
 L<File::SOPS/Character encoding>.
+
+Called on its own -- which is what the plaintext emitters do -- it writes every
+YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included. The
+guard L</serialize> installs against those is deliberately not here: a plaintext
+document carries no MAC for a reader to disagree with, and refusing them would
+refuse to write out documents this module reads correctly. L</serialize> turns
+it on by passing C<< mac_covered => 1 >>, which is the only argument this method
+takes beyond the tree.
 
 L</serialize> is this method plus the metadata section, so both go through the
 same emitter options rather than two copies of them. Those options are not

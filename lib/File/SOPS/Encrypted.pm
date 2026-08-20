@@ -780,8 +780,9 @@ sub canonical_float_tree {
     my $roundtrips = $args{roundtrips} // croak "roundtrips callback required";
     my $carrier    = $args{carrier}    // croak "carrier callback required";
     my $reject     = $args{reject};
+    my $scalars    = $args{reject_scalar};
 
-    return _canonical_floats($tree, $roundtrips, $carrier, $reject, []);
+    return _canonical_floats($tree, $roundtrips, $carrier, $reject, $scalars, []);
 }
 
 # WHERE a rejected leaf sits, in the shape File::SOPS::_at_path already uses for
@@ -799,15 +800,27 @@ sub _leaf_location {
     return ($path && @$path) ? join(':', @$path) : '(document root)';
 }
 
+# The leaf as it will be WRITTEN, handed to the handler's foreign-resolution
+# check on its way out. Every plain-scalar return path in _canonical_floats goes
+# through here, so the check sees the carrier's replacement rather than the
+# scalar the carrier replaced -- for a negative zero those two are `-0.0` and
+# `-0`, and only the first is what a reader gets to resolve.
+sub _written_leaf {
+    my ($leaf, $text, $reject_scalar, $path) = @_;
+    $reject_scalar->($leaf, _leaf_location($path), $path, $text) if $reject_scalar;
+    return $leaf;
+}
+
 sub _canonical_floats {
-    my ($node, $roundtrips, $carrier, $reject, $path) = @_;
+    my ($node, $roundtrips, $carrier, $reject, $reject_scalar, $path) = @_;
 
     return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier,
-                                           $reject, [ @$path, $_ ]) }
+                                           $reject, $reject_scalar,
+                                           [ @$path, $_ ]) }
                  keys %$node }
         if ref $node eq 'HASH';
     return [ map { _canonical_floats($node->[$_], $roundtrips, $carrier,
-                                     $reject, [ @$path, $_ ]) }
+                                     $reject, $reject_scalar, [ @$path, $_ ]) }
                  0 .. $#$node ]
         if ref $node eq 'ARRAY';
 
@@ -866,7 +879,7 @@ sub _canonical_floats {
         # method on the same scalar. The halves agreeing is the ordinary case
         # and ends here, without asking the emitter anything.
         my $text = __PACKAGE__->value_to_bytes($node);
-        return $node if "$node" eq $text;
+        return _written_leaf($node, $text, $reject_scalar, $path) if "$node" eq $text;
 
         croak _leaf_location($path) . ": cannot write an integer leaf that "
             . "carries its own, different string form to a SOPS document: the "
@@ -880,22 +893,34 @@ sub _canonical_floats {
             . "be read off the scalar, so it is not guessed: pass 0 + \$value "
             . "to store the number, or \"\$value\" to store the text"
             unless $roundtrips->($node, $text);
-        return $node;
+        return _written_leaf($node, $text, $reject_scalar, $path);
     }
 
-    return $node unless $kind eq 'float';
+    # A string leaf, or an integer without a string form of its own: neither is
+    # rewritten here, and both still have to survive the reader on the other side
+    # of the file. No text is derived for them on the way past -- value_to_bytes
+    # encodes, and a handler with a cheap gate of its own should not pay a
+    # conversion for every leaf it waves through.
+    return _written_leaf($node, undef, $reject_scalar, $path) unless $kind eq 'float';
 
     # THE one conversion. This is the same method, on the same scalar, that the
     # MAC digest goes through -- not a second rendering that happens to agree
     # today. Do not inline a copy of it here.
     my $text = __PACKAGE__->value_to_bytes($node);
+
+    # NaN and the infinities leave the walk unchecked as well as unchanged:
+    # assert_representable refuses all three on the encrypt path, so the only
+    # caller that can reach them here is a plaintext emitter, which passes no
+    # reject_scalar because a plaintext document has no MAC to disagree with.
     return $node if $text =~ $NO_AGREED_FORM;
 
     # The emitter's own output already comes back as this number: leave the
     # scalar alone, so the document keeps the bytes it has always had.
-    return $node if $roundtrips->($node, $text);
+    return _written_leaf($node, $text, $reject_scalar, $path) if $roundtrips->($node, $text);
 
-    return $carrier->($node, $text);
+    # The CARRIER is what gets written, and $text is what the digest covers --
+    # for a negative zero those are `-0.0` and `-0`, and the check needs both.
+    return _written_leaf($carrier->($node, $text), $text, $reject_scalar, $path);
 }
 
 =method canonical_float_tree
@@ -969,6 +994,32 @@ C<detect_type> accepts it -- the guard's question is what the emitter can
 write). See
 L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
 (karr #65 on the YAML side, karr #66 closing the known gap on the JSON side).
+
+=item * C<reject_scalar> is optional and is called as
+C<< $reject_scalar->($leaf, $where, $path, $text) >> for every plain scalar leaf
+on its way out -- the leaf B<as it will be written>, so a carried float arrives
+as the carrier rather than as the scalar it replaced. C<$where> is the same
+key-path string C<reject> is given; C<$path> is that path as an array reference,
+for a handler that has to answer a question about B<where> in the document the
+leaf sits rather than only report it. C<$text> is the text the MAC digest covers
+-- the walk passes the one it already derived, which for a carried float is the
+B<original> value's, and leaves it C<undef> for a leaf it never converted, so a
+handler with a cheap gate of its own does not pay a conversion per string.
+
+This is the one hook that asks about a B<reader> instead of about this
+distribution's own emitters. A document's leaves are resolved again by whoever
+opens the file, and where that resolver disagrees with L</detect_type> the
+document and its own MAC state different things -- Go's C<yaml.v3> reads a
+leading-zero integer as octal and C<0o10>, C<0x1f>, C<1_000>, C<.inf>, C<Null>
+and C<2015-01-01> as numbers, an infinity, a null and a timestamp, where
+L<YAML::XS> reads all of them as this module's type. L<File::SOPS::Format::YAML>
+installs it on the encrypt path only. See
+L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
+(karr #86).
+
+Where C<$text> is C<undef> a handler takes it from L</value_to_bytes>, on the
+leaf it was handed. It must not render one itself: that is the second conversion
+this whole walk exists to avoid.
 
 =back
 

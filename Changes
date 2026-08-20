@@ -1,6 +1,34 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a YAML leaf whose SPELLING Go's parser resolves
+    differently from libyaml is now refused when a document that carries a MAC
+    is written. sops parses with gopkg.in/yaml.v3, whose resolver strips `_`
+    from a number, reads 0x / 0b / 0o and a LEADING ZERO as octal, and tries
+    four timestamp layouts - none of which libyaml (YAML::XS) does. So the
+    digest covered the value this module resolved while the document carried a
+    spelling sops re-read as another one. Measured against sops 3.13.3, leaf
+    under _unencrypted: `mode: 0755` is 755 here and 493 there, 010 is 10 and
+    8, 0o10 is the string "0o10" and the integer 8, and 0x1f, 0b101, 1_000,
+    .inf, .nan, Null, TRUE and a bare 2015-01-01 all exit 51 the same way. The
+    file was written silently and rejected later with MAC mismatch, naming
+    nothing. This is the last known case in which this distribution writes a
+    file that breaks its own MAC. Nothing that worked stops working: of a
+    648-row emitter corpus, 53 rows move and every one of them already failed
+    - 50 with sops -d exit 51 and 3 with exit 25, a uint64 sops refuses to
+    write at all - while 007, 08, 1e3, True, null, yes, 1:30, _7, 0o8,
+    123abc, 2015-01-01T12:00:00Z and 2015-01-01T12:00:00.5Z are byte-identical
+    before and after, exit 0. 007 is not refused because 7 is 7 in both bases;
+    a guard on leading zeros alone would be wrong in both directions, since it
+    would also miss 0o10, which this module types as a string. The message
+    names the leaf's key path, never the value, and says what to pass instead:
+    sops itself resolves a plaintext `mode: 0755` to the integer 493 and
+    writes that. Untouched: encrypted slots (an ENC[...] string carries any
+    spelling verbatim), JSON (which quotes every string and has no octal), the
+    plaintext emitters used by decrypt_file and edit (no MAC to disagree
+    with), the sops metadata section (not covered by the digest) and
+    mac_only_encrypted documents (where the digest does not cover an
+    unencrypted leaf). See karr #86 and docs/adr/0013.
   - BEHAVIOUR CHANGE: an integer leaf that carries its own, DIFFERENT string
     form is now refused at emit time, in both formats. detect_type reads the
     public SVf_IOK first, so such a scalar - a Scalar::Util::dualvar, or a
