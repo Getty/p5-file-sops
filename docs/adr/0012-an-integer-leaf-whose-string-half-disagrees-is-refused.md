@@ -3,7 +3,8 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: int, mac, wire-format, guards, yaml, json, interop
-- Resolves karr #84
+- Resolves karr #84, and states from the integer side the asymmetry karr #85
+  settled (the argument is in ADR 0011)
 - Depends on ADR 0002 (the type comes from the SV's public flags, which is why
   such a leaf is an `int` and its digest is the number), ADR 0008 (the rule
   that a leaf an emitter cannot write as the text the digest covers is
@@ -128,13 +129,29 @@ So the leaf is named rather than written, and the caller says which half they
 meant in one expression: `0 + $value` or `"$value"`. Both are in the message.
 
 The float leaf of the same shape is repaired instead (ADR 0011), and that is
-not the same case: **no emitter here can spell a double's canonical decimal on
-its own**, which is why the walk already owns every float's rendering
-(ADR 0006). For an integer both emitters can and do, so the only reason to
-override one is a caller's contradiction. The residual asymmetry — a *float*
-whose string half contradicts its number, `dualvar(1.5, 'banana')`, is written
-as `1.5` in both formats — is real, pre-dates both ADRs on the YAML side, and
-is filed as karr #85 rather than folded in here.
+not the same case. The full argument is in ADR 0011, under "Why a contradicting
+float string half is repaired, where an integer's is refused"; the two halves of
+it, from this side:
+
+**No emitter here can spell a double's canonical decimal on its own**, which is
+why the walk already owns every float's rendering (ADR 0006). Writing `1.5` for
+`dualvar(1.5, 'banana')` is that mechanism doing what it does for every float,
+not a fresh choice between the halves. For an integer both emitters render the
+canonical decimal from the number themselves, and the walk has no reason to be
+in the way — so overriding a caller's string half there would be a new
+intervention with nothing but a guess behind it.
+
+**And the two refusals do not cost the same.** Every document this rule refuses
+failed its own MAC before it — fourteen of fourteen, `sops -d` exit 51. A
+refusal on the float side would refuse documents that are correct today:
+measured against sops 3.13.3, `dualvar(1.5, 'banana')` writes `1.5` and exits 0
+in YAML and in JSON, and the YAML column has read that way since ADR 0006. That
+is the line between the two answers, and it is the same line this distribution
+draws everywhere else: a guard may refuse a broken document, never a working
+one.
+
+Decided in karr #85, which asked whether the asymmetry was a defect. It is not,
+and both ADRs now say so.
 
 ### What was measured
 

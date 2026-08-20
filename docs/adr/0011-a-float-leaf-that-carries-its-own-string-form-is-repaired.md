@@ -4,6 +4,9 @@
 - Date: 2026-08-20
 - Tags: float, json, wire-format, guards, interop
 - Resolves karr #78, and **replaces the refusal that 89ed194 shipped for it**
+- Answers karr #85 in "Why a contradicting float string half is repaired, where
+  an integer's is refused"; ADR 0012 states the same boundary from the integer
+  side
 - Depends on ADR 0006 (the `roundtrips`/`carrier` pair, and the
   `Math::BigFloat` carrier that writes a canonical decimal into JSON as a bare
   number), ADR 0008 (the rule that a leaf an emitter cannot write as the text
@@ -130,12 +133,68 @@ before becomes unreadable.
 `dualvar(1.5, 'banana')` now writes `1.5` in JSON. That is what the **YAML**
 carrier has done since ADR 0006 (measured, unchanged: the document holds `1.5`
 and `sops -d` exits 0), so the two handlers now agree, but the disagreement
-between the halves is resolved silently in favour of the number. For a float
-that is the established rule — the walk already owns every float's rendering,
-because no emitter here can spell the digest's decimal on its own. For an
-**integer** leaf it is not, and ADR 0012 refuses that case rather than
-extending this one; the asymmetry is deliberate and stated there. A refusal for
-a *contradicting* float string half is filed as karr #85, not folded in here.
+between the halves is resolved silently in favour of the number. For an
+**integer** leaf of the same shape the answer is the opposite — ADR 0012
+refuses it — and that asymmetry is deliberate, decided in karr #85 and argued
+in full below.
+
+### Why a contradicting float string half is repaired, where an integer's is refused (karr #85)
+
+`dualvar(1.5, 'banana')` is written as `1.5`. `dualvar(5, 'five')` is refused
+(ADR 0012). Two leaves of one shape, two opposite answers, and the question the
+ticket asked was whether that is a defect. It is not, for two reasons, and the
+second is the one that settles it.
+
+**For a float the walk already owns the rendering; for an integer it does not.**
+`value_to_bytes` writes a double as Go's `strconv.FormatFloat(v, 'f', -1, 64)` —
+the shortest decimal that round-trips, up to 17 significant digits — while every
+emitter in this distribution renders one with 15. ADR 0006 exists because of
+that gap: since then the walk decides, per float leaf, whether the emitter's own
+output parses back to the same double, and substitutes a carrier holding the
+canonical decimal where it does not. There is therefore no state in which "the
+caller's text is what gets written" for a float. Writing `1.5` for
+`dualvar(1.5, 'banana')` is that mechanism doing what it does for every float —
+not a new decision about which half the caller meant.
+
+An integer has no such gap. `strconv.Itoa` and Perl's own rendering of an IV
+agree exactly, both emitters write the canonical decimal straight from the
+number, and the walk has no reason to stand between them. So for an integer,
+picking the number **is** a new intervention, and the only thing it can be based
+on is a guess.
+
+**And the decisive one: the two refusals do not cost the same.** ADR 0012's rule
+refuses nothing that worked — every one of its fourteen newly refused documents
+failed its own MAC before it, measured, `sops -d` exit 51. A refusal here would
+refuse documents that are **correct today**, and 89ed194 is what that looks
+like: it refused this class and had to be undone, which is what this ADR did.
+
+Measured against sops 3.13.3, leaf under `_unencrypted`, one document per row:
+
+| leaf | YAML document | `sops -d` | JSON document | `sops -d` |
+|---|---|---|---|---|
+| `dualvar(1.5, '1.5')` | `1.5` | exit 0 | `1.5` | exit 0 |
+| `dualvar(1.5, 'banana')` | `1.5` | exit 0 | `1.5` | exit 0 |
+| `1.50` from a YAML parse | `1.50` | exit 0 | `1.5` | exit 0 |
+| `0.50` from a YAML parse | `0.50` | exit 0 | `0.5` | exit 0 |
+| `2.0` from a YAML parse | `2.0` | exit 0 | `2` | exit 0 |
+| any of them in an encrypted slot | `ENC[…]` | exit 0 | `ENC[…]` | exit 0 |
+
+The three middle rows are the ones that decide it: they carry no dualvar and no
+contradiction, only a spelling a YAML parser kept, and the string comparison
+that would catch `banana` catches every one of them too. Every row states the
+number the digest covers — `1.50` and `2.0` are the same double as `1.5` and
+`2`, which is the whole of ADR 0006's rule — and sops reads all of them. Nothing
+is broken, so a refusal would be a behaviour change against working files.
+
+What is lost is the string half, in the one case where it contradicts the
+number, and no `type:float` leaf could have carried it anyway: a SOPS float is a
+double, and the only text it can hold is that double's canonical decimal.
+
+The rule that comes out of the pair, and the one to apply to the next leaf class
+that raises it: **repair where the walk is already the author of the text and
+the alternative would refuse a correct document; refuse where writing anything
+at all means choosing between two things the caller might have meant.** ADR 0012
+states the same boundary from the integer side.
 
 ## Rejected alternatives
 
@@ -158,5 +217,13 @@ carrier is already the one place where a canonical decimal becomes JSON bytes;
 measurement: telling the two apart means numifying the string half, and
 `dualvar(0, 'zero')` numifies to `0`, which is exactly the value it would be
 compared against. Pattern-matching a value's text is what ADR 0002 removed.
-Filed as karr #85 so the question stays visible; the refusal that *can* be
-decided by measurement is ADR 0012's.
+Raised as karr #85 and **decided there against.** One test does not need
+numifying — comparing the PV against `value_to_bytes` as a string — but what it
+selects is every PV that is not already the canonical decimal, which is
+`banana` and `1.50` and `0.50` and `2.0` alike: a contradiction and three
+spellings that come straight out of an ordinary YAML parse and produce correct
+documents today, `sops -d` exit 0 in both formats (measured). So the choice is
+not between refusing a contradiction and repairing it; it is between repairing
+all four and refusing all four. See
+"Why a contradicting float string half is repaired, where an integer's is
+refused" above. The refusal that costs nothing is ADR 0012's.
