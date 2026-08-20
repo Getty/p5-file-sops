@@ -1,0 +1,54 @@
+---
+class: standard
+completed: 2026-08-20T07:12:28Z
+created: 2026-08-20T06:42:37Z
+id: 91
+priority: low
+started: 2026-08-20T07:12:28Z
+status: done
+tags:
+- wire
+- yaml
+- mac
+- guards
+title: The YAML foreign-resolution guard gates on the leaf's stringification, not
+  on the token the emitter writes
+updated: 2026-08-20T07:25:18Z
+---
+
+Found while fixing karr #90, not caused by it. Nothing is broken today
+-- filed so the gap is on the board rather than in one ADR paragraph.
+
+Format::YAML::_reject_foreign_resolution (ADR 0013, karr #86) gates on
+`"$leaf" =~ $GO_LOOKS_AT` before it asks _emitted_plain_scalar what the
+emitter actually writes. That stringification is a PROXY for the emitted
+token, and it is cheap on purpose: ADR 0013 chose it so an ordinary leaf
+does not pay an emit-and-reparse.
+
+For every leaf class but one the two are the same string. Perl boolean
+sentinels are the exception, and they break the proxy in both directions:
+
+  leaf   "$leaf"   token the emitter writes   guard reaches the emitter?
+  !!1    1         true                       yes, since karr #90 (digest
+                                              is now True, so the early
+                                              _go_agrees("1","True") no
+                                              longer returns)
+  !!0    (empty)   false                      NO -- the empty string does
+                                              not match $GO_LOOKS_AT, so
+                                              the guard returns before it
+                                              asks anything
+
+Measured after the karr #90 fix, sops 3.13.3: the !!0 outcome is correct
+anyway -- the emitted `false` resolves through %GO_CONSTANT to `False`,
+which is the digest, and sops -d exits 0 on all four slot/handler
+combinations. So this is a latent gap, not a live defect: no leaf class is
+known where the proxy is wrong AND the answer is.
+
+What it would cost to close: asking _emitted_plain_scalar for every leaf,
+i.e. an emit and a reparse per leaf, which is the cost ADR 0013 measured
+and declined. A narrower fix would be to let the walk hand the guard a
+hint for leaves whose written token is known to differ from their
+stringification (today: bool leaves only). Worth doing only if a second
+such class turns up.
+ERLEDIGT 2026-08-20, Commit 6e17c3e, ADR 0017. Der Guard nimmt sein Urteil jetzt aus dem TOKEN, das der Emitter schreibt; die Stringifizierung ist nur noch ein Gate und hat eine Klausel fuer die eine Leaf-Klasse bekommen, deren Token nicht ihre Stringifizierung ist (detect_type eq 'bool', dieselbe Leiter wie der Digest). GEMESSEN statt uebernommen: die vorige Lane hat 'ein emit-and-reparse pro Leaf' abgelehnt und lag beim Preis richtig -- Emitter fuer JEDES Leaf kostet 5.2 -> 17.0ms pro 1000 String-Leaves, und kauft nichts, weil ein Token, das Gos Resolver ignoriert, mit nichts uneins sein kann. Die engere Bedingung kostet 5.2 -> 6.0ms fuer solche Strings, 13.3 -> 31.1ms fuer int, und ein Boolean wird BILLIGER (24.9 -> 17.5ms). End to end 400 Leaves: 17.1 -> 19.5ms gegen 23.9ms fuer die Vollversion. Luecke A (Gate ueberspringt) war 4 von 220 Leaves, alle false-Booleans, alle heute zufaellig richtig; Luecke B (frueher Freispruch auf der Stringifizierung) ist heute 0 und war vor #90 der Defekt. Gate-Behauptung ueber 2119 Nicht-Bool-Leaves geprueft: 2 Token beginnen mit einem anderen Byte, beide UTF-8-Lead-Bytes, die nie in $GO_LOOKS_AT stehen koennen. Gegenmessung: Korpus 225 Leaves x 2 Slots x beide Handler = 900 Zeilen, vorher/nachher in EINEM Prozess, 900 gleiche Ergebnisse, 0 bewegt, sops -d exit 0 auf allen 804 geschriebenen. 0 von 900 hoeren auf zu funktionieren. #88-Falle geprueft: drei Emit-Runden desselben Baums stabil, kein Leaf umgetypt (die Emitter-Probe dumpt eine KOPIE). Neuer Test t/33; Gegenprobe: mit dem alten Guard-Body fallen 3 von 6 Subtests und 11 Assertions.
+ERLEDIGT 2026-08-20, Commit 6e17c3e, ADR 0017, t/33 neu. Die vorige Lane hatte die volle Ausrichtung mit Verweis auf ADR 0013 abgelehnt; auf Anweisung wurden die Kosten GEMESSEN statt uebernommen. Was die beiden Gates unterscheiden, 225-Leaf-Korpus mit instrumentiertem Guard, 220 erreichen reject_scalar: Luecke A (Gate ueberspringt, Token wird geprueft) 4 von 220, alle false-Booleans, heute nur durch Glueck richtig; Luecke B (frueher Accept auf der Stringifizierung waehrend das Token widerspricht) heute 0 -- war aber vor karr #90 GENAU der Defekt. Kosten voller Ausrichtung pro 1000 Leaves: String den Go ignoriert 5.2 -> 17.0ms, ENC-Slot 5.4 -> 17.3ms, int 13.3 -> 30.9ms, float 78.8 -> 96.7ms; 400-Leaf-Dokument 17.1 -> 23.9ms. ADR 0013 hatte mit dem Preis recht, und er kauft nichts: ein Token, das Gos Resolver ignoriert, kann mit nichts uneins sein. ENTSCHIEDEN: die engere Bedingung. Das Gate bleibt und bekommt eine Klausel (detect_type eq 'bool', dieselbe Leiter die der Digest nutzt), der fruehe Accept auf der Stringifizierung wird GELOESCHT, das Urteil kommt allein aus dem emittierten Token. Kosten danach: String 5.2 -> 6.0ms, Boolean wird sogar billiger 24.9 -> 17.5ms, 400 Leaves 17.1 -> 19.5ms. Die verbliebene Behauptung des Gates wurde geprueft statt geglaubt: ueber 2119 Nicht-Bool-Leaves beginnen 2 Tokens mit einem anderen Byte als die Stringifizierung, beide UTF-8-Kodierung eines Nicht-ASCII-Zeichens, und kein UTF-8-Byte kann in GO_LOOKS_AT sein. Gegenmessung: 0 von 900 (225 Leaves x 2 Slots x beide Handler, vorher/nachher in einem Prozess), 804 geschrieben / 96 abgelehnt auf beiden Seiten, sops -d exit 0 auf allen 804. #88-Falle geprueft: die Emitter-Probe dumpt eine KOPIE, kann die Flags des Aufrufers also nicht anfassen. Gegenprobe: alter Guard zurueck -> 3 von 6 subtests, 11 Assertionen rot.
