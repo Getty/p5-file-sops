@@ -1,6 +1,32 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document that has a
+    `True` or `False` STRING in an unencrypted slot now WARNS, whether or not
+    mac_only_encrypted is set. YAML::XS writes such a string as a bare `True`
+    - libyaml's resolver knows `true` and `false` and not their titlecase
+    spellings, so it does not quote them - and Go's yaml.v3 reads a BOOLEAN out
+    of that token. Both sides digest the same bytes, because sops renders a
+    boolean Title-cased, so the MAC holds and sops -d exits 0: the karr #86
+    guard compares digest bytes and was right to accept it, and nothing in this
+    library could see it. What diverges is the TYPE, and it does not survive a
+    sops write-back - measured, sops 3.13.3: `sops -d --output-type json` hands
+    the value on as `true`, and `sops rotate`, `sops set` and `sops edit` each
+    rewrite the leaf to a bare `true`, after which this library reads a
+    JSON::PP::Boolean where the caller put a string. Counter-measurement over
+    91 leaves x 2 slots x both handlers = 364 rows: 0 documents stop being
+    written, 0 bytes move, the same sops -d exit codes and the same values read
+    back - 4 rows newly warn and all 4 really do diverge. 0 false warnings: the
+    neighbours that look like this one do not warn, because measured they do
+    not diverge (Yes/No/on/off/y/n are strings to both resolvers, `~` and
+    `null` are written quoted, and an RFC3339 timestamp - a string here and a
+    time.Time to Go - comes back from a sops write-back as the identical
+    token). Not refused, unlike karr #86's class: those documents work today,
+    and a caller holding the string `True` has no spelling of it this emitter
+    writes quoted - encrypting the leaf or using JSON is advice, and advice
+    belongs in a warning. The message names the leaf's key path and never its
+    value. One check, three verdicts, not a second copy of the check. See karr
+    #92 and docs/adr/0019.
   - Documentation only, no behaviour change: four POD statements described
     what this library did before 0.003. `Saying what a value is` in
     File::SOPS gave `0.0 + $x` as the way to hand encrypt() a type:float -

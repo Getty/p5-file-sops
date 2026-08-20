@@ -139,7 +139,12 @@ subtest 'the warning never carries the value' => sub {
 ###############################################################################
 
 subtest 'a leaf the two resolvers agree on is silent' => sub {
-    for my $spelling (qw( 007 08 1e3 0755e0 True null yes off 1:30 _7 0o8
+    # `True` was in this list until karr #92 and is not a leaf the two
+    # resolvers agree on: they derive the same digest BYTES from it and a
+    # different TYPE, which this check could not see. It warns now, in this
+    # mode and without the flag alike -- t/35-string-go-reads-as-boolean.t and
+    # docs/adr/0019.
+    for my $spelling (qw( 007 08 1e3 0755e0 null yes off 1:30 _7 0o8
                           123abc 2024-invoice 5432 ), '2015-01-01T12:00:00Z') {
         my ($document, $died, $warnings) = encrypt_capturing(
             data => { v_unencrypted => yaml_leaf($spelling), s => 'x' },

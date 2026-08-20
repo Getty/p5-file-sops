@@ -288,6 +288,26 @@ else. C<007>, C<08>, C<1e3>, C<True>, C<null>, C<yes>, C<1:30> and
 C<2015-01-01T12:00:00Z> are B<not> refused: measured, the two resolvers derive
 the same digest bytes from each of them.
 
+B<A C<True> or C<False> string is warned about instead, in both MAC modes.>
+The digest bytes agree -- sops renders a boolean Title-cased, which is the same
+text this module derives from the string -- so the MAC holds and C<sops -d>
+exits 0. What differs is the B<type>: L<YAML::XS> writes the string as a bare
+C<True> because libyaml's resolver knows only C<true> and C<false>, and Go's
+yaml.v3 reads a boolean out of it. Measured, sops 3.13.3: C<sops -d> hands the
+value on as C<true>, and C<sops rotate>, C<sops set> and C<sops edit> each
+rewrite the leaf to a bare C<true>, after which this module reads a
+C<JSON::PP::Boolean> where the caller put a string. Nothing fails at any point,
+which is why it is a C<carp> and not a refusal -- refusing it would refuse a
+document sops reads. The two remedies that work are in the message: encrypt the
+leaf, or write the document as JSON, where every string is quoted. Neighbours
+that look like this one do B<not> warn, because measured they do not diverge:
+C<Yes>, C<No>, C<on>, C<off>, C<y>, C<n> and the rest of YAML 1.1's boolean
+family are strings to yaml.v3 and to libyaml alike, C<~> and C<null> are
+written quoted, and an RFC3339 timestamp -- a string here and a C<time.Time> to
+Go -- comes back from C<sops rotate> as the identical token. See
+L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>
+and karr #92.
+
 The rule does not apply to an B<encrypted> slot (an C<ENC[...]> string carries
 any spelling verbatim), to L</emit> on its own (a plaintext document has no MAC
 for a reader to disagree with), or to the C<sops> metadata section (the digest
@@ -731,13 +751,21 @@ sub _go_might_look_at {
 }
 
 # The token this emitter writes for a leaf whose SPELLING this module cannot
-# prove Go resolves the way it does -- and undef when there is nothing to say.
+# prove Go resolves the way it does, and WHICH KIND of disagreement it is --
+# and the empty list when there is nothing to say.
 #
-# ONE check, two verdicts. What a document does with the answer depends on
+#   'mac'   Go derives different BYTES from the token, so the document would
+#           state one value and its own MAC cover another.
+#   'type'  Go derives the same bytes and a different TYPE. The MAC holds and
+#           sops reads the file; what it reads is not what this module reads.
+#
+# ONE check, three verdicts. What a document does with the answer depends on
 # whether its MAC covers the leaf (refuse: the file would fail its own MAC) or
-# not (warn: the two implementations simply read different values). A second
-# copy of the check for the second verdict is the defect class this whole layer
-# keeps producing, so there is one. See docs/adr/0018.
+# not (warn: the two implementations simply read different values) -- and a
+# 'type' disagreement is warned about in BOTH modes, because the MAC covers the
+# same bytes either way and there is nothing for it to refuse. A second copy of
+# the check for a second verdict is the defect class this whole layer keeps
+# producing, so there is one. See docs/adr/0018 and docs/adr/0019.
 #
 # Runs on the encrypt path only, and never over the `sops` branch: the digest
 # does not cover the metadata, and the one leaf there that Go resolves
@@ -750,8 +778,8 @@ sub _go_might_look_at {
 sub _foreign_resolution_token {
     my ($leaf, $path, $text) = @_;
 
-    return undef if @$path && $path->[0] eq 'sops';
-    return undef unless _go_might_look_at($leaf);
+    return if @$path && $path->[0] eq 'sops';
+    return unless _go_might_look_at($leaf);
 
     # WHAT THE EMITTER WRITES is the only thing Go gets to resolve, so it is the
     # only thing asked about. The leaf's stringification decided this until
@@ -762,16 +790,66 @@ sub _foreign_resolution_token {
     # quoted or multi-line scalar is a string to every YAML reader, and undef
     # here says so. See docs/adr/0017.
     my $token = _emitted_plain_scalar($leaf);
-    return undef unless defined $token;
+    return unless defined $token;
 
     # THE one conversion -- the text the MAC digest covers. The walk hands it
     # over where it already derived one (and for a carrier that is the ORIGINAL
     # value's text, which is what the digest has); otherwise it comes from the
     # same method on the same scalar. Never a second rendering derived here.
     $text //= File::SOPS::Encrypted->value_to_bytes($leaf);
-    return undef if _go_agrees($token, $text);
+    return ($token, 'mac') unless _go_agrees($token, $text);
 
-    return $token;
+    # The bytes agree and the TYPE does not. A second axis, invisible to
+    # everything above: the digest cannot see it, so neither could this guard
+    # until karr #92. See docs/adr/0019.
+    return ($token, 'type') if _go_retypes($leaf, $token);
+
+    return;
+}
+
+# The tokens Go resolves to a boolean, derived from the one table rather than
+# listed a second time next to it.
+my %GO_BOOL_TOKEN = map { $_ => 1 }
+    grep { $GO_CONSTANT{$_} eq 'True' || $GO_CONSTANT{$_} eq 'False' }
+    keys %GO_CONSTANT;
+
+# Does Go read a BOOLEAN out of a token whose bytes already agree with the
+# digest? Only `True` and `False` can be here: libyaml quotes `true` and
+# `false` (its own resolver knows them), and `TRUE` / `FALSE` disagree on bytes
+# -- sops digests a boolean Title-cased -- so they are refused one step up.
+#
+# What that leaves is a string here and a bool to sops, in a document neither of
+# them complains about: measured, sops -d exit 0 and `true` in its output. It is
+# not stable, either -- `sops rotate`, `sops set` and `sops edit` each write the
+# resolved value back as a bare `true`, after which this module reads a boolean
+# too, so the caller's string is gone.
+#
+# Both authorities are the ones already in use: %GO_CONSTANT for what Go makes
+# of the token, detect_type for what the leaf is. A leaf that really is a
+# boolean writes `true` and is read as one on both sides -- nothing to say.
+sub _go_retypes {
+    my ($leaf, $token) = @_;
+
+    return 0 unless $GO_BOOL_TOKEN{$token};
+    return File::SOPS::Encrypted->detect_type($leaf) eq 'bool' ? 0 : 1;
+}
+
+# The MAC holds and the two implementations still read different things, so
+# there is nothing to refuse and something to say. Identical in both modes --
+# the digest covers the same bytes either way -- which is why one sub serves
+# both verdicts. See docs/adr/0019 and karr #92.
+sub _carp_foreign_retyping {
+    my ($where) = @_;
+
+    carp "$where: this leaf is a string here and a boolean to sops. libyaml "
+        . "leaves the spelling a string while Go's yaml.v3 resolves it as a "
+        . "boolean, and both digest the same bytes, so the MAC holds and sops "
+        . "reads the file (measured, sops -d exit 0). What differs is the type: "
+        . "sops hands the value on as a boolean, and any sops write-back "
+        . "(rotate, set, edit) rewrites the spelling to a bare true/false, after "
+        . "which this module reads a boolean as well. Encrypt the leaf -- an "
+        . "ENC[...] string carries the text verbatim and is a string to both -- "
+        . "or write the document as JSON, where every string is quoted";
 }
 
 # The document carries a MAC that covers this leaf, so the disagreement is with
@@ -779,8 +857,9 @@ sub _foreign_resolution_token {
 sub _reject_foreign_resolution {
     my ($leaf, $where, $path, $text) = @_;
 
-    my $token = _foreign_resolution_token($leaf, $path, $text);
+    my ($token, $kind) = _foreign_resolution_token($leaf, $path, $text);
     return unless defined $token;
+    return _carp_foreign_retyping($where) if $kind eq 'type';
 
     croak "$where: cannot write this leaf to a SOPS YAML document: its spelling "
         . "is " . _foreign_resolution_reason($token) . ". The MAC digest covers "
@@ -808,8 +887,9 @@ sub _reject_foreign_resolution {
 sub _warn_foreign_resolution {
     my ($leaf, $where, $path, $text) = @_;
 
-    my $token = _foreign_resolution_token($leaf, $path, $text);
+    my ($token, $kind) = _foreign_resolution_token($leaf, $path, $text);
     return unless defined $token;
+    return _carp_foreign_retyping($where) if $kind eq 'type';
 
     carp "$where: this leaf's spelling is " . _foreign_resolution_reason($token)
         . ", so sops resolves a different value from the one this module reads "
@@ -911,7 +991,10 @@ it on with one of the two arguments this method takes beyond the tree --
 C<< mac_covered => 1 >> to refuse such a leaf, or
 C<< warn_foreign_resolution => 1 >> to warn about it, which is what a
 C<mac_only_encrypted> document gets. They install the same check and differ only
-in the verdict.
+in the verdict -- and B<either> of them warns about a leaf whose spelling Go
+resolves to a boolean where this module holds a string (C<True>, C<False>),
+because there the digest bytes agree and there is nothing for the first one to
+refuse. See L</serialize>.
 
 L</serialize> is this method plus the metadata section, so both go through the
 same emitter options rather than two copies of them. Those options are not

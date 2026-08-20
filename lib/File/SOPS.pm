@@ -563,6 +563,16 @@ such leaf, naming its key path and never its value; without the option the same
 leaf is refused outright, since the document would fail its own MAC. See
 L<File::SOPS::Format::YAML/serialize>.
 
+One YAML divergence is warned about B<whatever> C<mac_only_encrypted> is set
+to, because the MAC cannot catch it either way: a C<True> or C<False> B<string>
+in an unencrypted slot is written as a bare C<True>, which Go's yaml.v3 resolves
+as a B<boolean> while this module keeps a string. Both sides digest the same
+bytes, so the MAC holds and C<sops -d> exits 0 -- but sops hands the value on as
+a boolean, and any sops write-back (C<rotate>, C<set>, C<edit>) rewrites the
+leaf to a bare C<true>, after which this module reads a boolean too. Encrypting
+the leaf or using the JSON format avoids it; both are measured. See
+L<File::SOPS::Format::YAML/serialize>.
+
 =head3 Choosing what gets encrypted
 
 C<unencrypted_suffix>, C<encrypted_suffix>, C<unencrypted_regex> and
