@@ -504,10 +504,26 @@ sub _go_int {
 # comparison of the scalar: `$nv == 0` sets the public IOK on an integral NV and
 # takes the sign off -0.0 with it, which is ADR 0002's contamination in the one
 # place that must not have it.
+#
+# The copy is pack/unpack for the same reason, and this one was learned twice.
+# It was `value_to_bytes($p * 1.0)` until karr #89, and Perl's arithmetic settles
+# a token like `-0.0e0` on its INTEGER path: the model answered 0, this module
+# answered 0, the guard saw agreement, and a document sops -d rejects with exit
+# 51 was written silently. A model that shares a conversion with the code it
+# checks can only catch the cases where the two happen to differ. Measured, the
+# same token scalar three times in one process:
+#
+#   $p * 1.0    0 | 0 | 0        0 + $p     0 | 0 | 0
+#   $p * 1      0 | 0 | 0        $p - 0.0   0 | 0 | 0
+#   unpack('d', pack('d', $p))   -0 | -0 | -0
+#
+# `-0.0` WITHOUT an exponent survives `* 1.0` as an NV, which is why the guard
+# was right for it and why this gap outlived ADR 0013. See ADR 0015 and the
+# karr #89 amendment in ADR 0013.
 sub _go_float {
     my ($p) = @_;
 
-    my $bytes = File::SOPS::Encrypted->value_to_bytes($p * 1.0);
+    my $bytes = File::SOPS::Encrypted->value_to_bytes(unpack('d', pack('d', $p)));
     return undef if $bytes =~ /\A[-+]Inf\z/;   # Go: ErrRange, so not a float to it
     return $bytes;
 }
@@ -749,7 +765,7 @@ sub _float_roundtrips {
 #   !!float -0  sops -d exit 51                self-MAC FAIL
 #   -0.0      sops -d exit 0, reads back -0    self-MAC OK     <- this
 #   -0.       sops -d exit 0                   self-MAC OK
-#   -0.0e0    sops -d exit 0                   self-MAC FAIL (YAML::XS differs)
+#   -0.0e0    sops -d exit 0                   self-MAC OK     <- karr #89
 #
 # sops cannot write this value either: `sops -e` on a plaintext `-0.0` emits
 # `-0` and then rejects its own file with exit 51, in YAML and in JSON alike.

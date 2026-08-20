@@ -490,6 +490,10 @@ C<true>/C<false> loaded by L<YAML::XS> or L<JSON::MaybeXS>) is C<bool>
 
 =item * a scalar Perl holds as a floating point number is C<float>
 
+=item * a B<negative zero> is C<float>, even where Perl also holds an integer
+for it -- the one place a scalar's two numeric halves contradict each other and
+the integer half is the wrong one. See below.
+
 =item * everything else, including every string, is C<str>
 
 =back
@@ -509,6 +513,23 @@ Note that Perl marks a scalar as numeric B<in place> the first time it is used
 in numeric context, so C<if ($cfg-E<gt>{port} E<gt> 1024)> before encrypting
 turns C<'8080'> into an C<int>. See
 L<docs/adr/0002|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0002-value-type-comes-from-the-scalar-not-from-a-pattern.md>.
+
+A B<negative zero> is the one exception to reading the integer flag first, and
+it exists because that in-place marking is not harmless for this value. Perl
+caches an integer on a float whenever the cast round-trips, and for C<-0.0> it
+decides the cast round-trips while the B<sign does not survive it>: the cached
+integer is C<0>, which is a different number on the wire (C<0> against C<-0>)
+and a different MAC digest. So a scalar publishing both halves is asked which
+half it is, and for this one value the answer is the float.
+
+The route in is ordinary code, in both directions. C<YAML::XS> caches that
+integer for an integral float written in B<exponent> notation, so C<-0.0e0>,
+C<-0e0> and C<-0.000e2> arrive here carrying it where C<-0.0> does not; and any
+C<$v E<gt> 1>, C<$v == 0> or C<int($v)> on a caller's own C<-0.0> sets it
+before C<encrypt> ever sees the tree. Until 0.003 that turned the value into a
+C<0> in the document -- and for the YAML spellings into a file C<sops -d>
+rejected with C<MAC mismatch>. See karr #89 and
+L<docs/adr/0015|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0015-a-negative-zero-is-a-float-even-when-perl-cached-an-integer-on-it.md>.
 
 =cut
 
@@ -1122,9 +1143,29 @@ identical text from its numeric half.
 # \$_[0] aliases the caller's scalar instead of copying it. Copying preserves
 # the flags too, but the alias makes that independent of how Perl chooses to
 # implement assignment.
+#
+# The one place the public IOK is not taken at face value: Perl caches an IV on
+# an NV whenever `(NV)(IV)nv == nv`, and for a NEGATIVE ZERO that test passes
+# while the sign does not survive the cast -- the IV 0 is a different value from
+# the NV -0.0, and the wire has a spelling for each. So a scalar publishing both
+# halves is asked which half is the value, not which flag came first. This is
+# still the SV deciding (ADR 0002): the NV is read only where it is already
+# public, never derived from the text and never numified into existence.
+#
+# YAML::XS is where such a scalar comes from in practice -- it caches the IV for
+# an integral float in EXPONENT notation, so `-0.0e0` arrives IOK+NOK where
+# `-0.0` arrives NOK alone. karr #89, docs/adr/0015.
+my $NEGATIVE_ZERO_BITS = pack('d', -0.0);
+
 sub _sv_kind {
-    my $flags = B::svref_2object(\$_[0])->FLAGS;
-    return 'int'   if $flags & B::SVf_IOK();
+    my $sv    = B::svref_2object(\$_[0]);
+    my $flags = $sv->FLAGS;
+    if ($flags & B::SVf_IOK()) {
+        return 'float'
+            if ($flags & B::SVf_NOK())
+            && pack('d', $sv->NV) eq $NEGATIVE_ZERO_BITS;
+        return 'int';
+    }
     return 'float' if $flags & B::SVf_NOK();
     return 'str';
 }

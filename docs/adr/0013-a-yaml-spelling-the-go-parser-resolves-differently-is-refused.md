@@ -183,6 +183,25 @@ decide, it says so and the leaf is refused: `9223372036854775808` and
 refuses to write at all (`Error walking tree: Cannot walk value, unknown type:
 uint64`, exit 23) — measured, so refusing is not a guess.
 
+**Amended by karr #89 — the model shared a conversion with the code it was
+checking, and lost the same sign.** `_go_float` derived its float with
+`value_to_bytes($p * 1.0)`, the arithmetic copy ADR 0014 measured and rejected
+one level down. For a negative zero **written with an exponent** — `-0.0e0`,
+`-0e0`, `-0.0E+0`, `-0.000e2`, `-0.0e-5` and five more spellings — that
+multiplication takes Perl's integer path and returns a plain `0`, so the model
+answered `0`, this library answered `0`, the guard saw agreement, and a document
+`sops -d` rejects with exit 51 was written silently. Without an exponent `-0.0`
+survives `* 1.0` as an `NV`, which is why the guard was right for it and why the
+gap outlived this ADR. The conversion is now `unpack('d', pack('d', $p))`, and
+the underlying mis-typing is ADR 0015.
+
+The general point is worth more than the fix: a model of a foreign reader that
+shares a conversion with the code it checks can only catch the cases where the
+two happen to differ. **It agreed with our own wrong answer**, which is this
+distribution's signature failure mode wearing the guard against it. The corpus
+below is what verifies the model, and it contained no negative zero with an
+exponent.
+
 ### What was measured
 
 A 648-row emitter corpus — 162 leaves × 2 slots (`x_unencrypted`, `x`) × both
