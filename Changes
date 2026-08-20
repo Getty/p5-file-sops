@@ -1,6 +1,20 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Pin decrypt_file's handling of an ENCRYPTED float against the sops
+    binary. No code change: the ADR 0006 emitter fix (karr #58) already made
+    both formats write the canonical decimal, so a document sops wrote with
+    ENC[...,type:float] 0.30000000000000004 now comes back out of
+    decrypt_file with all 17 digits where it used to lose them silently
+    (measured: 0.3, both formats, nothing failing). The value simply came out
+    wrong, so anyone doing decrypt_file, hand-edit, encrypt_file had changed
+    the number without being told. The relapse this guards against is a
+    future emitter rebuild, which is why the assertion is on the literal
+    digits on the wire rather than on a round-trip through our own reader -
+    an emitter that writes 0.3 and a reader that parses 0.3 agree with each
+    other. t/24-float-precision.t section 11. See karr #61 (first half; the
+    second half, extract() returning an NV whose stringification still loses
+    the digits, remains open).
   - Fix an encrypted negative zero losing its sign on the READ path. A
     type:float plaintext was converted with `$data + 0.0`, which is positive
     zero twice over: Perl settles the text -0 as an INTEGER zero, which has no

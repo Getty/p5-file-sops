@@ -907,4 +907,90 @@ subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub
     }
 };
 
+###############################################################################
+# 11. karr #61, first half: decrypt_file on an ENCRYPTED float. The ticket
+#     measured a document the real sops wrote, carrying
+#     ENC[...,type:float] 0.30000000000000004:
+#
+#       sops -d                  ->  ratio: 0.30000000000000004
+#       File::SOPS decrypt_file  ->  ratio: 0.3
+#
+#     Nothing failed. decrypt_value converts the authenticated plaintext with
+#     + 0.0, producing a bare NV with no PV, and both plaintext emitters then
+#     rendered that NV at 15 significant digits. Anyone doing decrypt_file,
+#     hand-edit, encrypt_file had silently changed the number.
+#
+#     ADR 0006 fixed this as a side effect -- decrypt_file goes through the
+#     same emit() as everything else -- so this section adds no code, only the
+#     net. The point of the ticket is the SILENT relapse at the next emitter
+#     rebuild, so the assertion is on the literal digits on the wire, not on a
+#     round-trip: a round-trip through our own reader would agree with a
+#     15-digit emitter about what it had written.
+#
+#     Section 8 is the neighbouring case and deliberately not this one: it
+#     uses an UNENCRYPTED leaf, which is a different path (the value is the
+#     parser's, never the cipher's). karr #61 is specifically about the
+#     encrypted one, which #58 excluded from its own scope.
+#
+#     The SECOND half of karr #61 -- extract() handing back an NV whose
+#     stringification loses the digits, where `sops -d --extract` prints
+#     0.30000000000000004 -- is an API decision and is still open. Measured
+#     again here, still 0.3 in both formats. Not asserted, because it is not
+#     settled and a test would pin the defect.
+###############################################################################
+
+for my $format (qw(yaml json)) {
+    subtest "[$format] decrypt_file keeps an ENCRYPTED float's digits (karr #61)" => sub {
+        my $plain = scratch_file($format);
+        write_file($plain, $format eq 'json'
+            ? qq({\n  "ratio": $full_precision_text,\n  "other": "hello"\n}\n)
+            :  "ratio: $full_precision_text\nother: hello\n");
+
+        my $enc_file = scratch_file($format);
+        system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+        is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+        # The whole point of this section: the leaf has to be ENCRYPTED, or
+        # this is section 8 again on a different path. sops encrypts every
+        # value whose key does not carry the _unencrypted suffix.
+        my $fixture = read_file($enc_file);
+        like($fixture, qr/ratio"?\s*:\s*"?ENC\[AES256_GCM,.*type:float\]/,
+            'and the float leaf is ENC[...,type:float], not a plain value')
+            or diag("fixture:\n$fixture");
+
+        my $sops_out = `$sops_bin -d $enc_file 2>&1`;
+        is($? >> 8, 0, 'sops -d on the fixture exits 0') or diag("sops: $sops_out");
+        like($sops_out, qr/\Q$full_precision_text\E/,
+            'sops -d prints all 17 digits, which is the number to match');
+
+        my $our_output = scratch_file($format);
+        File::SOPS->decrypt_file(
+            input      => $enc_file,
+            output     => $our_output,
+            identities => [$secret],
+            format     => $format,
+        );
+        my $our_content = read_file($our_output);
+
+        # The assertion that can fail when a future emitter goes back to 15
+        # significant digits. A decoded comparison alone cannot: an emitter
+        # that writes 0.3 and a reader that parses 0.3 agree with each other.
+        like($our_content, qr/\Q$full_precision_text\E/,
+            'decrypt_file writes the same literal digits sops -d does')
+            or diag("our decrypt_file output:\n$our_content");
+        unlike($our_content, qr/ratio"?\s*:\s*0\.3(?![0-9])/,
+            'and specifically not the 15-digit truncation 0.3 the ticket measured');
+
+        # ... and the number really is the one sops read, not merely a long
+        # literal that happens to be present.
+        my $ours = $format eq 'json' ? decode_json($our_content) : Load($our_content);
+        my $theirs = $format eq 'json' ? decode_json($sops_out)  : Load($sops_out);
+        cmp_ok($ours->{ratio}, '==', $theirs->{ratio},
+            'decrypt_file and sops -d decode to the same double');
+        cmp_ok($ours->{ratio}, '==', $full_precision_value,
+            'and that double is 0.1+0.2, not its 15-digit truncation');
+        is($ours->{other}, 'hello', 'the neighbouring string leaf came through too');
+    };
+}
+
 done_testing;
