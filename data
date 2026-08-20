@@ -1,0 +1,108 @@
+---
+class: standard
+completed: 2026-08-20T00:49:18Z
+created: 2026-08-09T15:30:22Z
+depends_on:
+- 69
+id: 61
+priority: high
+started: 2026-08-20T00:43:46Z
+status: done
+tags:
+- wire
+- api
+- json
+- yaml
+- interop
+title: decrypt_file and extract lose float precision, both formats, encrypted values
+  too
+updated: 2026-08-20T00:49:18Z
+---
+
+Found while measuring karr #58 (sops 3.13.3, perl 5.36.0). Distinct from #58: this is not a MAC failure, it is silent data loss on the READ path, and it hits ENCRYPTED floats, which #58 correctly excludes from its own scope.
+
+decrypt_value converts the authenticated plaintext with +0.0, producing a bare NV with no PV. Both plaintext emitters then render that NV at 15 significant digits. Measured on a document the real sops wrote, with an ENCRYPTED (ENC[...,type:float]) value 0.30000000000000004:
+
+  sops -d                    -> ratio: 0.30000000000000004
+  File::SOPS decrypt_file    -> ratio: 0.3
+  sops -d --extract          -> 0.30000000000000004
+  File::SOPS extract         -> 0.3
+
+Both formats. The encrypted document itself is fine -- the ciphertext plaintext IS the canonical decimal and the MAC agrees -- so nothing fails; the value simply comes out wrong. Anyone doing decrypt_file, hand-edit, encrypt_file has silently changed the number.
+
+decrypt_file is fixed for free by the emitter change under discussion in #58 (measured: the #58 option (a) prototype makes decrypt_file output 0.30000000000000004 in both formats). extract is NOT: it returns the Perl scalar, and any stringification of that NV by the caller loses the digits. Deciding what extract should return -- an NV, or the canonical decimal as a string like sops prints -- is API-lane policy.
+
+Blocked on #58 landing for the decrypt_file half. The extract half is independent.
+PLAN (Orchestrator, 2026-08-16) -- zwei Haelften. Die erste ist inzwischen erledigt und braucht nur noch ein Netz.
+
+HAELFTE 1 -- decrypt_file. Nachgemessen 2026-08-16 in HEAD, beide Emitter,
+Eingabe 0.1+0.2 als NV:
+
+  File::SOPS::Format::YAML->serialize(...)  ->  0.30000000000000004
+  File::SOPS::Format::JSON->serialize(...)  ->  0.30000000000000004
+
+Das Ticket sagte "fixed for free by #58". #58 ist gelandet, und der Emitter
+schreibt jetzt die kanonische Dezimalzahl. Diese Haelfte braucht also KEINEN
+Code mehr, sondern einen TEST, der sie festnagelt: ein von sops geschriebenes
+Dokument mit ENC[...,type:float] 0.30000000000000004, durch decrypt_file, und
+die Ziffern vergleichen. Ohne diesen Test faellt es beim naechsten
+Emitter-Umbau wieder um -- und genau dieser stille Rueckfall IST der Fehler,
+den das Ticket beschreibt.
+Test-Writer-Lane. Direkt machbar, sobald #69 erledigt ist. Getrennt committen.
+
+HAELFTE 2 -- extract. Offen, und es ist eine API-Entscheidung, kein Bugfix.
+extract gibt den Perl-Skalar zurueck; jede Stringifizierung durch den Aufrufer
+verliert die Ziffern, weil ein NV ohne PV ueber %.15g geht. Drei Optionen:
+
+  (a) Weiter das NV zurueckgeben und im POD sagen, dass der Aufrufer
+      sprintf("%.17g") braucht. Ehrlich, aber die Falle bleibt stehen.
+  (b) Den kanonischen Dezimalstring zurueckgeben, wie sops -d --extract ihn
+      DRUCKT. Deckt sich mit dem Referenzverhalten, aendert aber den
+      Rueckgabetyp fuer jeden float -- BEHAVIOUR CHANGE.
+  (c) Ein dualvar: numerisch das NV, als String die kanonische Dezimalzahl.
+      Loest beides, ist aber Perl-Magie im Rueckgabewert einer oeffentlichen
+      API, und der Aufrufer sieht ihr nicht an, dass sie da ist.
+
+Empfehlung: (c) messen, (b) als Rueckfall. Begruendung: sops druckt einen
+String, weil sein extract auf ein Terminal schreibt -- unsere extract gibt an
+Perl-Code zurueck, und der will meistens rechnen. value_to_bytes liefert den
+kanonischen Text bereits, die Mechanik ist also vorhanden.
+
+API-Lane entscheidet, Wire-Lane baut falls dualvar. ADR faellig, weil es die
+dokumentierte Rueckgabe einer oeffentlichen Methode aendert.
+
+Reihenfolge ist bindend: Haelfte 1 zuerst und als eigener Commit. Sie ist ein
+Regressionsnetz und haengt an keiner Entscheidung.
+HAELFTE 1 DONE 2026-08-20 (commit 33ddc69, file-sops-wire). No code
+change was needed, as the plan predicted -- the ADR 0006 emitter fix already
+does it. Measured again first, on a document sops itself wrote with an
+ENCRYPTED ENC[...,type:float] 0.30000000000000004:
+
+  sops -d                  ratio: 0.30000000000000004
+  our decrypt_file         ratio: 0.30000000000000004   (both formats)
+
+The net is t/24-float-precision.t section 11: fixture from the binary, both
+formats, asserting the LITERAL digits on the wire plus a cross-check against
+what sops -d itself prints. Literal rather than round-trip on purpose -- an
+emitter that writes 0.3 and a reader that parses 0.3 agree with each other,
+which is exactly the silent relapse this ticket is about. Counter-proof:
+with canonical_float_tree stubbed to return the tree untouched, t/24 fails
+18 of 26 subtests and both new subtests fail assertions 5-8.
+
+HAELFTE 2 (extract) UNTOUCHED and still open. Re-measured today, unchanged:
+
+  sops -d --extract '\''["ratio"]'\''   ->  0.30000000000000004
+  File::SOPS extract               ->  0.3           (both formats)
+
+Not asserted anywhere, deliberately: a test would pin the defect. API lane
+decides between (a)/(b)/(c) per the plan.
+HAELFTE 2 DONE 2026-08-20 (commit f9269d3, file-sops-wire). Option (c) dualvar as decided, built at extract's boundary -- File::SOPS::Encrypted->canonical_float_dualvar, called on the single leaf extract returns. ADR 0010.
+
+Premise re-measured first and CONFIRMED: sops -d --extract 0.30000000000000004 vs our 0.3, both formats, on a document sops wrote.
+
+One refinement to the plan's wording, not a false premise: 'kanonische Dezimalzahl' and 'what sops prints' are the same text only in the middle of the range. value_to_bytes is FormatFloat 'f' (always positional), sops --extract prints the YAML/JSON serialization, which uses an exponent at the extremes -- measured 1e20 -> we say 100000000000000000000, sops says 1e+20; 1e-7 -> 0.0000001 vs 1e-07. Same double, no digits lost either way. Took the canonical decimal as decided; matching sops's spelling would need a SECOND float formatter, which is the duplication this lane exists to prevent. Open as #79 if the maintainer prefers the printed form.
+
+The plan's 'one mechanism with #73' hypothesis was measured and is FALSE in both directions: a dualvar built on the pre-#73 NV inherits IOK and is still an int to detect_type, and a dualvar in the decrypt tree reaches the emitters (Cpanel::JSON::XS quotes it -- an unencrypted JSON float becomes a string, sops -d exit 0; YAML::XS writes its PV, so 1e300 becomes 301 digits). Hence leaf-only, and #73 fixed separately first.
+
+Net: t/24-float-precision.t section 13 (both formats against the binary, plus the boundary and the non-finite cases). Counter-proof with the call backed out: 3 of 34 subtests, 5 assertions. Drift found while measuring: #78, #79, #80.
+BEIDE HAELFTEN ERLEDIGT 2026-08-20. HAELFTE 1: Commit 7b39e76, kein Code noetig (seit #58 liefert decrypt_file alle 17 Ziffern), Sektion 11 in t/24-float-precision.t nagelt es fest -- Fixture vom Binary, beide Formate, Assertion auf die LITERALEN Ziffern auf der Leitung plus Gegenprobe gegen das was sops -d selbst druckt. Literal statt Round-Trip, weil ein Emitter der 0.3 schreibt und ein Reader der 0.3 liest sich einig waeren, und genau dieser stille Rueckfall IST der Ticketinhalt. Gegenprobe: canonical_float_tree auf 'return tree' gestubbt -> 18 von 26 subtests rot. HAELFTE 2: Commit f9269d3, ADR 0010, Maintainer-Entscheidung dualvar umgesetzt. Neue Klassenmethode Encrypted->canonical_float_dualvar, von extract auf dem einen zurueckgegebenen Leaf gerufen; die String-Haelfte kommt aus value_to_bytes und nirgendwo sonst; Refs, undef, Nicht-Floats und nicht-endliche Floats kommen unberuehrt zurueck. Der dualvar sitzt AUSDRUECKLICH an extracts Grenze und NICHT auf dem Read-Pfad -- dort bewegt er Emitter-Bytes (JSON schreibt ihn quoted), abgelegt als #78. Gemessen: unser extract des verschluesselten ratio druckt jetzt 0.30000000000000004, byte-identisch zu sops -d --extract; vorher 0.3. Gegenprobe: Aufruf ausgebaut -> 3 von 34 subtests, 5 Assertionen rot. VERFEINERUNG statt falscher Praemisse, vom Agenten gemeldet und als #79 abgelegt: 'die kanonische Dezimalzahl' und 'was sops druckt' sind nur in der Mitte des Wertebereichs derselbe Text -- bei 1e20 schreiben wir 100000000000000000000 wo sops 1e+20 druckt, bei 1e-7 schreiben wir 0.0000001 wo sops 1e-07 druckt. Gleicher Double, keine Ziffer verloren. Gebaut wurde was der Maintainer benannt hat; die Alternative braeuchte einen ZWEITEN Float-Formatierer (Gos %g neben unserem %f), also genau die Duplikation gegen die diese Lane existiert. Verifiziert 674/674 PASS, t/04 31/31 AUSGEFUEHRT.
