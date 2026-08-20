@@ -17,14 +17,23 @@ Revision history for File-SOPS
     stays a str, told apart by the decoder's own type map and never by a
     pattern match on the text, as is every float, boolean, null and reference.
     A document this library has already written carries the value quoted, so
-    it keeps verifying and reading back exactly as before. Two consequences:
-    the value a caller gets back is now numeric as well as printable, and its
-    digits are re-derived from the double, so a literal that is not its own
-    double's canonical decimal (99999999999999999999, which no `sops -e`
-    writes - sops rounds it to 100000000000000000000 itself) rounds the same
-    way here; and a literal that overflows a double now dies where it used to
-    be written as a string, which is what sops does with the same document at
-    unmarshal time. See karr #63 and docs/adr/0020.
+    it keeps verifying and reading back exactly as before. What an existing
+    caller gets back does change, and in three places. decrypt hands out a
+    NUMBER where it handed out a string: in an unencrypted slot that number
+    still prints its digits, but in an ENCRYPTED one it is the bare NV every
+    decrypted float is, so "$value" prints 1e+20 where it printed
+    100000000000000000000 - extract is the method that prints all of them,
+    in either slot, and it wraps this leaf the way it has wrapped every other
+    float since 0.003. decrypt_file writes the leaf into the plaintext as a
+    bare number rather than as a quoted string. And the digits are re-derived
+    from the double, so a literal that is not its own double's canonical
+    decimal (99999999999999999999, which no `sops -e` writes - sops rounds it
+    to 100000000000000000000 itself) rounds the same way here. Finally, a
+    literal that overflows a double now dies on every path that WRITES it -
+    encrypt, encrypt_file, encrypt_in_place, rotate, edit - where it used to
+    be written as a string; sops refuses the same document itself, at
+    unmarshal time, and the read paths still hand the leaf back. See karr #63
+    and docs/adr/0020.
   - Documentation only, no behaviour change: extract's POD said where its
     float dualvar's spelling differs from what `sops -d --extract` prints, and
     said it with one example and no boundary - so a caller could not tell

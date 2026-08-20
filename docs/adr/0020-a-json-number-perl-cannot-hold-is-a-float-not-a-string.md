@@ -299,7 +299,10 @@ directions, against `f286764^`.
 | sops-written JSON, wide number in an unencrypted slot, rotated | quoted string | bare number, byte-identical to sops |
 | the same in an **encrypted** slot | `type:str` | `type:float`, matching sops's own token |
 | **quoted** `"100000000000000000000"` in any slot | `type:str` | unchanged, `type:str` |
-| the value from `decrypt` / `extract` | a string | a dualvar: numeric, and printing it still gives the digits |
+| the value from `decrypt`, **unencrypted** slot | a string | a dualvar: numeric, and printing it still gives the digits |
+| the value from `decrypt`, **encrypted** slot | a string | the bare NV every decrypted float is — `"$value"` prints **`1e+20`**, not the digits |
+| the value from `extract`, either slot | a string | a dualvar, printing all its digits (ADR 0010's shape) |
+| the plaintext `decrypt_file` **writes** | a quoted JSON string | a bare number (`1e+20` from an encrypted slot) |
 | a bare integer literal that overflows a double (400 digits) | written as a string | **croak** — `assert_representable`'s non-finite guard |
 | YAML, any of the above | unchanged | unchanged |
 
@@ -342,10 +345,17 @@ They touch the same three files and must run one after another.
    `canonical_float_tree` all take the new leaf correctly as measured above, and
    `Encrypted`'s POD should name where such a leaf now comes from. Only if a
    measurement here disagrees with the table above does this lane touch code.
-3. **`file-sops-api`** — `decrypt`, `decrypt_file` and `extract` now hand a
-   caller a dualvar for this leaf class where they handed a string. That is the
-   ADR 0010 shape and the POD's character-encoding and return-value sections
-   need one paragraph. This lane also owns whether the overflow croak is
+3. **`file-sops-api`** — `decrypt`, `decrypt_file` and `extract` hand a caller
+   something different for this leaf class than they used to. This sentence
+   first said "a dualvar" for all three; measured during implementation, that
+   is true only of `extract` (ADR 0010's shape, both slots) and of `decrypt` in
+   an **unencrypted** slot. In an **encrypted** slot `decrypt` gives the bare
+   NV every decrypted float is — `canonical_float_dualvar`'s own POD says so:
+   `decrypt` and `decrypt_file` never call it — so `"$value"` prints `1e+20`
+   where the string printed the digits. That is the most visible caller
+   consequence of this decision and the corrected table above is where it
+   belongs. `decrypt_file` returns no value at all; what moved is the plaintext
+   document it writes. This lane also owns whether the overflow croak is
    documented as a refusal alongside the `int64` one.
 4. **`file-sops-test-writer`** — a unit file pinning the six moved rows and the
    36 unmoved ones, and an interop section for the two end-to-end directions.
