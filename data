@@ -1,0 +1,91 @@
+---
+class: standard
+completed: 2026-08-20T05:07:24Z
+created: 2026-08-20T02:46:40Z
+id: 85
+priority: medium
+started: 2026-08-20T05:07:24Z
+status: done
+tags:
+- wire
+- float
+- json
+- yaml
+title: A float leaf whose string half CONTRADICTS its number is repaired silently
+updated: 2026-08-20T05:10:36Z
+---
+
+Found while closing karr #78 (ADR 0011) and #84 (ADR 0012), not caused by either.
+
+A float leaf carrying its own string form is now written as the NUMBER in both
+formats -- the carrier in JSON, the dualvar written bare in YAML. Where the two
+halves agree (the extract dualvar, a YAML-parsed 1.50) that is lossless and is
+the point of ADR 0011.
+
+Where they DISAGREE it silently discards the string half. Measured, sops 3.13.3,
+leaf x_unencrypted, dualvar(1.5, "banana"):
+
+  yaml  document holds 1.5   sops -d exit 0   (unchanged since ADR 0006)
+  json  document holds 1.5   sops -d exit 0   (new with ADR 0011; croaked at
+                                               89ed194, quoted string before)
+
+The document is correct either way -- the digest covers 1.5 -- so nothing
+fails; what vanishes is the half the caller may have meant. An INT leaf of the
+same shape is REFUSED (karr #84 / ADR 0012), so the two type kinds now answer
+the same question differently, deliberately and on the record: for a float the
+walk already owns the rendering, because no emitter here can spell a double`s
+canonical decimal on its own.
+
+Open question for the maintainer: should a float whose PV differs from
+value_to_bytes`s text be refused like the int case, or is the repair right
+because the number is the only thing a type:float leaf can carry? Note the
+YAML side has behaved this way since ADR 0006, so a refusal is a behaviour
+change there, not only in JSON.
+
+Not decidable by numifying the PV -- dualvar(0,"zero") numifies to 0 (that is
+the measurement that made ADR 0012 refuse rather than repair). A refusal would
+have to be an exact string comparison of the PV against value_to_bytes.
+
+Wire lane.
+Closed by f34f228, no code. Maintainer decision: keep the repair, document the
+asymmetry.
+
+The passage lives in ADR 0011, "Why a contradicting float string half is
+repaired, where an integers is refused (karr #85)", and ADR 0012 states the
+same boundary from the integer side. The two ADRs now link each other in their
+headers and in the passage, so whoever meets one rule finds the other.
+
+The argument, in two halves:
+
+1. For a float the walk already OWNS the rendering -- no emitter here can spell
+   a doubles canonical decimal on its own, which is why ADR 0006 put the walk
+   between the leaf and the emitter for every float. Writing 1.5 for
+   dualvar(1.5,banana) is that mechanism doing what it does for every float,
+   not a fresh choice between the halves. For an integer both emitters render
+   the canonical decimal from the number themselves, so overriding a callers
+   string half there is a NEW intervention with only a guess behind it.
+
+2. The decisive half: the two refusals do not cost the same. Every document
+   ADR 0012 refuses failed its own MAC before it (14 of 14, sops -d exit 51). A
+   refusal on the float side would refuse documents that are correct TODAY.
+   Measured, sops 3.13.3, leaf under _unencrypted:
+
+     dualvar(1.5,'1.5')     yaml 1.5   exit 0    json 1.5   exit 0
+     dualvar(1.5,'banana')  yaml 1.5   exit 0    json 1.5   exit 0
+     1.50 from a YAML parse yaml 1.50  exit 0    json 1.5   exit 0
+     0.50 from a YAML parse yaml 0.50  exit 0    json 0.5   exit 0
+     2.0  from a YAML parse yaml 2.0   exit 0    json 2     exit 0
+
+   and the YAML column has read that way since ADR 0006, so a refusal there is
+   a behaviour change on top of everything else.
+
+One correction this made to ADR 0011: its rejected-alternatives section said the
+case could not be decided by measurement. It can -- comparing the PV against
+value_to_bytes as a string needs no numifying, exactly as this ticket noted --
+but what that test SELECTS is every PV that is not already the canonical
+decimal, so banana, 1.50, 0.50 and 2.0 alike. The choice is between repairing
+all four and refusing all four, never between a contradiction and a spelling.
+That is now what the ADR says.
+
+No Changes entry: nothing a CPAN consumer can observe changes.
+ERLEDIGT 2026-08-20 ohne Code, Commit f34f228. Maintainer entschied 'Reparatur behalten, Asymmetrie dokumentieren'. Die Passage steht in ADR 0011 ('Why a contradicting float string half is repaired, where an integer's is refused') mit der gespiegelten Haelfte in ADR 0012; beide verlinken sich jetzt gegenseitig. Zwei Gruende: bei einem float besitzt der Walk das Rendering ohnehin (ADR 0006), 1.5 zu schreiben IST dieser Mechanismus und keine neue Entscheidung, waehrend bei einem int beide Emitter die Dezimalzahl selbst rendern und ein Eingriff dort neu waere. Entscheidend und gemessen: ADR 0012 lehnt nichts ab was funktionierte (14 von 14 vorher exit 51), eine float-Ablehnung wuerde dagegen KORREKTE Dokumente ablehnen -- dualvar(1.5,'banana'), dualvar(1.5,'1.5') und ein 1.50, 0.50 oder 2.0 aus gewoehnlichem YAML-Parse gehen alle exit 0, YAML seit ADR 0006. Nebenbei KORRIGIERT: ADR 0011 behauptete, der Fall sei 'nicht durch Messung entscheidbar'. Er ist es -- ein String-Vergleich der PV gegen value_to_bytes braucht kein Numifizieren -- aber was er auswaehlt ist JEDE PV die nicht schon die kanonische Dezimalzahl ist, also banana, 1.50, 0.50 und 2.0 gleichermassen. Die Wahl ist alle-vier-reparieren oder alle-vier-ablehnen.
