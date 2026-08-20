@@ -588,6 +588,22 @@ apart at parse time by the decoder's own type map, never by a pattern match
 on the text. See karr #63 and
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
 
+The same leaf reaches this ladder one magnitude lower, where the limit crossed
+is B<Go's> and not Perl's. A bare JSON literal in C<[2**63 .. 2**64-1]> is a
+C<UV> to Perl and a C<float64> to Go, so C<sops -e> normalises it before this
+library ever sees the file -- C<9223372036854775808> is written back as
+C<9223372036854776000> -- and marks it C<type:float> in an encrypted slot and
+an unencrypted one alike (measured, sops 3.13.3, twelve literals across the
+window, both slots). L<File::SOPS::Format::JSON> hands such a literal over as
+the same dualvar, so the C<float> rung answers it and L</assert_representable>'s
+C<int64> refusal -- which used to make L<File::SOPS/rotate> croak on a document
+sops itself had written -- is not reached. The window is JSON's alone: C<yaml.v3>
+resolves those digits as a C<uint64> sops cannot walk at all, so no such YAML
+document exists to read, and one built by hand is still refused. A caller's own
+Perl C<UV> in the window is still refused as well -- no parser has spoken for
+it, so calling it a float would be this library guessing. See karr #101 and
+L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>.
+
 Perl has no boolean B<type>, but since 5.36 it has a boolean B<SV>, and that
 is what C<type:bool> reads on a plain scalar. C<!!1>, C<!!0>, C<$x E<gt> 3>,
 C<'a' eq 'a'>, C<defined $x> and C<builtin::true> all produce it, the mark
@@ -646,6 +662,63 @@ sub _decimal_fits_int64 {
     return 0 if length($digits) == length($limit) && $digits gt $limit;
     return 1;
 }
+
+# The same boundary asked of a scalar Perl already holds as a NUMBER, for a
+# format handler that has read the SV's flags itself and needs the limit
+# without spelling it a second time (karr #101, ADR 0021). One definition of
+# int64 in this distribution, here, is the point of the method.
+#
+# The unpacking COPIES, and that is load-bearing rather than house style: a
+# comparison against $_[1] would numify the CALLER's scalar in place, and
+# measured, that sets the PUBLIC SVf_IOK -- `'5432' > $INT64_MAX` leaves
+# detect_type calling '5432' an int. That is karr #32's mechanism and ADR
+# 0002's rule; the copy is what keeps this predicate from retyping the
+# document it is asked about. Do not "optimise" it away.
+#
+# The argument has to be an INTEGER, which is the caller's cheap first gate
+# and never this method's business (asking would be a second type ladder).
+# Neither other kind is answered correctly, and both for the same rounding:
+# an NV of exactly 2**63 says yes, because the comparison promotes the IV
+# limit to a double and 2**63-1 becomes 2**63; and a decimal STRING is the
+# trap _decimal_fits_int64 exists for, from the other side. Text goes there.
+sub integer_fits_int64 {
+    my ($class, $value) = @_;
+    return $value >= $INT64_MIN && $value <= $INT64_MAX ? 1 : 0;
+}
+
+=method integer_fits_int64
+
+    File::SOPS::Encrypted->integer_fits_int64($value)   # 1 or 0
+
+Class method. True where C<$value> is inside Go's C<int64> range --
+C<-9223372036854775808 .. 9223372036854775807> -- which is the only range the
+SOPS C<int> type covers, and false where Perl holds an integer Go cannot.
+Perl's integers are unsigned-capable and reach C<2**64-1>, so that window is
+real: see L</assert_representable> for what this distribution refuses to
+B<write> there, and L<File::SOPS/Integers are Go's int64, and Perl's are
+wider> for why.
+
+It exists so that a format handler can ask the question without spelling the
+boundary a second time. A JSON document can carry a bare integer literal in
+that window -- C<sops -e> writes one itself, having normalised it through the
+C<float64> Go reads it as -- and telling that leaf apart from an ordinary
+C<port: 5432> is a decision the JSON parser makes per leaf. Two copies of a
+constant are this distribution's signature defect: when they drift they are
+wrong B<together>, so the wire bytes stay self-consistent and only the
+reference implementation disagrees.
+
+B<C<$value> must be a scalar Perl holds as an integer> -- one L</detect_type>
+calls an C<int>. That is not checked here, deliberately: the caller's own
+flag test is the cheap fact and has to come first, and a second type ladder
+inside this method is exactly what ADR 0002 removed. Neither other kind is
+answered correctly. A B<float> of exactly C<2**63> answers true, because the
+comparison promotes C<2**63-1> to a double and the two become the same
+number. A decimal B<string> is worse -- C<'-9223372036854775809'> numifies to
+exactly C<-2**63> and answers true to a value Go refuses -- which is why the
+text form of this test is a separate, private one that reads digits and never
+numifies.
+
+=cut
 
 sub assert_representable {
     my ($class, $value) = @_;
