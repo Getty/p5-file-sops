@@ -1,0 +1,42 @@
+---
+class: standard
+completed: 2026-08-20T08:15:07Z
+created: 2026-08-20T08:00:04Z
+id: 98
+priority: low
+started: 2026-08-20T08:15:07Z
+status: done
+tags:
+- testing
+- pod
+- release
+title: xt/author-pod-syntax.t cannot see a dead POD link, only podchecker over the
+  built dist can
+updated: 2026-08-20T08:15:22Z
+---
+
+Gefunden 2026-08-20 beim Abarbeiten von #93-#97.
+
+Zwei tote POD-Links standen im Baum, ohne dass irgendein Test sie sah:
+
+  L</_deserialize_value>   -- private sub, es gibt keinen solchen Abschnitt
+  L</use File::SOPS;>      -- gar kein Link, sondern C<> gemeint
+
+Beide sind BEHOBEN (Commit 576a903). Was bleibt, ist die Luecke, die sie
+durchgelassen hat: xt/author-pod-syntax.t nutzt Test::Pod, und das prueft
+POD-SYNTAX, nicht die Aufloesung von L<>-Zielen. Die Fehler entstehen
+ausserdem erst in der GEWOBENEN POD, also nach Pod::Weaver, und damit nur im
+gebauten Dist -- ein Lauf gegen lib/ wuerde sie auch dann nicht finden, wenn
+er Links pruefte.
+
+Nachgewiesen: podchecker ueber die sechs gewobenen Module hatte vor 576a903
+GENAU diese zwei Fehler und danach null.
+
+Zu tun waere ein Autor-Test, der nach dzil build podchecker (oder
+Pod::Checker) ueber die gewobenen Module laufen laesst und bei Fehlern rot
+wird. Nicht trivial, weil er einen Build voraussetzt -- deshalb low und
+deshalb als eigenes Ticket statt als Nacharbeit.
+
+Bis dahin gilt: eine POD-Aussage ist in dieser Distribution nur so gut wie
+das letzte Mal, dass jemand podchecker ueber den BAU laufen liess.
+ERLEDIGT 2026-08-20, Commit c39fffe. Autor-Test xt/author/pod-links.t mit Pod::Checker; Dateiauswahl ueber Test::Pod::all_pod_files. Kein Build noetig: [ExtraTests] kommt mit @Basic, also befoerdert der Build xt/author/ selbst nach t/author-*.t, und derselbe Build webt die POD die der Test liest. Ein Lauf gegen lib/ OHNE Weaving waere unbrauchbar -- =method und =attr sind Weaver-Direktiven, podchecker meldet dort 74 unaufgeloeste Links in SOPS.pm und 53 in Encrypted.pm. GEGENPROBE: mit den zwei Links von vor 576a903 faellt der Test mit 2 von 6 subtests und nennt beide, waehrend t/author-pod-syntax.t auf demselben Build 6 von 6 besteht.
