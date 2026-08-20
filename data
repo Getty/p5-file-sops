@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-20T07:58:56Z
+created: 2026-08-20T07:38:54Z
+id: 95
+priority: medium
+started: 2026-08-20T07:58:56Z
+status: done
+tags:
+- docs
+- pod
+title: 'decrypt_bytes POD still describes the float conversion as +0.0, which karr
+  #73 replaced'
+updated: 2026-08-20T07:58:56Z
+---
+
+lib/File/SOPS/Encrypted.pm line 376 (decrypt_bytes POD, method at line 318): "L</decrypt_value> runs the same bytes through a type conversion (C<0 + $x>, C<+ 0.0>, C<JSON::PP::Boolean>) whose inverse is not exact in Perl". The "+ 0.0" half is stale: karr #73/ADR 0009 replaced _deserialize_values float conversion with unpack(d, pack(d, $data)) specifically BECAUSE + 0.0 sets the public SVf_IOK flag on an integral result and mistypes the value (see the comment at line 1405, "NOT `$data + 0.0`", and decrypt_values own POD at line 417, which correctly says "conversion is C<unpack(d, pack(d, $plaintext))> rather than C<+ 0.0>"). The int half ("0 + $x") is still accurate - _deserialize_value line ~1394 still does `return 0 + $data`. So this is a narrow, one-clause fix: drop or update the "+ 0.0" mention in decrypt_bytes POD (line 376) to match what decrypt_value POD (line 417) already says correctly - the two POD blocks are 40 lines apart in the same file and currently contradict each other. Found during the pre-release consistency audit at HEAD b318c10.
+ERLEDIGT 2026-08-20, Commit 576a903. decrypt_bytes' POD nennt jetzt unpack('d', pack('d', x)) statt 0 + x. Grep ueber lib/ und docs/ ergab: alle uebrigen Vorkommen der alten Form sind HISTORISCH und korrekt (ADR 0009 Context/Rejected, ADR 0006s #72-Amendment, ADR 0004, die Changes-Eintraege, und der Code-Kommentar an Encrypted.pm:1405 der ausdruecklich 'NOT $data + 0.0' sagt) -- keine davon mitgezogen.
