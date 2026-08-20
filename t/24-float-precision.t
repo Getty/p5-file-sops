@@ -7,6 +7,7 @@ use File::Slurp qw(read_file write_file);
 use JSON::MaybeXS qw(decode_json);
 use YAML::XS qw(Load);
 use POSIX qw(signbit);
+use Scalar::Util qw(isdual);
 use Math::BigFloat;
 use Math::BigInt;
 
@@ -1151,6 +1152,151 @@ subtest 'decrypt_file renders an integral float as ADR 0009 measured it' => sub 
         my $decoded = $format eq 'json' ? decode_json($content) : Load($content);
         cmp_ok($decoded->{whole}, '==', 2, "[$format] and it is the number 2");
         cmp_ok($decoded->{half}, '==', 1.5, "[$format] the neighbour is untouched");
+    }
+};
+
+###############################################################################
+# 13. karr #61, second half: extract() handed back the Perl scalar it found,
+#     and for an ENCRYPTED float that is a bare NV with no PV, so every
+#     stringification went through Perl's 15 significant digits. Measured on a
+#     document the real sops wrote, re-measured against 3.13.3 today:
+#
+#       sops -d --extract '["ratio"]'  ->  0.30000000000000004
+#       File::SOPS->extract(...)       ->  0.3
+#
+#     Nothing failed -- the document, the plaintext and the MAC were all
+#     correct. Only this return value was, and only once the caller printed it.
+#
+#     The maintainer chose a dualvar over an NV-with-a-POD-warning and over a
+#     plain canonical string: numerically the double, as a string the canonical
+#     decimal from value_to_bytes -- the text the document holds and the digest
+#     covers. ADR 0010.
+#
+#     The boundary is the point of the design and is asserted below: the
+#     dualvar reaches the LEAF extract returns and nothing else. Inside a tree
+#     it changes what the emitters write -- Cpanel::JSON::XS quotes it, so an
+#     unencrypted JSON leaf would become a string (karr #78) -- so a branch and
+#     everything decrypt() returns stay plain scalars.
+###############################################################################
+
+for my $format (qw(yaml json)) {
+    subtest "[$format] extract keeps an encrypted float's digits (karr #61)" => sub {
+        my $plain = scratch_file($format);
+        write_file($plain, $format eq 'json'
+            ? qq({\n  "ratio": $full_precision_text,\n  "name": "db",\n  "port": 5432,\n  "on": true\n}\n)
+            :  "ratio: $full_precision_text\nname: db\nport: 5432\non: true\n");
+
+        my $enc_file = scratch_file($format);
+        system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+        is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+        my $fixture = read_file($enc_file);
+        like($fixture, qr/ratio"?\s*:\s*"?ENC\[AES256_GCM,[^\]]*type:float\]/,
+            'and the float leaf is encrypted, which is the half this ticket is about')
+            or diag("fixture:\n$fixture");
+
+        # What the reference prints for the same path, which is the number to
+        # match. Taken from the binary rather than written out here, so the
+        # assertion cannot drift away from it.
+        my $theirs = `$sops_bin -d --extract '["ratio"]' $enc_file 2>&1`;
+        is($? >> 8, 0, 'sops -d --extract exits 0') or diag("sops: $theirs");
+        chomp $theirs;
+        is($theirs, $full_precision_text, 'and prints all 17 digits');
+
+        my $ours = File::SOPS->extract(
+            file => $enc_file, path => '["ratio"]', identities => [$secret],
+            format => $format,
+        );
+
+        is("$ours", $theirs,
+            'our extract stringifies to exactly what sops --extract prints '
+          . '(measured before the fix: 0.3)');
+        unlike("$ours", qr/\A0\.3\z/, 'and specifically not the 15-digit truncation');
+
+        # The other half of the dualvar: it is still the number, so anything
+        # doing arithmetic with an extracted value is unaffected.
+        cmp_ok($ours, '==', $full_precision_value, 'numerically the same double');
+        cmp_ok($ours + 0, '==', $full_precision_value, 'in arithmetic too');
+        is(sprintf('%.2f', $ours), '0.30', 'and to a format that asks for 2 places');
+
+        # Fed back in, it writes the same wire bytes the bare NV would: the
+        # digest reads SVf_NOK before POK, so the value is still a float and
+        # value_to_bytes re-derives the text from its numeric half.
+        is(File::SOPS::Encrypted->detect_type($ours), 'float',
+            'still a float to the type ladder');
+        is(File::SOPS::Encrypted->value_to_bytes($ours), $full_precision_text,
+            'and re-derives the same plaintext for the next write');
+
+        # Non-float leaves are untouched.
+        my $name = File::SOPS->extract(file => $enc_file, path => '["name"]',
+            identities => [$secret], format => $format);
+        is($name, 'db', 'a string leaf comes back as itself');
+        ok(!isdual($name), 'and is not wrapped');
+        my $port = File::SOPS->extract(file => $enc_file, path => '["port"]',
+            identities => [$secret], format => $format);
+        is($port, 5432, 'an int leaf comes back as itself');
+        is(File::SOPS::Encrypted->detect_type($port), 'int', 'still an int');
+        my $on = File::SOPS->extract(file => $enc_file, path => '["on"]',
+            identities => [$secret], format => $format);
+        is(File::SOPS::Encrypted->detect_type($on), 'bool', 'a bool stays a bool');
+    };
+}
+
+subtest 'the dualvar stops at the leaf extract returns (ADR 0010)' => sub {
+    # The boundary, asserted so that moving the wrapping into the tree -- the
+    # obvious "simplification" -- fails here rather than in a document. A
+    # dualvar in a tree reaches the emitters: measured, Cpanel::JSON::XS writes
+    # one as a quoted string, so an unencrypted JSON float would silently
+    # become a string in the file (karr #78).
+    my $plain = scratch_file('json');
+    write_file($plain, qq({\n  "db": { "ratio": $full_precision_text }\n}\n));
+
+    my $enc_file = scratch_file('json');
+    system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+    is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+    my $leaf = File::SOPS->extract(file => $enc_file, path => '["db"]["ratio"]',
+        identities => [$secret], format => 'json');
+    is("$leaf", $full_precision_text, 'the leaf itself carries the canonical text');
+
+    my $branch = File::SOPS->extract(file => $enc_file, path => '["db"]',
+        identities => [$secret], format => 'json');
+    is(ref $branch, 'HASH', 'a branch comes back as the structure it is');
+    ok(!isdual($branch->{ratio}),
+        'and the float inside it is a plain scalar, so the emitters keep '
+      . 'writing it as a number');
+    cmp_ok($branch->{ratio}, '==', $full_precision_value,
+        'with the value unchanged');
+
+    # decrypt() is the same boundary from the other side. read_file in a
+    # scalar, because in list context it returns LINES and would shift every
+    # named argument after it.
+    my $document = read_file($enc_file);
+    my $data = File::SOPS->decrypt(encrypted => $document,
+        identities => [$secret], format => 'json');
+    ok(!isdual($data->{db}{ratio}), 'decrypt returns plain scalars too');
+};
+
+subtest 'a non-finite float is returned unwrapped (ADR 0010)' => sub {
+    # +Inf / NaN are value_to_bytes wire spellings, not a number decimal, and
+    # no emitter has an agreed form for them. A caller printing one gets Perl's
+    # own text, as before.
+    my $key = "\x03" x 32;
+    for my $plaintext (qw( NaN Inf -Inf )) {
+        my $enc = File::SOPS::Encrypted->encrypt_value(
+            value => $plaintext, type => 'float', key => $key, aad => '',
+        );
+        my $value = $enc->decrypt_value(key => $key, aad => '');
+        my $wrapped = File::SOPS::Encrypted->canonical_float_dualvar($value);
+        ok(!isdual($wrapped), "[$plaintext] comes back unwrapped");
+    }
+
+    # And everything that is not a float scalar at all.
+    for my $case ([ 'a string', 'hello' ], [ 'an int', 42 ],
+                  [ 'undef', undef ], [ 'a hashref', { a => 1 } ]) {
+        my ($what, $value) = @$case;
+        my $wrapped = File::SOPS::Encrypted->canonical_float_dualvar($value);
+        is_deeply($wrapped, $value, "$what is returned unchanged");
     }
 };
 

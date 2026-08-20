@@ -1,6 +1,23 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - extract() now returns a float that prints all of its digits. It handed
+    back the Perl scalar it found, and a decrypted float is a bare NV with no
+    string form of its own, so every stringification went through Perl's 15
+    significant digits. Measured on a document the real sops wrote, both
+    formats: `sops -d --extract` printed 0.30000000000000004 where our
+    extract printed 0.3. Nothing failed - the document, the plaintext and the
+    MAC were all correct; only this return value was, and only once the
+    caller printed it. A float leaf now comes back as a dualvar: numerically
+    the same double, as a string the canonical decimal the document holds.
+    Arithmetic, ==, sprintf '%f' and is_deeply are unchanged; `"$value"` is
+    not, and that is the fix. Two boundaries are deliberate: the spelling is
+    the wire's, so 1e20 stringifies as 100000000000000000000 where sops
+    prints 1e+20 (same double, no digits lost, karr #79), and only the leaf
+    extract returns is wrapped - floats inside a returned branch, and
+    everything decrypt() returns, stay plain scalars, because a dualvar in a
+    tree changes what the emitters write (karr #78). See karr #61 (second
+    half) and docs/adr/0010.
   - Keep the type:float label on an encrypted whole number. The READ path
     converted a type:float plaintext with `$data + 0.0`, which sets the
     public SVf_IOK flag whenever the result is integral, so detect_type

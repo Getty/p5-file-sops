@@ -4,7 +4,7 @@ our $VERSION = '0.003';
 use Moo;
 use B ();
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
+use Scalar::Util qw(blessed dualvar);
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Crypt::AuthEnc::GCM qw(gcm_encrypt_authenticate gcm_decrypt_verify);
 use Crypt::PRNG ();
@@ -900,9 +900,10 @@ conversion is how the ciphertext and the digest came to disagree in the first
 place, and it is invisible from inside Perl because both sides are then
 consistently wrong.
 
-Call this at B<emit time, on a copy, after the digest has been taken>. A
-carrier is a blessed reference or a dualvar, so L</detect_type> would call it
-C<str> and the walk that computes the MAC must never see one.
+Call this at B<emit time, on a copy, after the digest has been taken>. The
+walk that computes the MAC must never see a carrier: the L<Math::BigFloat> one
+is a blessed reference, which L</detect_type> calls C<str>, so the digest would
+cover its stringification instead of the number.
 
 C<NaN>, C<+Inf> and C<-Inf> are returned unchanged. Those have no wire form
 both implementations agree on, and L</assert_representable> refuses them on the
@@ -915,6 +916,53 @@ yaml.v3 resolves as an B<integer> and digests as C<0>. The rule ADR 0006 states
 is that the emitted decimal has to B<parse back to the same double>, not that
 it has to be spelled canonically, so the YAML carrier writes C<-0.0>. See
 L<File::SOPS::Format::YAML/emit>.
+
+=cut
+
+sub canonical_float_dualvar {
+    my ($class, $value) = @_;
+
+    return $value unless defined $value;
+    return $value if ref $value;
+    return $value unless _sv_kind($value) eq 'float';
+
+    # THE one conversion, again. The string half is the text the wire carries
+    # and the digest covers, taken from the same method on the same scalar --
+    # never a second rendering that agrees with it today.
+    my $text = $class->value_to_bytes($value, 'float');
+    return $value if $text =~ $NO_AGREED_FORM;
+
+    return dualvar($value, $text);
+}
+
+=method canonical_float_dualvar
+
+    my $value = File::SOPS::Encrypted->canonical_float_dualvar($value);
+
+Class method. Returns C<$value> with its stringification replaced by the
+canonical decimal from L</value_to_bytes> -- numerically the same double, as a
+string the text the document actually contains. Anything that is not a plain
+float scalar comes back untouched: a reference, C<undef>, a string, an int, a
+boolean, and a non-finite float, whose C<NaN> / C<+Inf> / C<-Inf> are wire
+spellings rather than a number's decimal.
+
+This exists because a decrypted float is a bare NV with no string form of its
+own, so Perl renders it at 15 significant digits: an encrypted
+C<0.30000000000000004> printed as C<0.3>, where C<sops -d --extract> prints all
+17. See karr #61 and
+L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
+
+B<Only for a value on its way out to a caller.> The result is a
+L<Scalar::Util/dualvar>, and a dualvar inside a tree changes what the emitters
+write -- measured, L<Cpanel::JSON::XS> quotes it, so an unencrypted JSON leaf
+becomes a string, and L<YAML::XS> writes its string half verbatim, so C<1e300>
+becomes 301 positional digits (karr #78). L<File::SOPS/extract> calls this on
+the single leaf it returns and on nothing else; L<File::SOPS/decrypt> and
+L<File::SOPS/decrypt_file> do not call it at all.
+
+The digest is unaffected either way: L</detect_type> reads C<SVf_NOK> before
+C<POK>, so a dualvar is still a C<float>, and L</value_to_bytes> re-derives the
+identical text from its numeric half.
 
 =cut
 

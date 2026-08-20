@@ -859,8 +859,14 @@ sub extract {
         ignore_mac => $args{ignore_mac},
     );
 
-    # Navigate to path
-    return _extract_path($data, $path);
+    # Navigate to path. A float leaf goes out carrying its canonical decimal
+    # as its string form: a decrypted float is a bare NV, so printing it went
+    # through Perl's 15 significant digits and lost the digits the document
+    # actually holds (karr #61, ADR 0010). Only this leaf -- a dualvar inside a
+    # tree changes what the emitters write, so nothing that returns a tree does
+    # this, and a branch extract returns comes back untouched.
+    return File::SOPS::Encrypted->canonical_float_dualvar(
+        _extract_path($data, $path));
 }
 
 =method extract
@@ -899,6 +905,25 @@ it in C<data>. See L</Character encoding>.
 Returns whatever the path names: a decrypted scalar for a leaf, or a HashRef or
 ArrayRef for a branch -- C<extract(path =E<gt> '["database"]')> returns the
 whole subtree, as C<sops --extract> does.
+
+A B<float> leaf comes back as a L<Scalar::Util/dualvar>: numerically the value
+itself, as a string the canonical decimal the document holds. A decrypted float
+is a bare NV with no string form of its own, so printing one went through
+Perl's 15 significant digits -- an encrypted C<0.30000000000000004> arrived as
+C<0.3>, where C<sops -d --extract> prints all 17. Arithmetic, C<==>, C<sprintf
+'%f'> and C<is_deeply> are unchanged; what changes is C<"$value">, and that
+change is the point. New in 0.003; see karr #61 and
+L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
+
+Two things that dualvar does not do. The spelling is the B<wire's>, which is
+positional at every magnitude, so C<1e20> stringifies as
+C<100000000000000000000> where C<sops -d --extract> prints C<1e+20> -- the same
+double, a different spelling, no digits lost either way (karr #79). And it
+applies to the B<leaf> only: floats inside a returned branch are the plain
+scalars they have always been, because a dualvar in a structure changes what
+the emitters write. Putting one into an B<unencrypted> slot of a B<JSON>
+document therefore stores it as a quoted string (karr #78); an encrypted slot,
+and YAML either way, are unaffected.
 
 B<Dies if the path does not exist>, at any depth, naming the component that was
 not found. Before 0.003 a missing B<top-level> key returned C<undef> while a
