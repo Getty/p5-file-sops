@@ -1,0 +1,63 @@
+---
+class: standard
+completed: 2026-08-20T00:49:08Z
+created: 2026-08-20T00:11:08Z
+id: 73
+priority: medium
+started: 2026-08-20T00:43:22Z
+status: done
+tags:
+- wire
+- float
+- interop
+title: rotate relabels an encrypted type:float as type:int when the value is integral
+updated: 2026-08-20T00:49:08Z
+---
+
+Found while measuring karr #72 (sops 3.13.3, perl 5.40.1), NOT caused by it --
+present before commit 0359307 and after.
+
+_deserialize_value returns `$data + 0.0` for a type:float plaintext. For an
+INTEGRAL plaintext Perl sets the public SVf_IOK flag on the result (grok_number
+settles a text like "2" as an integer, and pp_add sets IOK on an integral NV
+result), so _sv_kind calls it int and detect_type labels the leaf type:int on
+the next write. ADR 0002 is working exactly as specified -- the type comes from
+the SV -- but the SV it reads was manufactured by our own conversion, not by a
+parser or a caller.
+
+Measured end to end, sops writes -> our rotate, YAML:
+
+  sops -e of `whole: 2.0`   -> whole: ENC[...,type:float]
+  after our rotate          -> whole: ENC[...,type:int]
+
+  sops -d exit 0 both times, printing `whole: 2` both times.
+
+So this is NOT a compatibility break: the plaintext is "2" under either label
+and the digest covers "2" either way. What changes is the documents own type
+field, silently, on a document sops wrote. A consumer that re-emits from the
+label (2 vs 2.0), or a schema that distinguishes them, sees a different file
+than it stored. Go keeps type:float here, because yaml.v3 hands sops a float64.
+
+Affects: every integral type:float plaintext -- 0, +0, 2, -2, 1e2 ... The
+non-integral ones (1.5, 0.1, 1e20, 1e-20) keep type:float, and karr #72 just
+put -0 into that group as well, since it now returns a real NV.
+
+Candidate fix: make the float branch of _deserialize_value hand back a scalar
+that is NOK and not IOK, the way the -0 branch now does. Needs the karr #72
+measurement repeated -- the whole float read ladder through value_to_bytes,
+before and after -- because that ladder is what the digest is taken over, and
+a change here also moves the type: label of every affected leaf, which IS a
+wire-byte change and wants an ADR.
+
+Wire lane. A regression test belongs next to t/24-float-precision.t section 10,
+which already asserts detect_type on the -0 case.
+DONE 2026-08-20 (commit 07cf7e9, file-sops-wire). Fix is unpack('d', pack('d', $data)) in _deserialize_value's float branch -- the only conversion measured to leave the SV NOK and nothing else (+0.0, 0.0+$d and $d*1.0 all set IOK; a dualvar INHERITS it, so the dualvar idea from #61 does not cover this ticket). ADR 0009, written before the code because the type: label of every affected leaf moves.
+
+Ladder, 37 type:float plaintexts through decrypt_value into value_to_bytes: 12 rows moved int -> float, digest input moved in 2 of them (9007199254740993 -> ...992, 9223372036854775807 -> 9223372036854776000), which is what Go's ParseFloat reads from those plaintexts and which sops itself can never write.
+
+Binary proof, both formats: sops -e of five type:float leaves (three integral) -> our rotate -> all five still type:float, sops -d exit 0, same values. Before: three relabelled type:int.
+
+Side effect kept deliberately: decrypt_file writes an integral float as 2.0 in JSON (sops -d writes 2); 2.0 parses back as a float so the plaintext round trip keeps type:float. YAML still writes 2, exactly as sops does. Both pinned.
+
+Net: t/24-float-precision.t section 12. Counter-proof with the one line backed out: 4 of 30 subtests, 29 assertions.
+ERLEDIGT 2026-08-20, Commit 07cf7e9, ADR 0009. _deserialize_value nutzt im float-Zweig jetzt unpack('d', pack('d', data)) statt data + 0.0 -- die einzige gemessene Konversion, die den SV NOK und sonst nichts laesst (0.0 + data und data * 1.0 setzen zusaetzlich IOK), und die durch einen float64 geht, also durch die Breite in der Gos ParseFloat arbeitet. Die Vorzeichenwiederherstellung aus #72 bleibt intakt. HYPOTHESE DES AUFTRAGS WIDERLEGT, in beide Richtungen gemessen: (1) ein dualvar behebt #73 NICHT -- Scalar::Util::dualvar ERBT die Flags der numerischen Haelfte, dualvar(data+0.0,'2') ist IOK|POK, also bleibt _sv_kind bei int; #73 ist VORAUSSETZUNG fuer den dualvar, nicht dessen Folge. (2) ein dualvar kann auf dem Read-Pfad gar nicht leben, weil er Emitter-Bytes bewegt -- JSON schreibt ihn als QUOTED STRING, YAML macht aus 1e300 301 Stellen; abgelegt als karr #78. Zwei Mechanismen, zwei Commits, zwei ADRs. LEITER: 37 type:float-Plaintexts, 12 von 37 Zeilen bewegen sich (alle int->float), der DIGEST-INPUT bewegt sich in exakt 2 von 37: 9007199254740993 -> 9007199254740992 und 9223372036854775807 -> 9223372036854776000. Vom Orchestrator unabhaengig nachgemessen und bestaetigt, inklusive der Begruendung: das sind Integer die kein float64 halten kann, Go liest sie als genau die Doubles die wir jetzt erzeugen, und sops kann einen solchen type:float-Plaintext nie selbst schreiben -- betroffen sind ausschliesslich Dokumente die File::SOPS selbst ueber den alten +0.0-Pfad geschrieben hat. Fuer 2 und 0 wechselt das LABEL von int auf float, ohne dass sich der Digest bewegt. BINAERBEWEIS beide Richtungen: sops -e mit fuenf type:float-Leaves (drei integral) -> unser rotate -> alle fuenf weiterhin type:float, sops -d exit 0; vor dem Fix wurden drei von fuenf zu type:int, ebenfalls exit 0, deshalb hat es so lange gelebt. BEWUSSTE NEBENWIRKUNG: decrypt_file schreibt einen integralen float in JSON jetzt 2.0 statt 2 (YAML weiterhin 2, wie sops); beide Schreibweisen sind durch Tests festgenagelt. Gegenprobe: eine Zeile ausgebaut -> 4 von 30 subtests, 29 Assertions rot. Verifiziert 674/674 PASS, t/04 31/31 AUSGEFUEHRT gegen sops 3.13.3.
