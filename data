@@ -1,0 +1,38 @@
+---
+class: standard
+completed: 2026-08-20T05:45:53Z
+created: 2026-08-20T00:34:13Z
+id: 80
+priority: low
+started: 2026-08-20T05:45:53Z
+status: done
+tags:
+- wire
+- float
+title: value_to_bytes returns a scalar detect_type calls float, not str
+updated: 2026-08-20T05:45:53Z
+---
+
+Found while measuring karr #61 half 2, not caused by it.
+
+File::SOPS::Encrypted->value_to_bytes returns text, but the scalar it returns
+carries the PUBLIC SVf_NOK flag as well as POK. Measured on 0.30000000000000004:
+
+  my $t = value_to_bytes($nv, "float");   # flags: NOK POK
+  detect_type($t)                          # -> float, not str
+
+_float_bytes finds the shortest form with `last if $g + 0 == $n`, and that
+comparison sets NOK on $g in place -- the same in-place retyping karr #72 and
+#73 are about, on the OUTPUT side this time.
+
+Harmless everywhere it is used today: the return is consumed as plaintext
+bytes and as digest input, both string contexts, and Format::JSON`s
+_float_roundtrips compares it with eq. It would bite a caller who round-trips
+a value through value_to_bytes and hands the result back to encrypt, where a
+string is what they meant and a float is what they would get.
+
+Fix is a copy that carries only the PV -- and it needs the same before/after
+ladder every change in this area gets, because value_to_bytes is what the
+digest is taken over. Wire lane.
+landed in 3b80aa5. _float_bytes compares with 0 + "$g" instead of $g + 0, so the digits leave the loop as a string. Ladder: 18216 value_to_bytes rows (3036 leaves x 6 type labels, 3000 random doubles) and the 228-row emitter corpus, 0 differences either side. Test in t/06 section 5 asserts the TYPE of the return, not its bytes; without the fix 6 of t/06's 145 assertions fail.
+ERLEDIGT 2026-08-20, Commit 3b80aa5. Ursache bestaetigt und schlimmer als im Ticket: -0.0 kam mit IOK zurueck, detect_type(value_to_bytes(-0.0)) sagte also int, nicht nur float. Fix an der Ursache statt an der Grenze, ein Token: 'last if 0 + "$g" == $n' statt '$g + 0 == $n', das $g in place numifizierte. Volle Leiter 18216 Zeilen (3036 Leaves x 6 Typ-Label, darunter 3000 zufaellige Doubles von 1e-20 bis 1e20): 0 Unterschiede. Emitter-Korpus 228 Zeilen: 0 Unterschiede. Gegenmessung: 0 von 18216 Digest-Eingaben bewegen sich. Gegenprobe: Fix raus -> 6 von 145 Assertionen in t/06 rot.
