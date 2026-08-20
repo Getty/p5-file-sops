@@ -1,0 +1,31 @@
+---
+class: standard
+completed: 2026-08-20T08:43:51Z
+created: 2026-08-20T08:23:58Z
+id: 100
+priority: low
+started: 2026-08-20T08:43:51Z
+status: done
+tags:
+- tests
+title: 't/31 and t/33 print the karr #92 warning to stderr during prove'
+updated: 2026-08-20T08:43:57Z
+---
+
+Cosmetic, no failure. Since karr #92 / ADR 0019 a `True` string in an
+unencrypted YAML slot carps, and two existing tests encrypt exactly that
+without capturing warnings, so `prove -lr t/` prints the full warning text
+several times:
+
+  t/31-negative-zero-integer-cache.t line 420  (the karr #86 acceptance list)
+  t/33-guard-answers-from-the-token.t line 68  (guard_asked, several leaves)
+
+Both files pass and both assert the right thing - "is still written", not "says
+nothing", so their claims are unaffected. What is wrong is only the output: a
+500-character warning in the middle of a green run reads like a defect.
+
+Fix is a local $SIG{__WARN__} in each file helper (t/33 guard_asked already
+wraps the guard; t/31 loop does not capture anything). Left alone deliberately
+by the wire lane, which was told not to touch t/ beyond the test belonging to
+its own change - t/35-string-go-reads-as-boolean.t. Test lane.
+ERLEDIGT 2026-08-20, Commit d1d7473. Gemessen: 7 Warnzeilen aus DREI Dateien, nicht zwei -- t/30 leakt sie ebenfalls und stand nicht im Ticket. Nicht einheitlich stummgeschaltet, weil das Leaf an jeder Stelle etwas anderes bedeutet: in t/30 sind True und False das SUBJEKT (der subtest ist nach ihnen benannt und assertiert schon ihre MAC-Byte-Uebereinstimmung), dort wird die Warnung jetzt ASSERTIERT -- je eine fuer True und False, keine fuer null, ~, true, false. In t/31 ist dieselbe Schreibweise ein Eintrag einer kopierten #86-Akzeptanzliste, in t/33 erreicht sie einen gemeinsamen Helper, dessen subtests das #91-Gate pruefen; beide unterdruecken lokal, weil t/35 diese Warnung bereits vollstaendig assertiert und eine zweite Kopie derselben Assertion in einer sachfremden Datei dasselbe Verhalten doppelt festnageln wuerde. KEIN Leaf wurde ersetzt, um eine Warnung loszuwerden. Vorher 7 Warnzeilen, nachher 0; verbleibende stderr-Ausgabe sind nur die note()-Diagnosezeilen zum sops-Binary. Verifiziert 833/833 PASS, t/04 32/32 AUSGEFUEHRT.
