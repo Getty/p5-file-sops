@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-20T07:59:29Z
+created: 2026-08-20T07:37:17Z
+id: 93
+priority: low
+started: 2026-08-20T07:59:29Z
+status: done
+tags:
+- docs
+- adr
+title: ADR 0002 has no backlink to the amendment ADR 0015 claims against it
+updated: 2026-08-20T07:59:29Z
+---
+
+docs/adr/0015-a-negative-zero-is-a-float-even-when-perl-cached-an-integer-on-it.md line 7 declares "Amends ADR 0002 (the type ladder gains its one exception)". docs/adr/0002-value-type-comes-from-the-scalar-not-from-a-pattern.md carries no reciprocal note anywhere in its body (checked: no "amend", no "0015", no "0016" mention at all) - unlike every other amendment relationship in the chain (0006 has inline "Amended by karr #62"/"karr #72" sections; 0013 has "Amended by karr #89"/"karr #91" sections and a line pointing at ADR 0018; 0018 backlinks into 0013). This is the one one-directional cross-reference found in an otherwise consistently bidirectional ADR chain (audited 0001-0018 in full). Also worth a look while there: ADR 0016 (karr #90, Perl boolean SV) says only "Depends on ADR 0002 ... this ADR adds one rule to that ladder" rather than "Amends", even though it also permanently adds a new branch to detect_types type ladder the same way 0015 does - the chain is inconsistent about which ladder-extending ADRs call themselves an amendment. Not a code defect, no wire bytes affected; found during the pre-release consistency audit at HEAD b318c10.
+ERLEDIGT 2026-08-20, Commit 9003154. ADR 0002 bekommt zwei 'Amended by karr #89/#90'-Absaetze am Ende seines Decision-Abschnitts, in derselben Form die 0013 fuer 0015/0017 und 0006 fuer #62/#72 nutzt. Beide sagen, welche Sprosse ergaenzt wurde UND dass die Leiter weiterhin eine einzige ist und ihre Regel unveraendert -- 0002 liest sich damit nicht als abgeloest. ADR 0016 fuehrt jetzt 'Amends ADR 0002' als eigene Zeile, waehrend die Depends-Klausel fuer 0008/0012/0013 bleibt. Zusaetzlich die ungetickete Formatabweichung behoben: ADR 0006 hatte als einziges von 18 keine Leerzeile zwischen Titel und Status-Zeile.
