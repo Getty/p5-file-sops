@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-08-20T01:00:45Z
+created: 2026-08-20T00:55:04Z
+id: 81
+priority: high
+started: 2026-08-20T01:00:45Z
+status: done
+tags:
+- release
+- cpanfile
+- dependency
+title: cpanfile pins Crypt::Age to 0.001, latest CPAN release is 0.002
+updated: 2026-08-20T01:00:45Z
+---
+
+Pre-release audit (HEAD f9269d3): cpanfile requires Crypt::Age 0.001; cpanm --info Crypt::Age shows GETTY/Crypt-Age-0.002.tar.gz is the latest CPAN release, and 0.002 is what is installed locally. House rule: pin Getty-authored deps to the latest released CPAN version, not stale. Fix: bump the cpanfile pin to 0.002. Release blocker.
+ERLEDIGT 2026-08-20, Commit e6be258. cpanfile verlangte 'Crypt::Age', '0.001', waehrend CPAN GETTY/Crypt-Age-0.002.tar.gz ausliefert (lokal installiert ist ebenfalls 0.002). META.json uebernahm den veralteten Pin woertlich, ein Installer haette also legitim die aeltere Release aufloesen koennen. Hausregel fuer Getty-authored Abhaengigkeiten ist: auf die zuletzt veroeffentlichte Version pinnen. Nach dem Bump geprueft: META.json des dzil-Builds traegt jetzt "Crypt::Age" : "0.002". Suite danach 674/674 PASS, t/04 31/31 AUSGEFUEHRT gegen sops 3.13.3.
