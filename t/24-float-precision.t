@@ -7,12 +7,14 @@ use File::Slurp qw(read_file write_file);
 use JSON::MaybeXS qw(decode_json);
 use YAML::XS qw(Load);
 use POSIX qw(signbit);
-use Scalar::Util qw(isdual);
+use Scalar::Util qw(isdual dualvar);
 use Math::BigFloat;
 use Math::BigInt;
 
 use File::SOPS;
 use File::SOPS::Encrypted;
+use File::SOPS::Format::JSON;
+use File::SOPS::Format::YAML;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
@@ -1297,6 +1299,179 @@ subtest 'a non-finite float is returned unwrapped (ADR 0010)' => sub {
         my ($what, $value) = @$case;
         my $wrapped = File::SOPS::Encrypted->canonical_float_dualvar($value);
         is_deeply($wrapped, $value, "$what is returned unchanged");
+    }
+};
+
+###############################################################################
+# 14. karr #78: a float leaf carrying its own string form -- a dualvar -- went
+#     into an UNENCRYPTED JSON slot as a QUOTED STRING. Cpanel::JSON::XS writes
+#     any scalar with a public string half as a JSON string, and
+#     Format::JSON::_float_roundtrips could not see it: it reparsed the quoted
+#     string, value_to_bytes re-derived that same text from it, the two compared
+#     equal, and the walk left the leaf alone.
+#
+#     Nothing failed, which is why it needed measuring rather than reasoning
+#     about. The digest covers the canonical decimal, Go's ToBytes of the JSON
+#     string is the same bytes, so the MAC holds and `sops -d` exits 0 -- and
+#     hands back a STRING where the caller passed a number. Measured, 3.13.3:
+#
+#       encrypt(data => { ratio_unencrypted => <extracted float> }, json)
+#         -> "ratio_unencrypted" : "0.30000000000000004"
+#         -> sops -d exit 0, value read back as a string
+#
+#     The route in is ordinary caller code, not a contrivance: extract() has
+#     returned exactly that dualvar for a float leaf since ADR 0010, so
+#     `my $v = extract(...); encrypt(data => { x_unencrypted => $v })` lands
+#     there. ADR 0010 keeps the dualvar out of every tree for this reason and
+#     records the gap as karr #78.
+#
+#     The guard asks the round-trip check one more question -- is the reparsed
+#     leaf still a FLOAT -- and refuses when it is not. It is JSON-only and
+#     measurement-driven, and both halves are pinned below: the ADR 0005 and
+#     ADR 0006 cases keep their exact bytes, and a merely-stringified float
+#     (which does NOT set the public SVf_POK Cpanel reads) is not refused.
+###############################################################################
+
+subtest 'the extract -> encrypt caller path is refused in a JSON plain slot (karr #78)' => sub {
+    my $plain = scratch_file('json');
+    write_file($plain, qq({\n  "ratio": $full_precision_text\n}\n));
+
+    my $enc_file = scratch_file('json');
+    system("$sops_bin -e --age $public $plain > $enc_file 2>/dev/null");
+    is($? >> 8, 0, 'sops -e wrote the fixture') or return;
+
+    my $value = File::SOPS->extract(file => $enc_file, path => '["ratio"]',
+        identities => [$secret], format => 'json');
+    ok(isdual($value), 'extract returned the ADR 0010 dualvar');
+    is("$value", $full_precision_text, 'carrying the canonical decimal');
+
+    # THE case. Straight back into encrypt, under an unencrypted key.
+    my $document = eval {
+        File::SOPS->encrypt(
+            data       => { ratio_unencrypted => $value, other => 'x' },
+            recipients => [$public],
+            format     => 'json',
+        );
+    };
+    my $error = $@;
+    is($document, undef, 'encrypt refuses rather than writing a quoted string');
+    like($error, qr/float leaf that carries its own string form/,
+        'and says what it will not write');
+    like($error, qr/File::SOPS->extract/,
+        'naming where such a value comes from, so the caller can find it');
+
+    # The same leaf in an ENCRYPTED slot is untouched: it is an ENC[...] string
+    # by the time the emitter sees it. Driven through the binary, because that
+    # is the half the guard must not have broken.
+    my $ok = eval {
+        File::SOPS->encrypt(data => { ratio => $value }, recipients => [$public],
+            format => 'json');
+    };
+    is($@, '', 'an encrypted slot still accepts the same value') or diag("died: $@");
+    like($ok, qr/type:float/, 'and keeps the type:float label') if $ok;
+
+    if ($ok) {
+        my $out_file = scratch_file('json');
+        write_file($out_file, $ok);
+        my $out = `$sops_bin -d $out_file 2>&1`;
+        is($? >> 8, 0, 'sops -d accepts it') or diag("sops: $out");
+        my $decoded = eval { decode_json($out) };
+        cmp_ok($decoded->{ratio}, '==', $full_precision_value,
+            'and reads the value back at full precision') if $decoded;
+    }
+};
+
+subtest 'YAML is not touched by the guard and still writes the number (karr #78)' => sub {
+    # YAML::XS writes the string half bare, so the document holds the canonical
+    # decimal as a NUMBER and there is nothing to refuse. Asserted through the
+    # binary so "YAML is unaffected" is measured rather than assumed.
+    my $value = File::SOPS::Encrypted->canonical_float_dualvar($full_precision_value);
+    ok(isdual($value), 'the same dualvar shape');
+
+    my $document = eval {
+        File::SOPS->encrypt(data => { ratio_unencrypted => $value },
+            recipients => [$public], format => 'yaml');
+    };
+    is($@, '', 'YAML accepts it') or diag("died: $@");
+    return unless $document;
+
+    like($document, qr/^ratio_unencrypted: \Q$full_precision_text\E$/m,
+        'and writes it unquoted, at full precision');
+
+    my $file = scratch_file('yaml');
+    write_file($file, $document);
+    my $out = `$sops_bin -d $file 2>&1`;
+    is($? >> 8, 0, 'sops -d accepts the document') or diag("sops: $out");
+    my $decoded = eval { Load($out) };
+    cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+        'and sops reads a number back') if $decoded;
+};
+
+subtest 'the guard moves no byte of the ADR 0005 / ADR 0006 cases (karr #78)' => sub {
+    # The whole point of a guard that only refuses: every float this emitter
+    # already wrote correctly keeps the exact bytes it had. These are the cases
+    # ADR 0005 (the negative zero) and ADR 0006 (16 and 17 significant digits,
+    # the >int64 integral texts) were paid for. Byte-exact on purpose -- a
+    # widened guard, or a carrier applied where none was applied before, fails
+    # HERE rather than in somebody's document.
+    my $emitted = File::SOPS::Format::JSON->emit({
+        a_neg_zero => -0.0,
+        b_17       => $full_precision_value,
+        c_16       => 1 / 3,
+        d_1e29     => 1e29,
+        e_1e20     => 1e20,
+        f_2_0      => 2.0,
+    });
+
+    is($emitted, <<'END_JSON', 'every ADR case emits exactly the bytes it did before the guard');
+{
+   "a_neg_zero" : -0.0,
+   "b_17" : 0.30000000000000004,
+   "c_16" : 0.3333333333333333,
+   "d_1e29" : 1e+29,
+   "e_1e20" : 1e+20,
+   "f_2_0" : 2.0
+}
+END_JSON
+
+    # And the YAML side of the same corpus, which the guard does not touch at
+    # all -- asked because the same check applied there WOULD refuse 0.0 and
+    # 2.0: YAML::XS writes an integral float as `0` / `2`, which reparses as an
+    # int, and both are handled correctly today.
+    my $yaml = File::SOPS::Format::YAML->emit({
+        a_neg_zero => -0.0, b_17 => $full_precision_value, f_2_0 => 2.0,
+    });
+    like($yaml, qr/^a_neg_zero: -0\.0$/m, 'YAML still writes the ADR 0005 -0.0');
+    like($yaml, qr/^b_17: \Q$full_precision_text\E$/m, 'and the ADR 0006 17-digit value');
+    like($yaml, qr/^f_2_0: 0*2$/m,        'and an integral float, which the guard would refuse there');
+};
+
+subtest 'the guard cannot fire on a float that was merely printed (karr #78)' => sub {
+    # The false-positive class worth naming: stringifying an NV does NOT set
+    # the public SVf_POK that Cpanel::JSON::XS reads, so ordinary caller code
+    # that logged or interpolated a float is untouched. Measured, not assumed.
+    my $value = $full_precision_value;
+    my $printed = "$value";           # the operation under suspicion
+    my %h; $h{$value} = 1;            # and using it as a hash key
+
+    ok(!isdual($value), 'stringifying a float does not make it a dualvar');
+
+    my $emitted = eval { File::SOPS::Format::JSON->emit({ ratio => $value }) };
+    is($@, '', 'so the emitter still accepts it') or diag("died: $@");
+    like($emitted, qr/"ratio" : \Q$full_precision_text\E/,
+        'and writes it as a bare number at full precision');
+
+    # A dualvar whose text is what Cpanel would have written anyway is not
+    # refused either: the guard refuses what is actually emitted wrong, and
+    # nothing else.
+    for my $case ([ '1.5', dualvar(1.5, '1.5') ],
+                  [ '-0.0', File::SOPS::Encrypted->canonical_float_dualvar(-0.0) ]) {
+        my ($label, $leaf) = @$case;
+        my $out = eval { File::SOPS::Format::JSON->emit({ v => $leaf }) };
+        is($@, '', "[$label] a dualvar Cpanel writes bare is not refused")
+            or diag("died: $@");
+        unlike($out, qr/"v" : "/, "[$label] and it reaches the document as a number")
+            if defined $out;
     }
 };
 

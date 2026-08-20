@@ -277,11 +277,60 @@ sub _reject_referenced_leaf {
 #
 # Equality via value_to_bytes on both sides, not ==, so it means what the digest
 # means; == cannot tell -0.0 from 0.0, and -0.0 is a case ADR 0005 paid for.
+#
+# The reparsed leaf has to come back a FLOAT, and that is asked FIRST, because
+# the byte comparison below cannot see the case where it does not.
+# Cpanel::JSON::XS writes a scalar carrying a public PV as a JSON STRING, so a
+# float leaf that is a Scalar::Util::dualvar -- numerically the double, as text
+# the canonical decimal -- is emitted quoted. The byte test then passes: the
+# reparsed value is the string "0.30000000000000004", whose value_to_bytes is
+# itself, which is the text the digest covers. Equal, so the walk left the leaf
+# alone and the document silently held a string where the caller passed a
+# number. Measured against sops 3.13.3, leaf ratio_unencrypted:
+#
+#   dualvar(0.1+0.2, "0.30000000000000004")
+#     -> "ratio_unencrypted" : "0.30000000000000004"
+#     -> sops -d exit 0, read back AS A STRING
+#
+# The MAC holds either way -- Go's ToBytes of that JSON string is the same
+# text -- so nothing fails and nothing says anything. That is why it is a
+# refusal here rather than a repair: the value's TYPE changed between what the
+# caller handed in and what the document states, and this distribution's rule
+# is that such a disagreement is named, not written (docs/adr/0008).
+#
+# The nearest route in is ordinary caller code, not a contrivance:
+# `my $v = File::SOPS->extract(...)` returns exactly that dualvar for a float
+# leaf since ADR 0010, and feeding it back into encrypt() under an unencrypted
+# key lands here. ADR 0010 keeps the dualvar out of every tree for this reason
+# and records the gap as karr #78; this closes it.
+#
+# JSON ONLY, deliberately. The same question asked of Format::YAML would refuse
+# `0.0` and `2.0`: YAML::XS writes an integral float as `0` / `2`, which
+# reparses as an INT, and both are handled correctly today -- `0.0` compares
+# equal on bytes and is left alone, `-0.0` goes to the carrier that writes
+# `-0.0` (ADR 0005/0006). Cpanel writes every NV with a `.0` or an exponent, so
+# a non-float reparse there means a quoted string and nothing else.
+#
+# It cannot fire on a float that was merely printed: measured, Perl does not
+# set the PUBLIC SVf_POK when it stringifies an NV, and Cpanel reads the public
+# flag, so `my $s = "$float"` leaves the emission bare. A real dualvar is the
+# only shape that reaches this.
 sub _float_roundtrips {
     my ($value, $text) = @_;
 
     my $back = eval { $json->decode($encoder->encode({ v => $value }))->{v} };
     return 0 unless defined $back;
+
+    croak "cannot write a float leaf that carries its own string form to a "
+        . "SOPS document: Cpanel::JSON::XS writes any scalar with a string "
+        . "half as a quoted JSON string, so the document would state a string "
+        . "where a number was passed -- silently, because the digest covers "
+        . "the same text either way and the file still verifies. The usual "
+        . "source is File::SOPS->extract, which returns a dualvar for a float "
+        . "leaf (see File::SOPS::Encrypted->canonical_float_dualvar); put a "
+        . "plain number in the document, or the string you want stored"
+        unless File::SOPS::Encrypted->detect_type($back) eq 'float';
+
     return File::SOPS::Encrypted->value_to_bytes($back) eq $text ? 1 : 0;
 }
 
@@ -345,6 +394,26 @@ measured to reach JSON as a bare number instead of a quoted string. A float that
 already emitted faithfully keeps exactly the bytes it had, C<-0.0> included.
 C<NaN> and C<Inf> are unchanged. See
 L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
+
+B<A float leaf carrying its own string form is refused.> L<Cpanel::JSON::XS>
+writes any scalar with a public string half as a quoted JSON string, so such a
+leaf reached the document as a B<string> where the caller passed a number. It
+failed nothing: the digest covers the canonical decimal either way, the file
+verifies, and C<sops -d> exits 0 and reads a string back -- the value's type
+changed and nothing said so. The round-trip check above could not see it, because
+the reparsed string re-derives the very text the digest covers. It now also
+requires the reparsed leaf to still be a float, and dies where it is not.
+
+The usual source is L<File::SOPS/extract>, which returns a
+L<Scalar::Util/dualvar> for a float leaf (see
+L<File::SOPS::Encrypted/canonical_float_dualvar>); feeding that return value
+back into L<File::SOPS/encrypt> under an unencrypted key is what reaches this.
+An B<encrypted> slot is unaffected -- the leaf is an C<ENC[...]> string before
+this method sees it -- and so is L<File::SOPS::Format::YAML>, which writes the
+string half bare and correctly. Only the leaves Cpanel actually quotes are
+refused: a dualvar whose text is what Cpanel would have written anyway, such as
+C<1.5> or C<-0.0>, still emits as the number it always did. See karr #78 and
+L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<Cpanel::JSON::XS>
 under C<allow_bignum> writes a C<Math::BigFloat> / C<Math::BigInt> as a bare
