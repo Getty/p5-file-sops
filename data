@@ -1,0 +1,81 @@
+---
+class: standard
+completed: 2026-08-20T00:11:39Z
+created: 2026-08-19T23:51:08Z
+id: 72
+priority: medium
+started: 2026-08-20T00:11:39Z
+status: done
+tags:
+- wire
+- float
+- mac
+- interop
+title: rotate silently turns an encrypted -0.0 into 0 (read side drops the sign)
+updated: 2026-08-20T00:11:43Z
+---
+
+Found while measuring karr #62 (sops 3.13.3), NOT caused by it -- present before
+commit a0d43c6 and after, in both formats.
+
+File::SOPS::Encrypted::_deserialize_value returns `$data + 0.0` for a
+type:float plaintext. Perl s `"-0" + 0.0` is POSITIVE zero; Go s
+strconv.ParseFloat("-0", 64) is negative zero. So an encrypted negative zero
+comes back out of decrypt() as +0.0 here and as -0 in sops.
+
+The MAC does not notice: the digest is taken over decrypt_bytes ("-0"), not
+over the deserialized value, so the document verifies. What drifts is the
+value handed to the caller -- and therefore the document, on the next write.
+
+Measured end to end, our own encrypt then our own rotate:
+
+  [yaml] sops -d before rotate: negzero: -0
+  [yaml] after our rotate:      negzero: 0     exit 0
+  [json] sops -d before rotate: "negzero": -0
+  [json] after our rotate:      "negzero": 0   exit 0
+
+Both rotations exit 0 and report nothing. Same family as karr #63 (a rotate
+changes the document silently) but a different mechanism and a much smaller
+fix: the sign has to survive _deserialize_value.
+
+Note the asymmetry that makes this worth fixing rather than documenting: the
+UNENCRYPTED negative zero now round-trips correctly in both formats (karr #62),
+so the encrypted slot is the only place left where File::SOPS loses the sign.
+
+Candidate fix: recognise a leading "-" on a zero plaintext and return -0.0
+(e.g. via a sign check, since 0+"-0" cannot express it). Needs a measurement
+that value_to_bytes of the result is "-0" and that nothing else in the float
+ladder moves. Wire lane. A regression test belongs next to
+t/24-float-precision.t section 9.
+DONE 2026-08-20 (commit 0359307, file-sops-wire).
+
+_deserialize_value now restores the sign from the plaintext when the
+conversion produced a zero. Both measurements the ticket asked for:
+
+  value_to_bytes of the result is -0    yes, for all five spellings
+                                        (-0, -0.0, -0.00, -0e0, -0.0e10)
+  nothing else on the float ladder      33 type:float plaintexts through
+  moves                                 the conversion and back out through
+                                        value_to_bytes: 5 rows change, the
+                                        other 28 are byte-identical
+
+Proof, sops 3.13.3, both formats. Note the ticket's fixture assumption was
+too pessimistic: sops CAN write this value when the leaf is ENCRYPTED (it
+never reaches sops's float emitter), so there is a real sops -> us fixture,
+unlike karr #62's unencrypted case.
+
+  sops -e then sops -d      -0                 -0
+  our decrypt               signbit 0          signbit 1
+  our rotate then sops -d   0, exit 0          -0, exit 0
+  our decrypt_file          0                  -0.0
+
+One trap worth recording: the first attempt tested the converted value with
+== directly. Perl's == calls SvIV_please on an integral NV and sets the
+PUBLIC IOK flag in place, so a type:float plaintext of 0.0 came back as a
+value detect_type calls int. The zero test now runs on a throwaway copy.
+That same mechanism, from the conversion rather than from the comparison,
+is now karr #73.
+
+t/24-float-precision.t section 10; with the fix backed out it fails 3 of 24
+subtests (5 assertions in each round-trip subtest, 11 of 63 in the ladder).
+docs/adr/0006 amended, no new ADR.
