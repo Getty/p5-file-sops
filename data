@@ -1,0 +1,47 @@
+---
+class: standard
+completed: 2026-08-20T01:39:30Z
+created: 2026-08-20T00:33:28Z
+id: 78
+priority: medium
+started: 2026-08-20T01:39:30Z
+status: done
+tags:
+- wire
+- json
+- float
+title: A dualvar float in an unencrypted JSON slot is written as a quoted string
+updated: 2026-08-20T02:53:38Z
+---
+
+Found while building karr #61 half 2 (ADR 0010), not caused by it -- the same
+hazard exists today for any caller who builds a dualvar itself.
+
+Cpanel::JSON::XS quotes any scalar carrying a PV, so a float dualvar in an
+UNENCRYPTED slot is emitted as a JSON string. Measured, sops 3.13.3:
+
+  encrypt(data => { ratio_unencrypted => dualvar($nv, "0.30000000000000004") })
+    -> "ratio_unencrypted" : "0.30000000000000004"
+    -> sops -d exit 0, value read back AS A STRING
+
+The document is not broken: detect_type calls the dualvar a float, so the
+digest covers value_to_bytes -- the canonical decimal -- and Go ToBytes of the
+JSON string it reads is the same bytes, so the MAC verifies. What changed is
+the value type in the document, silently.
+
+File::SOPS::Format::JSON::_float_roundtrips cannot see it. It emits, reparses,
+and compares value_to_bytes on both sides; the reparsed value is the string
+"0.30000000000000004", whose value_to_bytes is itself, so it compares EQUAL and
+the walk leaves the dualvar alone. A roundtrips check that also required the
+reparsed leaf to still be a float would fail it and let the Math::BigFloat
+carrier write a bare number.
+
+An encrypted slot is unaffected (the leaf is an ENC[...] string before the
+emitter sees it), and YAML is unaffected (YAML::XS writes the PV bare).
+
+ADR 0010 documents the hazard and keeps extract`s dualvar out of every tree
+for this reason. Wire/format lane. Fixture belongs next to
+t/24-float-precision.t section 12.
+Closed by 89ed194: guard in Format::JSON::_float_roundtrips -- the reparsed leaf must still be a float. JSON only; the same check in Format::YAML would refuse 0.0 and 2.0 (YAML::XS writes them as 0/2, which reparse as ints and are correct today). 264-row corpus through both handlers: 12 lines move, all 12 this case, 0 YAML rows, 0 ADR 0005/0006/int64 rows. Regression: t/24-float-precision.t section 14 (4 subtests); counter-check with the guard removed fails 3 assertions in subtest 35. Not fixed with a carrier (which would have written a bare number) because that moves emitter bytes -- see report. Adjacent drift filed as karr #84.
+Resolution replaced by 4beabdb (docs/adr/0011), maintainer decision: repaired instead of refused. The croak became 'return 0 unless', so the Math::BigFloat carrier writes the canonical decimal as a bare number -- the document YAML has always produced, and byte-identical to the bare-NV document for this case. The refusal was also wider than the ticket: measured at 89ed194, Format::JSON->emit croaked on 1.50, 0.30000000000000004 and 100000000000000000000 straight out of YAML::XS::Load, because YAML::XS keeps the source text of every scalar it parses. 244-row corpus: 20 rows move, all JSON, all this class; 28 of 28 sops -d runs exit 0 with the same double read back. t/24 section 14 rewritten onto the new behaviour (5 subtests, counter-checks: croak restored fails 2 of 39; check removed entirely fails the same 2 on 6 assertions).
+ERLEDIGT 2026-08-20, Commit 4beabdb (ersetzt die croak-Loesung aus 89ed194), ADR 0011. Maintainer entschied REPARIEREN statt ABLEHNEN -- selber Praezedenzfall wie #62: wo eine Repraesentation existiert, wird repariert. Eine Zeile in _float_roundtrips (croak..unless -> return 0 unless), danach uebernimmt der Math::BigFloat-Carrier und schreibt eine bare Zahl. WICHTIGER NEBENBEFUND, der die Entscheidung nachtraeglich rechtfertigt: der croak aus 89ed194 war ZU BREIT und haette eine Regression ins Release getragen. YAML::XS behaelt den Quelltext JEDES geparsten Skalars, also feuerte er auch fuer voellig gewoehnliche Baeume -- '1.50', '0.30000000000000004' und '100000000000000000000' direkt aus YAML::XS::Load wurden abgelehnt. Die Suite war trotzdem gruen, weil kein Test diesen Weg abdeckte. Cpanel::JSON::XS quotet naemlich nur dann, wenn die PV von seiner eigenen Zahldarstellung ABWEICHT: dualvar(1.5,'1.5') wird bare 1.5 geschrieben, dualvar(0.1+0.2,'0.30000000000000004') dagegen quoted. GEMESSEN: 28 von 28 Dokumenten sops -d exit 0, Wert als ZAHL zurueckgelesen, gleicher Double. ADR-0005/0006-Korpus 0 bewegte Zeilen. Gesamtkorpus 244 Zeilen, 20 bewegt, alle JSON und alle diese Leaf-Klasse. Byte-Identitaet ehrlich berichtet statt behauptet: 8 von 14 byte-identisch zum bare-NV-Dokument, 6 unterscheiden sich NUR in der Schreibweise (positional vs Exponent), und dieselben 6 weichen auf der YAML-Seite schon heute so ab. Gegenprobe: Check ganz entfernt -> subtests 35-36 auf 6 Assertionen rot. Verifiziert 694/694 PASS, t/04 31/31 AUSGEFUEHRT.
