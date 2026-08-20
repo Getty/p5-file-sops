@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-08-20T07:59:18Z
+created: 2026-08-20T07:37:23Z
+id: 94
+priority: low
+started: 2026-08-20T07:59:18Z
+status: done
+tags:
+- docs
+- pod
+title: 'rotate POD does not mention the karr #73 float-type-retention fix'
+updated: 2026-08-20T07:59:18Z
+---
+
+lib/File/SOPS.pm rotate (sub ~996, POD ~1038-1094) documents in detail that the sops section (rules, mac_only_encrypted, unmodelled fields) now survives a rotation - but says nothing about per-leaf type retention, even though rotate is the exact method Changes uses to describe and measure karr #73 ("sops -e of whole: 2.0 came back out of our rotate as type:int, three of five type:float leaves relabelled"). The fact is documented correctly and thoroughly at its actual source, File::SOPS::Encrypted::decrypt_value (Encrypted.pm ~415-419, cites karr #73 and docs/adr/0009), and File::SOPS::decrypt_file POD cross-references decrypt_value explicitly - but rotate POD has no such cross-reference, so a reader of rotate alone would not learn that an encrypted whole-number float now keeps its type:float label across a rotation. Suggest either a one-line pointer to L<File::SOPS::Encrypted/decrypt_value> in rotate POD, or an explicit mention parallel to the existing "sops section survives" paragraph. No code change, no wire bytes affected. Found during the pre-release consistency audit at HEAD b318c10.
+ERLEDIGT 2026-08-20, Commit 576a903. rotate-POD hat einen Absatz bekommen: die type-Label ueberstehen die Rotation ebenfalls, type:float auf einer ganzen Zahl eingeschlossen, mit dem Vorher-Bild (ein von sops geschriebenes whole: 2.0 kam als type:int zurueck, exit 0, MAC hielt in beiden Faellen) und Querverweisen auf Encrypted/decrypt_value, karr #73 und ADR 0009.
