@@ -1,0 +1,93 @@
+---
+class: standard
+completed: 2026-08-20T05:06:54Z
+created: 2026-08-20T02:47:22Z
+id: 86
+priority: high
+started: 2026-08-20T05:06:54Z
+status: done
+tags:
+- wire
+- yaml
+- mac
+- interop
+title: 'YAML octal ints: YAML::XS reads 0755 as 755, Go reads 493 -- the file fails
+  its own MAC'
+updated: 2026-08-20T05:10:26Z
+---
+
+Found while closing karr #84, not caused by it, and NOT caught by its guard --
+that guard measures our own emitter and parser, and both agree with each other
+here. The disagreement is with Go.
+
+YAML::XS (libyaml, YAML 1.1 resolution as it implements it) reads a leading-zero
+integer as DECIMAL. Go`s yaml.v3 reads it as OCTAL. The digest covers our
+number, the document carries the source spelling, and Go re-derives a different
+number from it. Measured, sops 3.13.3, leaf under _unencrypted, one document
+per row:
+
+  source  our int  document  sops -d
+  010     10       010       exit 51 MAC mismatch   (Go: 8)
+  017     17       017       exit 51 MAC mismatch   (Go: 15)
+  0755    755      0755      exit 51 MAC mismatch   (Go: 493)
+  007     7        007       exit 0                 (7 either way -- agrees by luck)
+  0o10    "0o10"   0o10      exit 51 MAC mismatch   (we type it str, Go reads int 8)
+
+`mode: 0755` in a config file is the realistic form of this, and the file is
+written silently. JSON is unaffected in itself (JSON has no octal), and since
+karr #84 an 010 on its way into JSON is refused rather than written.
+
+Note the last row is the mirror image: for `0o10` OUR parser says str and Go
+says int, so a guard that only looked at int leaves would miss it.
+
+Not fixable by pattern-matching the text (ADR 0002) and not visible to an
+emit-and-reparse through our own parser, which is why karr #84`s guard cannot
+see it. The honest candidates are (a) refuse a leaf whose SOURCE spelling this
+library cannot prove Go resolves the same way, which needs a rule about text
+after all, or (b) quote such a leaf on the way out, which changes its type. Both
+move wire bytes and want an ADR and a maintainer decision.
+
+Wire lane. Measured with sops 3.13.3, Crypt::Age 0.002.
+Closed by 706ac4a (ADR 0013, t/30-foreign-resolution-guard.t).
+
+Candidate (a), as decided: a leaf whose SOURCE SPELLING this library cannot
+prove Go resolves the way it does is refused at encrypt time. Quoting on the
+way out was not taken -- it changes the leafs type, which sops never does.
+
+The rule is not "a leading zero". It is a model of yaml.v3s resolve() plus
+sopss ToBytes, applied to the token the emitter would actually write, and
+verified branch by branch against the binary:
+
+  007 passes   -- 7 is 7 in both bases, digest bytes equal, sops -d exit 0
+  0o10 caught  -- WE type it str and digest "0o10", Go reads the integer 8
+  0755 caught  -- 755 here, 493 there
+
+and with them 010, 017, -010, +010, 0O10, 0o7, 0o0, 0x1f, 0X1F, -0x1f, +0o10,
+0b101, 0b0, 1_000, 0_7, 0_, 685_230.15, 1_0.5, .inf/.Inf/.INF/+.inf/-.inf,
+.nan/.NaN, Null, NULL, TRUE, FALSE, 2015-01-01, 2015-1-2, 2015-01-01 12:00:00,
+2015-01-01t12:00:00Z, 2016-02-29 and a bare 0xffffffffffffffff.
+
+Measured, sops 3.13.3, 648-row emitter corpus (162 leaves x 2 slots x both
+handlers), before/after: 53 rows move, ALL 53 already failed -- 50 sops -d exit
+51, 3 exit 25 (a uint64 sops refuses to write at all). The other 595 rows are
+byte-identical. Nothing that worked stops working.
+
+Also asked, since it decides the error message: sops -e on a plaintext
+mode: 0755 stores type:int with the value 493 and prints 493 on -d. The
+spelling does not survive sops -e at all, which is why the READ path needs
+nothing here and why the message names 493 as what to pass instead.
+
+Not guarded, each measured and each stated in the ADR: encrypted slots (an
+ENC[...] string, 0 of 324 rows affected), JSON (quotes every string, has no
+octal; the int leaves are already refused by #84s guard, 0 JSON rows move),
+the plaintext emitters behind decrypt_file and edit (no MAC to disagree with),
+the sops metadata section (not covered by the digest), and mac_only_encrypted
+documents -- filed as #87, because there the digest does not cover an
+unencrypted leaf and refusing would refuse a document that works today.
+
+prove -lr t/ 726/726. SOPS_BIN=/tmp/sops prove -l t/04-interop.t 31/31,
+EXECUTED. Guard removed: 20 of t/30s 32 subtests and 99 assertions fail.
+
+Also found and filed while measuring: #88 (a YAML-parsed -0.0 into JSON dies in
+the Math::BigFloat carrier assertion, present at 543b59d, unrelated to #86).
+ERLEDIGT 2026-08-20, Commit 706ac4a, ADR 0013, t/30-foreign-resolution-guard.t. Maintainer entschied 'refusen, was wir nicht beweisen koennen'. Die Divergenzflaeche ist VIEL breiter als die vier Zeilen des Tickets: neben 0755/010/017 auch -010/+010, alle 0o/0O-Formen, hex (0x1f/0X1F/-0x1f), binaer (0b101), Underscore-Zahlen (1_000, 685_230.15), .inf/.Inf/.INF/.nan, Null/NULL/TRUE/FALSE und Timestamps (2015-01-01, auch mit Uhrzeit) -- alle vorher sops -d exit 51, bare 0xffffffffffffffff sogar exit 25. GEMESSEN was sops SELBST mit plaintext 'mode: 0755' tut: es loest die Schreibweise auf und speichert type:int 493, die Quell-Schreibweise ueberlebt sops -e in keiner Form. Folge: der READ-Pfad braucht nichts, ein von sops geschriebenes Dokument traegt nie eine oktale Schreibweise. Die Regel ist ein Modell von yaml.v3s resolve() plus sops ToBytes, angewandt auf das TOKEN das der Emitter schreiben wuerde, nicht auf den Typ des Leaves -- deshalb faellt 0o10 (wir str, Go int) und deshalb passiert 007 (Go liest oktal 7, Digest-Bytes 7, gleich unseren). Nichts an fuehrenden Nullen geht in die Regel ein; 00, 000 passieren gleichermassen, 08/09 weil Go sie als Floats mit Bytes 8/9 liest. KORPUS 648 Zeilen: 53 bewegen sich, ALLE 53 waren vorher schon kaputt (50x exit 51, 3x exit 25), 0 JSON-Zeilen, 0 verschluesselte Slots, 595 byte-identisch. Zweiter Korpus mit 105 realistischen Config-Werten: 101 geschrieben und verifiziert, 4 abgelehnt, jeder davon vorher exit 51. GEGENMESSUNG 'was hoert auf zu funktionieren': 0 von 53. Drei fruehere Entwuerfe brachen jeweils etwas, der Korpus fing alle: -0 (eine Integer-Null hat fuer Go kein Vorzeichen), 2015-01-01T12:00:00.5Z (sops digestet eine Zeit als RFC3339 NANO, die Nachkommastelle bleibt) und . bzw. .. (Gos ParseFloat nimmt keins von beiden). Gegenprobe: Guard raus -> 20 von 32 subtests, 99 Assertionen rot. Orchestrator hat unabhaengig nachgeprueft: 726/726 PASS, t/04 31/31 AUSGEFUEHRT, und 007/8/1.5 gehen durch waehrend 0755/010/0o10/0x1f/.inf/2015-01-01 fallen. RISIKO, im ADR benannt statt versteckt: dies ist die einzige Stelle dieser Schicht, die ueber eine fremde Implementierung SCHLIESST statt sie zu MESSEN -- jeder Zweig ist heute gegen das Binary verifiziert, aber das Modell driftet, wenn yaml.v3 seinen Resolver aendert.
