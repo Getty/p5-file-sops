@@ -1,6 +1,43 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE and BUG FIX: `rotate` no longer refuses a JSON document
+    that `sops -e` wrote and `sops -d` reads. A bare JSON number between 2**63
+    and 2**64-1 is an integer to Perl and a float64 to Go: sops normalises
+    9223372036854775808 to 9223372036854776000 and writes type:float in both
+    slots, while Cpanel::JSON::XS decoded those digits into a Perl integer, so
+    detect_type called the leaf an int and assert_representable refused it with
+    the int64 message - exit 255 on a file the reference implementation had
+    just written, and the same refusal for `encrypt` of the plaintext it came
+    from. The JSON parser now hands back for this window the same leaf karr #63
+    introduced one magnitude above it: the double those digits name, carrying
+    the digits as its string half, which is what YAML::XS has always returned
+    and what Go reads there. Measured against sops 3.13.3 - rotating such a
+    document writes the unencrypted slot back with the digits it came with and
+    `sops -d` reads the result, and encrypting the plaintext writes what
+    `sops -e` writes for the identical input, in an encrypted slot and an
+    unencrypted one alike. A second refusal goes with it: a document whose
+    unencrypted number is spelled differently from its double's canonical
+    decimal - 9223372036854776832, whose double is the same 9223372036854775808
+    - is one `sops -d` accepts, because Go digests the number and not the text,
+    and this library used to report `MAC verification failed` on it; it now
+    verifies, and decrypt_file writes it out with the normalisation `sops -d`
+    writes. What an existing caller gets back moves in exactly one place, and
+    it is the numeric half: decrypt and extract of an UNENCRYPTED slot still
+    print the digits the document holds, but 0 + $value is now the double those
+    digits name (for 9223372036854776000 that is 9223372036854775808, 192 less)
+    where it used to be the digits exactly. The ENCRYPTED slot is unchanged in
+    both methods - sops already wrote type:float there, so a float is what this
+    library always read back - and decrypt_file's plaintext is byte-identical.
+    YAML is untouched and still refuses those digits with the int64 message;
+    sops cannot write such a YAML document either (`Cannot walk value, unknown
+    type: uint64`, exit 23), so only JSON has a window Go reads as a number and
+    Perl reads as an integer. A value in the window that did NOT come from a
+    JSON parse still croaks, deliberately - the caller's scalar is an exact
+    integer and no reader has spoken for it - though of 35 literals measured
+    across the window 14 would have produced a document `sops -d` accepts, and
+    narrowing that refusal is open as karr #104. See karr #101 and
+    docs/adr/0021.
   - BEHAVIOUR CHANGE: a bare JSON integer literal too wide for a Perl integer
     is now read as a FLOAT carrying its source spelling, where it used to be
     read as a string. Cpanel::JSON::XS hands such a literal back as a plain

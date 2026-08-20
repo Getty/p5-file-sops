@@ -359,14 +359,41 @@ prototype loaded.
 | hand-written JSON, wide number, either slot, `encrypt` | **croak** | `type:float` / bare canonical decimal, matching `sops -e` |
 | a `mac_only_encrypted` document with such a leaf | **croak** | written, `sops -d` exit 0 |
 | the value from `decrypt`, unencrypted slot | a Perl UV; `"$v"` and `0+$v` both the digits | a dualvar: `"$v"` still the digits, `0+$v` the **double** |
-| the value from `extract`, either slot | a UV / a bare NV | a dualvar printing all its digits (ADR 0010's shape) |
+| the value from `decrypt`, **encrypted** slot | a bare NV (sops had already written `type:float`) | **unchanged** |
+| the value from `extract`, **unencrypted** slot | a Perl UV printing the digits | a dualvar printing the digits (ADR 0010's shape) |
+| the value from `extract`, **encrypted** slot | **already** a dualvar printing all its digits | **unchanged** |
+| the plaintext `decrypt_file` writes | — | **unchanged, byte for byte** |
+| a document whose unencrypted number is not its double's canonical decimal | **`MAC verification failed`** on `decrypt`, `decrypt_file` and `extract` | verifies, as `sops -d` already did |
 | `detect_type` of such a leaf | `int` | `float` — the two slots now agree, where the unencrypted one used to disagree with the encrypted one |
 | a **quoted** `"9223372036854775808"` | `type:str` | unchanged |
 | the same digits in a **YAML document**, any slot | croak, `int64` message | **unchanged** — same croak, same message |
 | the same digits **parsed from JSON and emitted as YAML** | croak, `int64` message | three outcomes, see below |
 | a **caller-supplied Perl UV** in the window, not from a JSON parse | croak | **unchanged, still croaks** |
 
-Three rows need naming, and the first is a correction.
+The `extract` row above is a correction, and the last two rows are consequences
+this ADR first failed to name at all. The API lane measured them against a
+tree carrying only `Format/JSON.pm` at the old revision.
+
+**`extract` barely moves, and `decrypt_file` does not move at all.** The
+original row said `extract` went from "a UV / a bare NV" to a dualvar in
+*either* slot. Measured, the **encrypted** slot already returned a dualvar
+printing all its digits, before and after — because sops had written
+`type:float` there, so this library had always read a float out of it. Only the
+**unencrypted** slot moves, and in it only the numeric half: `"$v"` printed the
+digits before and prints them now. This is the mirror image of ADR 0020, where
+the encrypted slot carried the sharpest consequence; here it carries none.
+
+**A MAC that used to fail now verifies, and that is a bug fix nobody asked
+for.** `9223372036854776832` is inside the window and its double is
+`9223372036854775808`, so its text is *not* its double's canonical decimal.
+`sops -d` accepts such a document — Go digests the number it parsed, not the
+source text — while this library digested the integer's own digits and reported
+`MAC verification failed` from `decrypt`, `decrypt_file` and `extract` alike.
+After this change the leaf is a float, `value_to_bytes` derives Go's own text
+from the double, and the document verifies. `decrypt_file` then writes the
+value out with the same normalisation `sops -d` writes.
+
+Three further rows need naming, and the first is a correction.
 
 **The YAML row was wrong, and lane 1 measured it.** It said "croak, with
 ADR 0013's message instead of the `int64` one", which conflates two different

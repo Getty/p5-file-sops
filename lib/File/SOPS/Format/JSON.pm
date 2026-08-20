@@ -265,6 +265,38 @@ sub _restore_wide_numbers {
 # does set the pad housekeeping bits on an SV this walk had no business
 # touching, and a parse path that leaves fingerprints on leaves it did not fix
 # is one a later flag-level regression test cannot read.
+#
+# TWO leaf classes end up as that dualvar, one magnitude apart, and the public
+# flags of the decoder's own SV are what tell them apart:
+#
+#   IOK       a bare literal Perl DID hold and Go cannot, [2**63 .. 2**64-1] --
+#             a UV here, a float64 there. karr #101, docs/adr/0021.
+#   POK alone a bare literal Perl could NOT hold, past 2**64-1, which the
+#             decoder hands back as a plain string. karr #63, docs/adr/0020.
+#
+# The flags are read ONCE for both, which is why the second class costs nothing:
+# ADR 0021 measured the fold slightly FASTER than the single read this walk
+# already made through the plain-PV test, which used to be a sub of its own.
+# The question that test asks is unchanged and so is the reason it asks it of
+# the PUBLIC SVf_POK -- as Encrypted::_has_public_pv does, because merely
+# stringifying a number sets the PRIVATE pPOK and reading that would call an
+# integer a string because someone had logged it. It is a question about the
+# DECODER's output, not about the SOPS type; the type ladder stays in
+# File::SOPS::Encrypted::detect_type and is not repeated here.
+#
+# THE ORDER OF THE TWO GATES IN THE IOK BRANCH IS CORRECTNESS, NOT COST.
+# The flag comes first and the numeric comparison second, never the other way
+# round: a numeric comparison against a scalar sets the PUBLIC SVf_IOK on it in
+# place, so run ahead of the flag test over {"port":"5432","zip":"007",
+# "ver":"1.50"} it retypes three of four string leaves -- measured, '5432' and
+# '007' become ints and '1.50' a float, and the document either changes schema
+# or croaks on ADR 0012's guard, from a walk that never reached the window.
+# That is karr #32's mechanism and ADR 0002's rule. Two things keep it away
+# from here and BOTH are deliberate: the SVf_IOK test that gates the branch,
+# and the copying done by this sub's own `my ($node, $type) = @_` and again by
+# Encrypted::integer_fits_int64. Neither is the redundant half -- the order is
+# also what keeps the comparison off a leaf where it would warn, measured: one
+# "isn't numeric" warning per string leaf.
 sub _wide_number {
     my ($node, $type) = @_;
 
@@ -273,7 +305,33 @@ sub _wide_number {
         return;
     }
 
-    return unless _plain_pv_leaf($node);
+    return if !defined $node || ref $node;
+
+    my $flags = B::svref_2object(\$node)->FLAGS;
+
+    if ($flags & B::SVf_IOK()) {
+        # The boundary is asked of File::SOPS::Encrypted and is NOT spelled a
+        # second time here: two copies of int64 drift together, which leaves
+        # the wire self-consistent and only the reference disagreeing. Only
+        # the upper end can fail -- an IV cannot reach below int64min, so the
+        # negative half of this window does not exist and -9223372036854775809
+        # is already the plain-PV branch's leaf.
+        return if File::SOPS::Encrypted->integer_fits_int64($node);
+
+        # NOT `$digits + 0`, which is what the branch below can use: these
+        # digits still fit a UV, so numifying them gives back an INTEGER and
+        # detect_type would go on calling the leaf an int -- the fix would be
+        # a silent no-op. pack/unpack forces the double Go reads there, and
+        # value_to_bytes then re-derives sops's own digits from it
+        # (9223372036854775808 -> 9223372036854776000, measured identical to
+        # what `sops -e` writes for the same input, in both slots).
+        my $digits = "$node";
+
+        return dualvar(unpack('d', pack('d', $digits)), $digits);
+    }
+
+    return unless $flags & B::SVf_POK();
+    return if $flags & B::SVf_NOK();
     return unless defined $type && !ref $type && $type == JSON_TYPE_INT;
 
     # The numification runs on a COPY of the PV. Perl marks a scalar numeric IN
@@ -284,21 +342,6 @@ sub _wide_number {
     my $number = $digits + 0;
 
     return dualvar($number, $digits);
-}
-
-# Did the plain decode leave this leaf a bare string SV?
-#
-# A question about the DECODER's output, not about the SOPS type -- the type
-# ladder stays in File::SOPS::Encrypted::detect_type and is not repeated here.
-# The public SVf_POK for the same reason Encrypted::_has_public_pv reads it:
-# merely stringifying a number sets the PRIVATE pPOK, and reading that would
-# call an integer a string because someone had logged it.
-sub _plain_pv_leaf {
-    return 0 if !defined $_[0] || ref $_[0];
-
-    my $flags = B::svref_2object(\$_[0])->FLAGS;
-    return 0 unless $flags & B::SVf_POK();
-    return $flags & (B::SVf_IOK() | B::SVf_NOK()) ? 0 : 1;
 }
 
 sub serialize {

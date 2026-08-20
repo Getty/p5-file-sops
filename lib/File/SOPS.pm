@@ -293,50 +293,109 @@ to -- silently drops digits. Pass such a value as a B<string>; that is
 C<type:str>, written verbatim, and it survives both implementations intact.
 See L<File::SOPS::Encrypted/assert_representable>.
 
-=head3 A number too wide for a Perl integer is a float
+That rule is about a scalar B<Perl holds as an integer>, which since 0.003 a
+bare JSON number in C<2**63 .. 2**64-1> is not: the parser hands back the
+C<float64> Go reads there, so those documents are written rather than refused.
+A caller who does hold such an integer has the other answer available too --
+C<unpack('d', pack('d', $v))> is what sops writes for the same digits, at the
+cost of the ones the double cannot hold. See
+L</A number past Go's int64 is a float>.
+
+=head3 A number past Go's int64 is a float
 
 B<There is no big integer in the SOPS data model.> Past C<int64> a number is a
-C<float64> to Go: sops writes such a leaf as C<type:float>, and C<sops -e> on a
-plaintext C<99999999999999999999> writes C<100000000000000000000> into the file
-itself. Since 0.003 this library agrees in B<JSON> as it always did in YAML.
+C<float64> to Go: sops writes such a leaf as C<type:float>, in an encrypted
+slot and an unencrypted one alike, and C<sops -e> on a plaintext
+C<99999999999999999999> writes C<100000000000000000000> into the file itself.
+Since 0.003 this library agrees in B<JSON> as it always did in YAML.
 
-Until then L<Cpanel::JSON::XS> handed a bare integer literal it could not hold
-in a Perl integer back as a plain B<string>, indistinguishable from the same
+The boundary is B<Go's>, not Perl's, and that is the whole rule. Perl's
+integers are a magnitude wider, so two windows sit above C<2**63-1>; they reach
+the tree as different scalars, and until 0.003 each of them got its own wrong
+answer here:
+
+    a bare JSON literal in    the decoder returns   until 0.003   since 0.003
+    2**63 .. 2**64-1          a Perl integer        a croak       a float
+    past 2**64-1              a plain string        a str         a float
+
+The windows are positive-only. A Perl integer cannot reach below C<int64>'s
+floor, so C<-9223372036854775808> is still an C<int>, and
+C<-9223372036854775809> is already a plain string and already the upper
+window's leaf.
+
+The B<lower> window is the one where Perl can hold the integer and Go cannot.
+L<Cpanel::JSON::XS> decodes C<9223372036854775808> into a Perl integer, so it
+was an C<int> here and the C<int64> refusal above applied to it -- while sops
+writes that same literal as a C<type:float> and normalises it to
+C<9223372036854776000>, which is itself inside the window. L</rotate> therefore
+refused a JSON document C<sops -e> had written and C<sops -d> reads, and
+L</encrypt> refused the plaintext it was written from. Measured against sops
+3.13.3: rotating such a document now writes the unencrypted slot back with the
+digits it came with and C<sops -d> reads the result, and encrypting the
+plaintext writes what C<sops -e> writes for the identical input. See karr #101
+and
+L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>.
+
+The B<upper> window is the one where the decoder cannot hold the digits at all
+and hands them back as a plain B<string>, indistinguishable from the same
 digits quoted, so C<100000000000000000000> was typed C<str> and L</rotate>
 rewrote a document sops had written with a number there as a JSON B<string>.
-The JSON parser now returns the same leaf L<YAML::XS> has always returned for
-those digits -- the double, carrying its source spelling -- so the value gets
-the B<float> rules and not the string ones. Measured, one JSON document per
-row:
+See karr #63 and
+L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
 
-    where the value sits              before             after
-    unencrypted slot                  the digits, a str  a float, those digits
-    encrypted slot                    type:str           type:float
-    a QUOTED "100000000000000000000"  a str              unchanged, a str
-    the same document in YAML         already a float    unchanged
+Both windows now hand back the leaf L<YAML::XS> has always returned for those
+digits -- the double, carrying its source spelling -- so the value gets the
+B<float> rules and neither the integer nor the string ones. A B<quoted>
+C<"9223372036854775808"> is unaffected in either window and stays a C<str>, and
+so is every value in a document this library wrote before 0.003: it carries an
+upper-window number quoted, and it could not carry a lower-window one at all.
 
-L</decrypt> therefore hands back a B<number>. In an B<unencrypted> slot it is a
-L<Scalar::Util/dualvar> and prints as the digits the document holds; in an
+L</decrypt> hands such a leaf back as a B<number>. In an B<unencrypted> slot it
+is a L<Scalar::Util/dualvar> and prints as the digits the document holds; in an
 B<encrypted> one it is the bare NV every decrypted float is, so C<"$value">
-goes through Perl's 15 significant digits and gives C<1e+20> where the old
-string gave C<100000000000000000000>. L</extract> is the method that prints all
-of them in either slot -- see the dualvar note there and
-L<File::SOPS::Encrypted/canonical_float_dualvar>. No digits are lost in any of
-that: every spelling parses back to the identical double, and L</decrypt_file>
-writes the leaf back as a bare number rather than as the quoted string it used
-to write.
+goes through Perl's 15 significant digits and gives C<1e+20> where the upper
+window's old string gave C<100000000000000000000>. L</extract> is the method
+that prints all of them in either slot -- see the dualvar note there and
+L<File::SOPS::Encrypted/canonical_float_dualvar>. L</decrypt_file> writes the
+leaf into the plaintext as a bare number.
+
+B<For the lower window what moved is the numeric half and not the printed one>,
+and it is the only window where that can happen -- it is the only one Perl held
+exactly. Measured per slot, on a document C<sops -e> wrote:
+
+    decrypt / extract, encrypted slot     unchanged. sops already wrote
+                                          type:float there, so this library
+                                          has always read a float back
+    decrypt / extract, unencrypted slot   prints the same digits as before,
+                                          but 0 + $value is now the double
+                                          those digits name where it used to
+                                          be the digits themselves
+    decrypt_file                          unchanged, byte for byte
+
+C<0 + $value> for C<9223372036854776000> is C<9223372036854775808>, 192 short
+of what the same scalar prints. That is not a number this library chose: it is
+the C<float64> Go has been reading out of that leaf since sops wrote it, and
+digesting for the MAC.
 
 What B<is> lost is a digit the double never held. C<value_to_bytes> re-derives
 the text from the number, so a hand-written literal that is not its double's
 canonical decimal is written -- and read back -- rounded:
+C<12345678901234567890> becomes C<12345678901234567000> and
 C<99999999999999999999> becomes C<100000000000000000000>, which is what
-C<sops -e> does to the same document. A document B<this library has already
-written> carries the value B<quoted>, and quoted is still a C<str>, so it keeps
-verifying and keeps reading back exactly as before. See karr #63 and
-L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
+C<sops -e> does to the same document.
 
-Two magnitudes next to this one are B<refused> rather than written, and a
-caller meeting a wide number should know where they are.
+The same re-derivation settles a B<verification> difference that used to go the
+other way. A document whose unencrypted number is spelled differently from its
+double's canonical decimal -- C<9223372036854776832>, whose double is the same
+C<9223372036854775808> -- is one C<sops -d> accepts, because Go digests the
+number and not the text. Until 0.003 this library digested the integer's own
+digits and reported C<MAC verification failed> on such a file; it now digests
+what Go digests, reads it, and L</decrypt_file> writes it out with the same
+normalisation C<sops -d> writes. Measured against sops 3.13.3 on both sides.
+
+Three things around these windows are still B<refused> rather than written --
+the magnitude above them, one whole format, and one kind of caller -- and a
+caller meeting a wide number should know where all three are.
 
 A literal that overflows a double -- C<1> followed by 400 zeros -- B<dies> in
 L<File::SOPS::Encrypted/assert_representable>'s non-finite guard on every path
@@ -349,13 +408,24 @@ unencrypted slot alike. The B<read> paths do not die: L</decrypt> and
 L</extract> hand such a leaf back with C<Inf> as its number and its digits as
 its text, because nothing there has to write it.
 
-Below that, the range from C<2**63> to C<2**64-1> never becomes a float here,
-because Perl B<can> hold it: it is an integer, so the C<int64> refusal above
-applies to it and L</encrypt> dies -- while sops writes the same literal as a
-C<type:float>. C<sops -e> normalises C<9223372036854775808> to
-C<9223372036854776000>, which lands in that range, so L</rotate> refuses a
-JSON document sops itself wrote and reads. That is a gap between the two
-implementations rather than a decision, and it is open as karr #101.
+The lower window in a B<YAML> document is refused, and sops cannot write one
+either. L<YAML::XS> hands those digits back as a Perl integer, so the C<int64>
+refusal above applies and L</encrypt> dies with that message; C<sops -e> on the
+same plaintext stops at C<Error walking tree: Cannot walk value, unknown type:
+uint64>, exit 23, in both slots, measured against sops 3.13.3. The upper window
+in YAML has always been a float and is unaffected. Only JSON has a window Go
+reads as a number and Perl reads as an integer.
+
+A lower-window value that did B<not> come from a JSON parse -- a Perl integer
+literal, a computed one, or one that came out of a YAML document -- is still
+refused by L<File::SOPS::Encrypted/assert_representable>. The scalar the caller
+handed over is an exact integer and no reader has spoken for it, so turning it
+into a lossy double would be this library guessing. Say which one you mean:
+C<unpack('d', pack('d', $v))> makes it the float sops writes, and C<"$v"> makes
+it a C<type:str> that stores the digits exactly. That refusal is wider than it
+strictly has to be -- of 35 literals measured across the window, 14 would have
+produced a document C<sops -d> accepts in an unencrypted JSON slot -- and
+narrowing it is open as karr #104.
 
 =head3 Saying what a value is
 
@@ -732,14 +802,16 @@ The returned structure holds B<character strings>, so it compares equal to the
 structure L</encrypt> was given. Do not decode it again. See
 L</Character encoding>.
 
-B<New in 0.003, and a change for existing callers:> a JSON number too wide for
-a Perl integer comes back as a B<float> where it used to come back as a string,
-so C<"$value"> can print C<1e+20> where it printed C<100000000000000000000>.
-Only a B<bare> literal is affected -- a quoted C<"100000000000000000000"> is a
-string as it always was, and so is every value in a document this library
-wrote before 0.003. Which slot prints which, and the two magnitudes either side
-that are refused instead, are in
-L</A number too wide for a Perl integer is a float>. Unlike L</extract>, this
+B<New in 0.003, and a change for existing callers:> a JSON number past Go's
+C<int64> comes back as a B<float>. Past C<2**64-1> it used to come back as a
+string, so C<"$value"> can print C<1e+20> where it printed
+C<100000000000000000000>; between C<2**63> and C<2**64-1> it used to come back
+as an exact Perl integer, and there the printed digits are unchanged while
+C<0 + $value> is now the double they name. Only a B<bare> literal is affected
+-- a quoted C<"100000000000000000000"> is a string as it always was, and so is
+every value in a document this library wrote before 0.003. Which slot moves
+which half, and what is refused instead, are in
+L</A number past Go's int64 is a float>. Unlike L</extract>, this
 method does not wrap a float leaf in a dualvar: a dualvar inside a tree changes
 the bytes the emitters write. See
 L<File::SOPS::Encrypted/canonical_float_dualvar>.
@@ -978,13 +1050,18 @@ side therefore still does here. Measured against sops 3.13.3 on a document
 sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value>, karr #73 and
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
-B<The plaintext of a JSON number too wide for a Perl integer moved in 0.003>,
-because such a leaf is now a float rather than a string: an unencrypted
+B<The plaintext of a JSON number past C<2**64-1> moved in 0.003>, because such
+a leaf is now a float rather than a string: an unencrypted
 C<100000000000000000000> is written back bare where it used to be written as
 the JSON string C<"100000000000000000000">, and an encrypted one as C<1e+20>.
 Both parse back to the same double and both are what the input document meant;
 what changes is that the plaintext no longer turns the reference's own number
-into a string. See L</A number too wide for a Perl integer is a float>.
+into a string. The window below it, C<2**63> to C<2**64-1>, is written back
+byte for byte as before -- what moved there is that a document whose number is
+not its double's canonical decimal is now read at all, where it used to be
+refused as C<MAC verification failed>, and that C<decrypt_file> then writes the
+normalisation C<sops -d> writes. See
+L</A number past Go's int64 is a float>.
 
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
 It is nonetheless written atomically, since nothing stops it naming a file that
@@ -1102,12 +1179,15 @@ The wire's spelling is not the B<document's> either, where the two differ: an
 unencrypted C<1.50> or C<42.0> comes back as C<1.5> and C<42>, because the
 string half is the canonical decimal and not the source text.
 
-Since 0.003 that paragraph covers a JSON number too wide for a Perl integer as
-well: such a leaf is a float now, where it used to come back as a plain string,
-so C<extract> wraps it and prints all its digits in an encrypted slot as well
-as an unencrypted one. A hand-written C<99999999999999999999> comes back as
+Since 0.003 that paragraph covers a JSON number past Go's C<int64> as well:
+such a leaf is a float now, where past C<2**64-1> it used to come back as a
+plain string and between C<2**63> and C<2**64-1> as an exact Perl integer, so
+C<extract> wraps it and prints all its digits in an encrypted slot as well as
+an unencrypted one. A hand-written C<99999999999999999999> comes back as
 C<100000000000000000000>, which is also what the document itself now holds.
-See L</A number too wide for a Perl integer is a float>.
+For the lower window the digits printed are the ones the document already
+carried, and it is C<0 + $value> that moved instead.
+See L</A number past Go's int64 is a float>.
 
 The second thing the dualvar does not do is travel: it applies to the B<leaf>
 this method returns and to nothing else. Floats inside a returned branch are
