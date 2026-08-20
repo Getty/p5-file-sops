@@ -78,6 +78,19 @@ back at exit 0 **as a string** — the file is fine, the value has changed type.
 So the dualvar is a value to read, and it stops at the boundary where a caller
 reads one. Recorded as karr #78 for the emitter side.
 
+**Amended by karr #78 / ADR 0011.** The JSON row of that table is no longer
+what happens: `_float_roundtrips` now answers *no* when the reparsed leaf is
+not a float, and the `Math::BigFloat` carrier writes the canonical decimal as a
+**bare number** — measured, byte-identical to the bare-NV document for the
+17-digit case, `sops -d` exit 0 with a number read back. The restriction above
+still stands, and for the reason the *second* row gives: a dualvar in a tree
+still changes what gets written at the magnitudes where `value_to_bytes`'s
+positional spelling differs from the emitter's exponent one (`1e300`, `1e20`,
+`1e-7`, …, in **both** formats). Those documents are correct — measured, exit 0
+and the same double — but they are not the bytes the same value produces
+without the dualvar, which is reason enough to keep it out of the trees this
+library builds.
+
 - **A non-finite float is returned unchanged.** `NaN`, `+Inf` and `-Inf` are
   `value_to_bytes`'s wire spellings, not a number's decimal; they are already
   `$NO_AGREED_FORM` to the emitters, and `assert_representable` refuses them on
@@ -131,16 +144,22 @@ file — but it is a visible change and it is why this ADR exists.
 `extract` on a branch, on a string, an int, a bool or a `type:bytes` value is
 untouched, as are `decrypt`, `decrypt_file` and everything else.
 
-### Feeding it back in is safe on the encrypted path, not on the plain one
+### Feeding it back in is safe on the encrypted path, and now on the plain one
 
 `detect_type` reads `SVf_NOK` before `POK`, so a dualvar is a `float` and
 `value_to_bytes` re-derives the identical canonical decimal from its numeric
 half. Measured: `encrypt(data => { ratio => $extracted })` produces the same
 plaintext and the same `type:float` label as the bare NV would.
 
-An **unencrypted** slot is the exception recorded above: in JSON the emitter
-quotes it. A caller who puts an extracted float into an `_unencrypted` key in a
-JSON document gets a string there. The POD says so.
+An **unencrypted** slot was the exception recorded above: in JSON the emitter
+quoted it, so a caller who put an extracted float into an `_unencrypted` key in
+a JSON document got a string there.
+
+**Superseded by ADR 0011 (karr #78).** That path now writes a number in both
+formats, and the `extract` → `encrypt` round trip a caller most obviously
+writes produces a correct document rather than a retyped or refused one. What
+survives of this paragraph is the spelling caveat in the amendment above, and
+it is the POD that says so.
 
 ### Perl magic in a public return value
 

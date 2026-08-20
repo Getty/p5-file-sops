@@ -953,11 +953,17 @@ C<0.30000000000000004> printed as C<0.3>, where C<sops -d --extract> prints all
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
 B<Only for a value on its way out to a caller.> The result is a
-L<Scalar::Util/dualvar>, and a dualvar inside a tree changes what the emitters
-write -- measured, L<Cpanel::JSON::XS> quotes it, so an unencrypted JSON leaf
-becomes a string, and L<YAML::XS> writes its string half verbatim, so C<1e300>
-becomes 301 positional digits (karr #78). L<File::SOPS/extract> calls this on
-the single leaf it returns and on nothing else; L<File::SOPS/decrypt> and
+L<Scalar::Util/dualvar>, and a dualvar inside a tree changes the bytes the
+emitters write. Not the value and not the type -- both formats write the
+canonical decimal as a B<number>, measured, C<sops -d> exit 0 reading the same
+double (L<YAML::XS> writes the string half verbatim; L<Cpanel::JSON::XS> quotes
+it, which sends the leaf to the L<Math::BigFloat> carrier that writes it bare,
+karr #78 / ADR 0011). What changes is the B<spelling>: this text is always
+positional, where an emitter's own rendering switches to an exponent at the
+extremes, so C<1e300> is written as 301 digits and C<1e-7> as C<0.0000001> --
+in both formats. Correct documents, different bytes from the same value passed
+as a plain number. L<File::SOPS/extract> therefore calls this on the single
+leaf it returns and on nothing else; L<File::SOPS/decrypt> and
 L<File::SOPS/decrypt_file> do not call it at all.
 
 The digest is unaffected either way: L</detect_type> reads C<SVf_NOK> before

@@ -930,10 +930,13 @@ positional at every magnitude, so C<1e20> stringifies as
 C<100000000000000000000> where C<sops -d --extract> prints C<1e+20> -- the same
 double, a different spelling, no digits lost either way (karr #79). And it
 applies to the B<leaf> only: floats inside a returned branch are the plain
-scalars they have always been, because a dualvar in a structure changes what
-the emitters write. Putting one into an B<unencrypted> slot of a B<JSON>
-document therefore stores it as a quoted string (karr #78); an encrypted slot,
-and YAML either way, are unaffected.
+scalars they have always been, because a dualvar in a structure changes the
+bytes the emitters write. Not the value: putting one into an B<unencrypted>
+slot stores the canonical decimal as a number, in JSON as in YAML (karr #78,
+L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>).
+What changes is the spelling at the extremes -- C<1e300> written as 301
+positional digits rather than C<1e+300> -- and an encrypted slot is unaffected
+either way.
 
 B<Dies if the path does not exist>, at any depth, naming the component that was
 not found. Before 0.003 a missing B<top-level> key returned C<undef> while a
