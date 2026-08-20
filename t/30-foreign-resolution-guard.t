@@ -277,12 +277,25 @@ subtest 'True / False / null keep their measured behaviour' => sub {
     # str leaf already reads `True`; `null` and `~` are undef here and nil
     # there, and both contribute the same bytes. Agreement by construction on
     # neither side, so it is asserted rather than assumed.
+    #
+    # Since karr #92 / ADR 0019, `True` and `False` also diverge on TYPE (str
+    # here, bool to sops) even though the bytes still agree, and this emitter
+    # now carps about it. Asserted here too, at the one place this file already
+    # names these two spellings by their own behaviour: a plain
+    # `$SIG{__WARN__}` that only swallowed the warning would lose the ability
+    # to notice the day it stops firing.
     for my $source (qw(True False null ~ true false)) {
+        my @warnings;
         my $document = eval {
+            local $SIG{__WARN__} = sub { push @warnings, $_[0] };
             File::SOPS->encrypt(data => { x_unencrypted => yaml_leaf($source), k => 'v' },
                 recipients => [$public], format => 'yaml');
         };
         is($@, '', "[$source] is written") or do { diag("died: $@"); next };
+        my $expect = ($source eq 'True' || $source eq 'False') ? 1 : 0;
+        is(scalar @warnings, $expect,
+            "[$source] warns about the type divergence exactly when it should")
+            or diag("warned: @warnings");
         my ($exit, $out) = sops_decrypt($document, 'yaml');
         is($exit, 0, "[$source] and sops -d accepts the document") or diag("sops: $out");
     }

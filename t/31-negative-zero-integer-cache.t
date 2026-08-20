@@ -414,9 +414,18 @@ subtest 'karr #86 still refuses what it refused' => sub {
 };
 
 subtest 'karr #86 still accepts what it accepted, byte for byte' => sub {
+    # 'True' is in this corpus for the same reason every other spelling is --
+    # it is part of the karr #86 acceptance list this subtest re-checks after
+    # the -0.0 fix, not a check of its own. Since karr #92 / ADR 0019 it also
+    # carps (str here, bool to sops, bytes still agree); that warning is
+    # someone else's claim to make -- t/35-string-go-reads-as-boolean.t already
+    # asserts it fires -- so it is captured and dropped here rather than left
+    # to print, and rather than asserted a second time for a leaf this subtest
+    # is not otherwise about.
     for my $spelling ('007', '08', '1e3', '0755e0', 'True', 'yes', '1:30', '123abc',
                       '2015-01-01T12:00:00Z', '-0', '-0.0', '5432') {
         my $document = eval {
+            local $SIG{__WARN__} = sub { };
             File::SOPS->encrypt(
                 data       => { x_unencrypted => parsed($spelling), other => 'kept' },
                 recipients => [$public],

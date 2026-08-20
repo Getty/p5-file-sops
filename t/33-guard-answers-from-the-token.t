@@ -87,13 +87,25 @@ sub guard_asked {
     @tokens   = ();
     @resolved = ();
     @entered  = ();
-    my $document = eval { File::SOPS::Format::YAML->emit({ v => $leaf },
-                                                         mac_covered => 1) };
+    my @warnings;
+    # Some corpus leaves (a bare 'True'/'False', in either its parsed or its
+    # raw-Perl-string form) are, since karr #92 / ADR 0019, a str-vs-bool type
+    # divergence the emitter carps about. This file is about a different,
+    # earlier mechanism (karr #91, the gate and the stringification proxy) and
+    # none of its subtests inspect the message, so it is captured here rather
+    # than left to print -- t/35-string-go-reads-as-boolean.t is where that
+    # warning is asserted. Exposed on the return value rather than silently
+    # dropped, in case a future subtest here does want to look at it.
+    my $document = eval {
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        File::SOPS::Format::YAML->emit({ v => $leaf }, mac_covered => 1);
+    };
     return {
         died     => ($document ? '' : $@),
         tokens   => [ @tokens ],
         resolved => [ @resolved ],
         entered  => [ @entered ],
+        warnings => [ @warnings ],
     };
 }
 
