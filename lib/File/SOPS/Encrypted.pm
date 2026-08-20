@@ -819,7 +819,71 @@ sub _canonical_floats {
         return $node;
     }
     return $node unless defined $node;
-    return $node unless _sv_kind($node) eq 'float';
+
+    my $kind = _sv_kind($node);
+
+    # karr #84: an INTEGER leaf that carries its own string form. detect_type
+    # calls it an int, so value_to_bytes derives the digest from the NUMBER,
+    # while both emitters write the STRING half -- YAML::XS bare,
+    # Cpanel::JSON::XS quoted whenever that half differs from its own rendering
+    # of the number. Measured against sops 3.13.3, leaf x_unencrypted:
+    #
+    #   dualvar(5, 'five')     digest 5   yaml: five     json: "five"   exit 51
+    #   dualvar(0, 'zero')     digest 0   yaml: zero     json: "zero"   exit 51
+    #   YAML-parsed 007        digest 7   yaml: 007 (0)  json: "007"    exit 51 (json)
+    #   YAML-parsed +7 / -0    digest 7/0 yaml: ok (0)   json: quoted   exit 51 (json)
+    #
+    # The float branch below cannot see any of it: it only runs for a leaf
+    # whose SV kind is float, and an int leaf reaches neither callback.
+    #
+    # ASKED OF THE EMITTER, not modelled. YAML::XS keeps the source text of
+    # every scalar it parses, so `007`, `+7`, `-0` and `1e3` all arrive here
+    # with a public PV that differs from the canonical decimal -- and YAML
+    # writes them back exactly as they came, where Go reads the same number the
+    # digest covers (measured, exit 0). Only the emitter can say which of those
+    # it survives, which is what $roundtrips already measures for floats.
+    #
+    # REFUSED rather than repaired, unlike the float leaf one line below (see
+    # docs/adr/0011 and 0012). Both halves of such a scalar are a candidate for
+    # what the caller meant, the two repairs write different documents, and
+    # nothing measurable separates a spelling (`007` for 7) from a
+    # contradiction (`five` for 5): dualvar(0, 'zero') numifies to the very
+    # number it would be compared against, and pattern-matching a value's text
+    # is what ADR 0002 removed. Nothing that worked stops working -- every
+    # input that croaks here produced a document that failed its own MAC.
+    #
+    # Two gates before the emitter is asked, and both are facts about the leaf
+    # rather than models of the emitter. It has to carry a PUBLIC PV at all --
+    # an int without one is rendered by both emitters from the number itself,
+    # which is what the digest covers -- and that PV has to DIFFER from the
+    # digest's text, which is the disagreement this guard is about. Every int
+    # in a YAML-parsed tree carries a PV (YAML::XS keeps the source text), so
+    # without the second gate every one of them would pay an emit-and-reparse:
+    # measured, 1000 such leaves cost 11ms -> 38ms in YAML and 2ms -> 10ms in
+    # JSON. With it, an ordinary `port: 5432` costs one string comparison.
+    if ($kind eq 'int' && _has_public_pv($node)) {
+        # THE one conversion again -- the text the digest covers, from the same
+        # method on the same scalar. The halves agreeing is the ordinary case
+        # and ends here, without asking the emitter anything.
+        my $text = __PACKAGE__->value_to_bytes($node);
+        return $node if "$node" eq $text;
+
+        croak _leaf_location($path) . ": cannot write an integer leaf that "
+            . "carries its own, different string form to a SOPS document: the "
+            . "MAC digest covers the NUMBER, while the emitter writes the "
+            . "string half -- YAML::XS bare, Cpanel::JSON::XS quoted -- so the "
+            . "document and its own MAC would state different things and "
+            . "neither sops nor this module could read the file back "
+            . "(measured, sops -d exit 51 in both formats). Perl produces such "
+            . "a scalar as a Scalar::Util::dualvar, or as a value a YAML "
+            . "parser kept the source spelling of. Which half is meant cannot "
+            . "be read off the scalar, so it is not guessed: pass 0 + \$value "
+            . "to store the number, or \"\$value\" to store the text"
+            unless $roundtrips->($node, $text);
+        return $node;
+    }
+
+    return $node unless $kind eq 'float';
 
     # THE one conversion. This is the same method, on the same scalar, that the
     # MAC digest goes through -- not a second rendering that happens to agree
@@ -860,10 +924,23 @@ Two callbacks, both given the original scalar and its canonical text:
 =over 4
 
 =item * C<roundtrips> answers whether the emitter's own rendering of this value
-parses back to the same double. It must B<measure> that -- emit and reparse --
+parses back to the same value. It must B<measure> that -- emit and reparse --
 rather than model it, which is what keeps this correct if an emitter changes.
 Returning true leaves the scalar untouched, so a value the emitter already
 writes faithfully keeps exactly the bytes it has today.
+
+It is asked about two leaf classes. For a B<float> a false answer selects the
+carrier below. For an B<integer that carries its own, different string form> --
+a L<Scalar::Util/dualvar>, or a value a YAML parser kept the source spelling of
+-- a false answer is a B<refusal>: L</detect_type> calls such a leaf an C<int>,
+so the digest covers the number, while both emitters write the string half, and
+the document then fails its own MAC (measured, C<sops -d> exit 51 in both
+formats). It is refused rather than repaired because both halves are a
+candidate for what the caller meant and nothing measurable separates a spelling
+(C<007> for C<7>) from a contradiction (C<five> for C<5>). The emitter is asked
+only where the two halves actually differ; an C<int> whose string half is the
+digest's text costs one string comparison. See karr #84 and
+L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 =item * C<carrier> returns the replacement, and is format-specific: L<YAML::XS>
 emits a L<Scalar::Util/dualvar>'s string half verbatim and unquoted, while
@@ -991,6 +1068,16 @@ sub _sv_kind {
     return 'int'   if $flags & B::SVf_IOK();
     return 'float' if $flags & B::SVf_NOK();
     return 'str';
+}
+
+# Does this scalar carry a string form of its OWN, on top of its number? The
+# public SVf_POK again, for the same reason _sv_kind reads the public IOK/NOK:
+# merely stringifying a number sets the private pPOK (measured: `my $s = "$i"`,
+# `$i eq ''` and `length($i)` all leave SVf_POK clear), and a guard that read
+# the private flag would fire on a caller who logged the value.
+sub _has_public_pv {
+    my $flags = B::svref_2object(\$_[0])->FLAGS;
+    return $flags & B::SVf_POK() ? 1 : 0;
 }
 
 # strconv.FormatFloat(v, 'f', -1, 64).

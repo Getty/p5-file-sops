@@ -435,6 +435,20 @@ digests as C<0>, so this emitter writes C<-0.0> instead -- the spelling
 measured to read back as the same double in sops 3.13.3 and here. See
 L<docs/adr/0006|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0006-floats-are-emitted-in-a-form-that-parses-back-to-the-same-double.md>.
 
+B<An integer leaf whose string form contradicts its number is refused.>
+L<YAML::XS> writes the string half bare -- C<five> for a
+C<Scalar::Util::dualvar> of C<5> -- while
+L<File::SOPS::Encrypted/detect_type> calls the leaf an C<int>, so the MAC
+digest covers the B<number>. The document and its own MAC then state different
+things: measured against sops 3.13.3, C<sops -d> exit 51. A source B<spelling>
+is not refused here, and that is measured too -- a C<007>, C<+7>, C<-0> or
+C<1e3> this emitter received from a YAML parse is written back exactly as it
+came, and Go reads the same number the digest covers (exit 0), where
+L<File::SOPS::Format::JSON> has to refuse them because it quotes them. The
+refusal names the leaf's key path and neither half of the value; an
+B<encrypted> slot is unaffected. See karr #84 and
+L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
+
 B<A reference as a leaf value is refused>, with one exception. L<YAML::XS>
 writes a blessed reference as a Perl-specific C<!!perl/> tagged structure --
 C<!!perl/hash:Math::BigFloat>, C<!!perl/scalar:Foo>, C<!!perl/regexp> -- and an

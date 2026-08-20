@@ -1,6 +1,30 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: an integer leaf that carries its own, DIFFERENT string
+    form is now refused at emit time, in both formats. detect_type reads the
+    public SVf_IOK first, so such a scalar - a Scalar::Util::dualvar, or a
+    value a YAML parser kept the source spelling of - is an int and the MAC
+    digest covers the NUMBER, while both emitters write the STRING half:
+    YAML::XS bare, Cpanel::JSON::XS quoted whenever that half differs from
+    its own rendering of the number. The document and its own MAC then state
+    different things and the file is unreadable to sops and to this module
+    alike, written silently. Measured against sops 3.13.3, leaf under
+    _unencrypted: dualvar(5,'five') and dualvar(0,'zero') exit 51 in YAML and
+    JSON, and a 007, +7, -0 or 1e3 read out of a YAML document exits 51 once
+    written as JSON. Nothing caught it - the float walk only inspected float
+    leaves. The emitter is now asked about such a leaf, through the same
+    measured round-trip the float branch uses, and the leaf is refused where
+    the emitter does not write the text the digest covers; the message names
+    the leaf's key path and neither half of the value. Nothing that worked
+    stops working: all 14 newly refused documents failed their own MAC
+    before, and YAML still writes a source spelling (007, +7, -0, 1e3) back
+    faithfully at exit 0, byte for byte. Encrypted slots, decrypted trees and
+    the plaintext emitters are untouched. Refused rather than repaired
+    because both halves are a candidate for what the caller meant and nothing
+    measurable separates a spelling from a contradiction - dualvar(0,'zero')
+    numifies to the very number it would be compared against. See karr #84
+    and docs/adr/0012.
   - Fix a float leaf that carries its own string form reaching a JSON
     document as a QUOTED STRING. Cpanel::JSON::XS writes a scalar with a
     public string half as a JSON string whenever that half differs from its

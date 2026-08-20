@@ -326,7 +326,8 @@ sub _float_roundtrips {
     my $back = eval { $json->decode($encoder->encode({ v => $value }))->{v} };
     return 0 unless defined $back;
 
-    return 0 unless File::SOPS::Encrypted->detect_type($back) eq 'float';
+    return 0 unless File::SOPS::Encrypted->detect_type($back)
+                 eq File::SOPS::Encrypted->detect_type($value);
 
     return File::SOPS::Encrypted->value_to_bytes($back) eq $text ? 1 : 0;
 }
@@ -418,6 +419,21 @@ as the number it always did, byte for byte. See karr #78,
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>
 and
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
+
+B<An integer leaf carrying its own, different string form is refused.>
+L<Cpanel::JSON::XS> writes it as a quoted string -- C<"007"> for a C<7> a YAML
+parser kept the source spelling of, C<"five"> for a
+C<Scalar::Util/dualvar> -- while L<File::SOPS::Encrypted/detect_type> calls the
+leaf an C<int>, so the MAC digest covers the B<number>. The document and its
+own MAC then state different things and neither sops nor this module can read
+the file back: measured against sops 3.13.3, C<sops -d> exit 51 for C<007>,
+C<+7>, C<-0>, C<1e3> and every contradicting dualvar. The refusal names the
+leaf's key path and neither half of the value. Refused rather than repaired
+because nothing measurable separates a spelling from a contradiction; an
+B<encrypted> slot is unaffected, and L<File::SOPS::Format::YAML> refuses only
+the contradicting ones, because it writes a source spelling back faithfully.
+See karr #84 and
+L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<Cpanel::JSON::XS>
 under C<allow_bignum> writes a C<Math::BigFloat> / C<Math::BigInt> as a bare
