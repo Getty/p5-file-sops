@@ -826,6 +826,16 @@ same emitter the encrypted document goes through, minus the C<sops> section --
 so the plaintext and the encrypted file cannot disagree about quoting, booleans,
 key order or float precision.
 
+B<One rendering deliberately differs from C<sops -d>: in JSON, an integral
+C<type:float> is written C<2.0> where sops writes C<2>.> The YAML output is
+C<2>, exactly as C<sops -d> writes it. C<2.0> parses back as a float, so
+C<decrypt_file> -> hand-edit -> L</encrypt_file> keeps such a leaf at
+C<type:float>, where C<2> silently relabels it C<type:int> -- which is what
+C<sops -d> followed by C<sops -e> does to its own document, and what the YAML
+side therefore still does here. Measured against sops 3.13.3 on a document
+sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value>, karr #73 and
+L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
+
 Unlike L</encrypt_file>, C<output> is required to prevent accidental data loss.
 It is nonetheless written atomically, since nothing stops it naming a file that
 matters -- the encrypted input itself, or a working copy being refreshed. Until
