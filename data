@@ -1,0 +1,54 @@
+---
+class: standard
+completed: 2026-08-20T05:46:03Z
+created: 2026-08-19T23:29:11Z
+id: 71
+priority: low
+started: 2026-08-20T05:46:03Z
+status: done
+tags:
+- diagnostics
+- format
+- wire
+title: emit() refusals croak at Encrypted.pm, not at the caller's line
+updated: 2026-08-20T05:46:03Z
+---
+
+Gefunden beim Abarbeiten von #68 (Format-Lane), nicht dort behoben -- reine
+Beobachtung, kein Verhalten geaendert.
+
+Die beiden reject-Callbacks croaken korrekt, aber die Stelle, die croak
+anhaengt, ist die Bibliothek selbst:
+
+  perl -Ilib -e 'use File::SOPS::Format::YAML;
+    eval { File::SOPS::Format::YAML->emit({ a_unencrypted => bless({}, "Foo") }) };
+    print $@'
+
+  a_unencrypted: cannot write a leaf blessed into Foo to a SOPS document:
+  ... at lib/File/SOPS/Encrypted.pm line 788.
+
+Ursache: croak berichtet den Aufrufer des Frames, in dem es steht. Der
+Callback wird von File::SOPS::Encrypted::_canonical_floats aufgerufen, also
+ist "der Aufrufer" _canonical_floats -- eine Zeile in Encrypted.pm, nicht die
+Zeile, an der der Nutzer emit() / encrypt() geschrieben hat. Genau das, was
+die Hausregel "croak, never die -- Errors report the caller's line, not ours"
+vermeiden will. Gilt fuer beide Handler (_reject_referenced_leaf,
+_reject_unwritable_leaf) und ist aelter als #68; #68 hat nur die Zeilennummer
+verschoben.
+
+Dieselbe Mechanik betrifft potenziell jeden croak, der aus einem Callback
+faellt, den canonical_float_tree aufruft -- also auch carrier/roundtrips,
+falls die je croaken.
+
+Entschaerft, nicht behoben: seit #68 nennt die Meldung den Key-Pfad, also
+findet ein Nutzer das Leaf ohne die Dateizeile. Deshalb niedrig.
+
+Moegliche Fixes, beide nicht gemessen:
+  - $Carp::CarpLevel lokal erhoehen, wo der Callback gerufen wird
+  - oder die Callbacks geben einen Grund zurueck statt zu croaken, und
+    canonical_float_tree / der Handler croakt an der richtigen Stelle
+
+Lane: der Aufrufpunkt liegt in Encrypted.pm (wire), die Callbacks in
+Format/*.pm (format). Zusammen zu machen. Kein Wire-Byte betroffen.
+landed in 932a8ef. @CARP_NOT in Format::YAML, Format::JSON and Backend::Age -- Carp skips a frame when either side trusts the other, so the two handler lists also cover the #84 guard that croaks from inside the walk, and Encrypted.pm needs no list of its own. $Carp::CarpLevel was rejected: the walk is recursive, so the frame count is the failing leaf's depth. The audit turned up one croak beyond the emit path, Backend::Age's 'Could not decrypt data key', which reported SOPS.pm line 571; included for uniformity. Measured over 32 refusal paths: 10 locations move, all out of lib/, none left inside lib/, 0 message texts change. t/12 section 9 asserts the reported file and line at a real call site.
+ERLEDIGT 2026-08-20, Commit 932a8ef. \@CARP_NOT in beiden Format-Handlern. Gemessen statt angenommen: Carp ueberspringt einen Frame, wenn EINE der beiden Seiten die andere vertraut -- deshalb reparieren diese Listen auch die #84-Guards, die aus dem Walk heraus croaken, und Encrypted.pm braucht selbst keine Liste (die Format-Handler aus der Wire-Schicht zu nennen waere eine Abhaengigkeit in die falsche Richtung). $Carp::CarpLevel verworfen: der Walk ist rekursiv, die Frame-Zahl ist die Tiefe des fehlerhaften Leaves. Ueber 32 von der oeffentlichen API erreichbare Refusal-Pfade: 10 Stellen bewegen sich, alle 10 aus lib/ heraus, keine bleibt drin, 0 Meldungstexte aendern sich. Eine Ausweitung im Bericht offengelegt: Backend::Age meldete 'Could not decrypt data key' auf SOPS.pm:571 -- mitgenommen, weil die eine Stelle stehen zu lassen, an der die Regel sichtbar nicht gilt, schlechter waere. Gegenprobe: drei Zeilen raus -> 17 von 63 Assertionen in t/12 rot.
