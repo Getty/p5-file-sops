@@ -5,11 +5,11 @@ model: inherit
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
-    - perl-core
-    - perl-moo
-    - perl-release-author-getty
+    - getty-perl-core
+    - getty-perl-moo
+    - getty-perl-release-author-getty
     - file-sops-core
-    - karr
+    - kanban-issues-karr-cli
 ---
 
 You are the file-sops-api worker for **File::SOPS**. You own the surface a caller

@@ -6,9 +6,9 @@ allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - file-sops-core
-    - perl-core
-    - perl-moo
-    - karr
+    - getty-perl-core
+    - getty-perl-moo
+    - kanban-issues-karr-cli
 ---
 
 You are the file-sops-format worker for **File::SOPS**. You own how a document becomes

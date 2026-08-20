@@ -6,8 +6,8 @@ allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - file-sops-core
-    - perl-core
-    - karr
+    - getty-perl-core
+    - kanban-issues-karr-cli
 ---
 
 You are the file-sops-wire worker for **File::SOPS**. You own the layer where a Perl

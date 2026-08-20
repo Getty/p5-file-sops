@@ -5,11 +5,11 @@ model: sonnet
 allowed-tools: Read, Bash, Glob, Grep
 briefing:
   skills:
-    - perl-release-author-getty
+    - getty-perl-release-author-getty
     - perl-release-dist-ini
-    - perl-core
+    - getty-perl-core
     - file-sops-core
-    - karr
+    - kanban-issues-karr-cli
 ---
 
 You are the file-sops-release-checker for **File::SOPS**. Conventions from the skills

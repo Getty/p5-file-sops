@@ -1,6 +1,6 @@
 ---
 name: file-sops-core
-description: "Architecture and wire-format invariants of File::SOPS — the pure-Perl Mozilla SOPS implementation. AAD/path derivation, MAC computation and its ordering dependency, type detection and Go-compatible value serialization, the metadata section, and why the test suite can be green while the only compliance test never ran."
+description: "Load before editing File::SOPS — the pure-Perl Mozilla SOPS implementation: AAD and path derivation, MAC ordering, type detection, Go-compatible value serialization."
 ---
 
 # File::SOPS — core

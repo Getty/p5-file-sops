@@ -96,7 +96,7 @@ repo.
 - `karr edit ID -a "note"` · `--claim NAME` · `--block "why"` — update
 - `karr move ID in-progress --claim NAME` — start · `karr handoff ID --claim NAME --note "…"` — to review
 
-Full command surface: skill `karr`.
+Full command surface: skill `kanban-issues-karr-cli`.
 
 ## Release — never without permission
 
@@ -116,6 +116,6 @@ to handle a specific issue.
 ## Perl specifics — reference, don't restate
 
 Module loading, Moo patterns, cpanfile pinning for Getty-authored dependencies, POD
-conventions and house style live in skills `perl-core`, `perl-moo` and
-`perl-release-author-getty` (force-loaded for `file-sops-*` agents). The SOPS wire
+conventions and house style live in skills `getty-perl-core`, `getty-perl-moo` and
+`getty-perl-release-author-getty` (force-loaded for `file-sops-*` agents). The SOPS wire
 format and its invariants live in skill `file-sops-core`. Do not duplicate them here.
