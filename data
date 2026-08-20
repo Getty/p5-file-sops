@@ -1,0 +1,122 @@
+---
+class: standard
+completed: 2026-08-20T06:15:21Z
+created: 2026-08-20T05:42:13Z
+id: 89
+priority: high
+started: 2026-08-20T06:15:05Z
+status: done
+tags:
+- wire
+- yaml
+- float
+- mac
+- interop
+title: A YAML negative zero with an EXPONENT is written silently and fails sops -d
+updated: 2026-08-20T06:18:21Z
+---
+
+Found while measuring karr #88 (the JSON negative-zero carrier), not caused by
+it. Present at 706ac4a and unchanged by #88.
+
+  perl -Ilib -MYAML::XS=Load -MFile::SOPS -e \
+    "File::SOPS->encrypt(data => Load(qq{x_unencrypted: -0.0e0\n}), \
+                         recipients => [\$pub], format => q{yaml})"
+
+  -> written, no warning, and `sops -d` exits 51 with MAC mismatch.
+
+This is the defect class karr #86 / ADR 0013 was written to close, so the
+Changes line "This is the last known case in which this distribution writes a
+file that breaks its own MAC" is not true as it stands.
+
+Measured, sops 3.13.3, leaf x_unencrypted, one document per row:
+
+  spelling   our type  our digest  _go_scalar_bytes  written    sops -d
+  -0.0e0     int       0           0                 -0.0e0     exit 51
+  -0e0       int       0           0                 -0e0       exit 51
+  -0.0E+0    int       0           0                 -0.0E+0    exit 51
+  -0.000e2   int       0           0                 -0.000e2   exit 51
+  -0.0e-5    int       0           0                 -0.0e-5    exit 51
+  0.0e0      int       0           0                 0.0e0      exit 0
+  -1.0e0     int       -1          -1                -1.0e0     exit 0
+  -0.5e0     float     -0.5        -0.5              -0.5e0     exit 0
+
+So the class is exactly a NEGATIVE ZERO WITH AN EXPONENT. Every neighbour is
+correct.
+
+Two things line up to produce it, and only the second looks fixable here:
+
+  1. YAML::XS parses `-0.0e0` into a scalar carrying the public IOK, so
+     detect_type calls it an int (ADR 0002, working as specified) and
+     value_to_bytes digests `0`. Go yaml.v3 resolves the same token as a
+     FLOAT and sops digests `-0`.
+
+  2. The #86 guard should refuse it and does not, because its model of Go
+     loses the same sign. Format::YAML::_go_float derives the bytes with
+     `File::SOPS::Encrypted->value_to_bytes($p * 1.0)`, and `* 1.0` on the
+     STRING "-0.0e0" takes Perl arithmetics integer path and returns a plain
+     0. Measured:
+
+       "-0.0e0" * 1.0            -> 0   (IOK)
+       0 + "-0.0e0"              -> 0
+       unpack("d", pack("d", $s)) -> -0
+
+     _go_scalar_bytes therefore answers `0`, agrees with our own `0`, and the
+     leaf is waved through. The comment above _go_float already warns about
+     exactly this mechanism ("$nv == 0 sets the public IOK on an integral NV
+     and takes the sign off -0.0 with it") - the implementation has it anyway.
+
+     Note `-0.0` and `-0.00` WITHOUT an exponent survive `* 1.0` (measured,
+     -0), which is why the guard is right for them and this went unseen.
+
+karr #88 hit the same mechanism in Format::JSON::_float_carrier and settled on
+pack/unpack; the ADR 0014 table is the measurement. The same conversion in
+_go_float is the obvious candidate, but it is a BEHAVIOUR CHANGE - these five
+documents would start being refused where they are written today - so it wants
+its own measurement of the emitter corpus and probably an ADR amendment to
+0013. Not done under #88, deliberately.
+
+Wire lane, and it touches Format/YAML.pm because the guard lives there.
+Measured with sops 3.13.3, Crypt::Age 0.002, at 02afc79.
+Fixed at 2724e1d, docs/adr/0015, plus 7842e22 for the Changes correction
+the ticket named.
+
+REPAIR, not refusal. sops itself cannot write an unencrypted -0.0 (it writes
+-0 and then rejects its own file, exit 51), so a refusal could not name
+anything to pass instead - and -0.0 is a spelling both sides read as the
+double the digest covers. Precedent #62 / #78 / #88 followed.
+
+The ticket's premise was one step short: pack/unpack in _go_float fixes only
+the MODEL. Measured on the emitter corpus, that change ALONE moves 12 rows
+and all 12 go from a silent sops -d exit 51 to a croak - the typing and the
+digest stay wrong, the JSON rows keep croaking for the wrong reason, and the
+encrypted slots keep writing type:int 0. Both halves were needed:
+Encrypted::_sv_kind types a public-IOK scalar whose NV half is a negative
+zero as a float, and _go_float derives its float with pack/unpack.
+
+Wider than the ticket assumed, and this settled the shape of the fix: the
+exponent notation is only YAML::XS's door in. Perl sets the same cache from
+ordinary numeric use of a CALLER'S OWN -0.0 - $v == 0, $v > 1, int($v),
+$v + 0, sprintf('%d', $v), all five measured - so a plain -0.0 became a 0 in
+the document depending on whether the caller had looked at it. A guard keyed
+on YAML spellings would have missed that half entirely.
+
+Corpus, 324 rows (81 leaves x 2 slots x both handlers), before/after: 260
+byte-identical, 64 move and every one holds a negative zero - 12 sops -d
+exit 51 to exit 0, 12 croak to written as -0.0, 40 exit 0 to exit 0 with
+different bytes (type:int 0 becomes type:float -0, which is what sops -e
+itself writes for the same source). 0 rows that worked stop working. Three
+encrypts of the same tree in one process: same leaf, same sops -d output,
+every round.
+
+Rejected: reading SVf_NOK first (114 rows move, the extra 50 being every
+integral exponent leaf whose digest was already right).
+
+prove -lr t/ 793/793 PASS (32 files). SOPS_BIN=/tmp/sops prove -l
+t/04-interop.t 31/31 PASS, EXECUTED. Counter-checks on t/31: revert
+_sv_kind, 6 subtests / 55 assertions fail; revert _go_float, 3 / 20; both,
+7 / 77.
+
+Filed while measuring: karr #90, a Perl boolean sentinel is digested as 1
+and written as true. Different mechanism, not folded in.
+ERLEDIGT 2026-08-20, Commits 2724e1d (Fix) und 7842e22 (Changes-Korrektur), ADR 0015, ADR 0013 ergaenzt, t/31 neu. DIE URSACHE IST NICHT DIE EXPONENTENSCHREIBWEISE. Perl setzt das oeffentliche SVf_IOK auf einem float, sobald (NV)(IV)nv == nv -- bei einer negativen Null besteht dieser Test, aber das VORZEICHEN UEBERLEBT DEN CAST NICHT: der gecachte IV ist 0, ein anderer Wert als -0.0, andere Bits, anderes strconv.FormatFloat, anderer Digest. _sv_kind las dieses IOK zuerst. YAML::XS cacht den IV bei Exponentenschreibweise und sonst nicht -- der Exponent war nur EINE TUER. Die andere ist viel schlimmer und wurde erst beim Messen sichtbar: ein blankes my $v = -0.0 wurde zu int/0, SOBALD DER AUFRUFER ES ANGESEHEN HATTE -- nach $v == 0, $v > 1, int($v), $v + 0 oder sprintf('%d',$v). Der Wert im Dokument haing also davon ab, ob vorher jemand hingeschaut hat. Ein Guard, der auf YAML-Schreibweisen schaut, haette diese Haelfte komplett verfehlt. REPARIEREN statt ablehnen, weil sops diesen Wert unverschluesselt SELBST nicht schreiben kann (sops -e macht -0 daraus, sops -d gibt exit 51) -- eine Ablehnung koennte also nichts nennen, was der Nutzer stattdessen uebergeben soll; im VERSCHLUESSELTEN Slot schreibt sops type:float mit Plaintext -0 und liest -0 zurueck, also genau das, was diese Bibliothek jetzt erzeugt. PACK/UNPACK ALLEIN HAETTE ES NICHT GEFIXT, gemessen: mit nur _go_float geaendert bewegen sich 12 Zeilen von stillem exit 51 zu einem CROAK -- Typisierung bleibt int, Digest bleibt 0. Beide Haelften noetig: _sv_kind entscheidet jetzt am BITMUSTER (pack('d',NV) eq NEGATIVE_ZERO_BITS), also ohne Textpruefung und ohne Numifizierung, ADR 0002 bleibt unangetastet; _go_float nutzt unpack/pack statt $p * 1.0. KORPUS 324 Zeilen: 260 byte-identisch, 64 bewegt und jede davon eine negative Null (12x exit 51 -> exit 0, 12x croak -> korrekt geschrieben, 40x verschluesselte Slots type:int/0 -> type:float/-0). GEGENMESSUNG: 0 von 324 hoeren auf zu funktionieren; 281 ergaben vorher ein lesbares Dokument, 305 jetzt, die 281 sind eine Teilmenge. Mehrfachrunden geprueft (die #88-Falle): unpack/pack ist ueber drei Runden stabil, jede Arithmetikvariante faellt ab Runde 2. Gegenproben: _sv_kind allein zurueck -> 6 subtests/55 Assertionen rot, _go_float allein -> 3/20, beide -> 7/77. Orchestrator hat unabhaengig nachgeprueft: 793/793 PASS, t/04 31/31 AUSGEFUEHRT, und -0.0 bleibt float/-0 auch nach == 0 und int().
