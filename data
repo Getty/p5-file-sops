@@ -1,0 +1,257 @@
+---
+class: standard
+completed: 2026-08-21T08:45:14Z
+created: 2026-08-20T00:23:34Z
+id: 76
+priority: medium
+started: 2026-08-21T08:01:59Z
+status: done
+tags:
+- wire
+- format
+- roadmap
+- env
+title: 'type:comment: a leaf with no key, which the tree model has no place for'
+updated: 2026-08-21T08:45:14Z
+---
+
+Aufgesplittet aus karr #36 (36c) am 2026-08-20 auf Maintainer-Entscheidung. Eigenstaendig, betrifft potentiell auch YAML.
+
+sops verschluesselt einen Kommentar in einer env-Datei als Wert:
+
+  #ENC[AES256_GCM,data:...,type:comment]
+
+Er ist damit ein Leaf im Baum und steht IM DIGEST. Diese Distribution kennt kein type:comment (File::SOPS::Encrypted) und hat in ihrem Baummodell keinen Platz fuer ein Leaf OHNE Schluessel.
+
+Das ist eine Datenmodellaenderung, keine Formatierungsfrage -- und der Grund, warum #36 nicht am Parser-Ende angefangen werden darf.
+
+Vor der Umsetzung zu klaeren: ob YAML- und JSON-Dokumente in sops ebenfalls type:comment-Leaves tragen koennen. Fuer INI (#37) war es nicht gemessen und gehoert vor der Implementierung geprueft.
+
+Lane: wire (Encrypted.pm und das Baummodell), mit format als Zweitleser.
+VORFRAGE GEMESSEN 2026-08-21 gegen sops 3.13.3 (/tmp/sops), HEAD c8eee80. Der Ticketkoerper verlangte diese Messung ausdruecklich vor der Umsetzung. Zwei seiner Praemissen sind damit erledigt, eine davon als FALSCH.
+
+(1) DIE PRAEMISSE "steht IM DIGEST" IST FALSCH. Kommentare sind in KEINEM Format
+im MAC. Drei unabhaengige Messungen:
+
+  a) Loeschen eines type:comment-Leafs aus der verschluesselten Datei und dann
+     sops -d:
+       YAML  Mapping-Position   exit 0
+       YAML  Sequenz-Position   exit 0
+       INI                      exit 0
+       ENV                      exit 0
+     Kontrolle, dieselbe Methode, ein echter type:str-Wert geloescht:
+       YAML  exit 51  MAC mismatch. File has C52140... computed 0AF758...
+       INI   exit 51  MAC mismatch. File has 3041B7... computed 6D15A8...
+       ENV   exit 51  MAC mismatch. File has 914E55... computed F8F5F8...
+
+  b) Drei YAML-Dokumente mit IDENTISCHEN Werten (k1: v1, k2: v2) und
+     unterschiedlichen Kommentaren -- einer mit "# alpha comment", einer mit
+     einem anderen Kommentar, einer ganz ohne. Der entschluesselte MAC-Klartext
+     ist in allen drei Faellen byteweise derselbe:
+       337360167A2D59BC574D3A1C4CD3F40FA9590C89B8900ADA0C9ADEB9559BCA3D26AE4692012FB73BCD90937CC7CADE477227E62AAEA3E69296D153A8EBC60782
+
+  c) Zwei Kommentar-Chiffrate gegeneinander getauscht: sops -d exit 0, MAC
+     verifiziert. Es warnt nur ("Found possibly unencrypted comment in file")
+     und laesst den Text stehen -- ein Kommentar, der sich nicht entschluesseln
+     laesst, ist fuer sops NICHT fatal.
+
+  Folge fuer die Umsetzung: ein type:comment-Leaf muss aus dem Digest
+  HERAUSGEHALTEN werden. Das ist die umgekehrte Anforderung zu der, die im
+  Koerper steht.
+
+(2) JA, YAML TRAEGT type:comment-LEAVES -- und das ist kein Roadmap-Thema mehr,
+sondern ein Lesefehler von heute. Gemessen ueber alle Kommentarpositionen:
+
+  Erste Zeile der Datei      -> #ENC[...,type:comment], Mapping-Position
+  Ueber einem Schluessel      -> #ENC[...,type:comment], Mapping-Position
+  Hinter einem Wert (gleiche Zeile)
+                             -> eigener #ENC[...]-Leaf, beim Entschluesseln auf
+                                die Zeile UEBER dem Wert verschoben
+  Verschachtelter Block      -> #ENC[...,type:comment], Mapping-Position
+  Zwischen Top-Level-Keys    -> #ENC[...,type:comment], Mapping-Position
+  Letzte Zeile der Datei     -> #ENC[...,type:comment], Mapping-Position
+  In einer Liste             -> ECHTES SEQUENZ-ELEMENT: "- ENC[...,type:comment]"
+  Hinter einem Listenwert    -> ECHTES SEQUENZ-ELEMENT
+  Hinter einer Flow-Sequenz  -> die Flow-Sequenz wird zur Block-Sequenz, der
+                                Kommentar wird Element 0
+
+  Die Regel: sops haengt einen Kommentar an den FOLGENDEN Knoten. Ist der ein
+  Sequenz-Element, wird der Kommentar selbst ein Sequenz-Element. Ist er ein
+  Mapping-Eintrag, bleibt es ein echter YAML-Kommentar.
+
+  Mapping-Position ist fuer File::SOPS harmlos: YAML::XS verwirft sie, und sops
+  hasht sie ohnehin nicht -- beide Seiten sind sich einig. Sequenz-Position ist
+  ein Fehler: File::SOPS sieht ein gewoehnliches Array-Element, zaehlt es in den
+  Digest und scheitert an der MAC-Verifikation. Das ist als karr #108 erfasst
+  (high), nicht hier versteckt.
+
+(3) JSON: NEIN, unmoeglich. JSON hat keine Kommentarsyntax und sops weigert sich,
+eine Datei mit Kommentaren ueberhaupt zu lesen:
+  //-Kommentar  -> exit 2, "Could not unmarshal input data: invalid character '/'"
+  #-Kommentar   -> exit 2, "Could not unmarshal input data: invalid character '#'"
+Ein sauberes JSON-Dokument enthaelt null type:comment-Leaves (gemessen). Fuer
+JSON ist hier nichts zu tun.
+
+(4) INI: JA. Gemessen, siehe die Ergaenzung an #37. Beide Kommentarstile (";"
+und "#") werden zu "; ENC[...,type:comment]" -- die Ausgabe normalisiert auf ";".
+Mehrere aufeinanderfolgende Kommentarzeilen werden zu EINEM Leaf mit
+mehrzeiligem Klartext zusammengefasst.
+
+(5) ENV: bestaetigt, die Referenzzeile aus #36 stimmt. "#ENC[...,type:comment]",
+alles type:str inkl. NUM=5, EMPTY= bleibt unverschluesselt.
+
+BEWERTUNG -- WAS #76 JETZT IST:
+
+Nicht mehr "Vorarbeit fuer ENV/INI". Der Kern zerfaellt in zwei ungleiche Teile:
+
+  LESEN (dringend, YAML, heute kaputt) -> karr #108, high. Braucht KEINEN Platz
+  fuer ein schluessel-loses Leaf im Baummodell. Es reicht, einen
+  type:comment-Leaf in Sequenzposition zu erkennen und ihn aus Baum UND Digest
+  herauszuhalten. Das ist eine kleine, klar begrenzte Aenderung und sollte NICHT
+  auf ENV/INI warten.
+
+  SCHREIBEN (Roadmap, ENV/INI) -> bleibt #76. Erst wenn File::SOPS Kommentare
+  ERHALTEN soll, braucht das Baummodell einen Platz fuer ein Leaf ohne
+  Schluessel. Fuer ENV und INI ist das unvermeidlich, weil dort ein
+  Kommentar-Leaf zwischen zwei Zeilen die einzige Repraesentation ist.
+
+Empfehlung: #108 sofort, unabhaengig von der ENV/INI-Roadmap. #76 bleibt
+Datenmodellaenderung fuer das Schreiben und behaelt seine Prioritaet.
+
+t/04-interop.t LIEF fuer diese Sitzung: 32 Tests, /tmp/sops, sops 3.13.3, PASS --
+und enthaelt kein Dokument mit Kommentaren.
+
+Messskripte und Dateien:
+/tmp/claude-1000/-home-getty-dev-p5-file-sops/d4aee62c-59a4-4293-a4f8-a2a46316a947/scratchpad/m76/
+Keine Aenderung an lib/, t/, docs/ oder Changes.
+FOLGETICKET-STAND nach karr #108 (2026-08-21, docs/adr/0024).
+
+Die LESE-Haelfte ist nicht mehr offen, aber auch nicht geloest: File::SOPS
+LEHNT ein YAML-Dokument mit einem type:comment-Leaf jetzt ab, statt es als Wert
+zu lesen. Damit ist die Korruption zu, und #76 ist praezise das, was die
+Ablehnung wieder ueberfluessig macht.
+
+WAS #76 KONKRET BRAUCHT, gemessen an #108:
+
+1. Ein Platz im Baummodell fuer ein Leaf OHNE Schluessel, das kein Wert ist.
+2. Ausschluss aus dem Digest. Nicht optional und in BEIDE Richtungen: sops
+   hasht Kommentare in keinem Format (vier Messungen, siehe oben und #108).
+3. ZWEI Drop-/Erhalt-Stellen, nicht eine. ADR 0001 verlangt, dass der Baum aus
+   Format::YAML::parse und der aus File::SOPS::_parse_in_document_order
+   STRUKTURELL identisch bleiben -- _document_leaves vergleicht sie elementweise
+   und croakt bei Abweichung. Gemessen: derselbe Eingriff nur im Parser gibt
+   "list: the document has 2 entries here but the parsed tree has 1". Das ist
+   der Grund, warum #76 lane-uebergreifend ist (wire + format) und nicht am
+   Parser allein beginnen darf -- dieselbe Warnung, die schon im Koerper steht,
+   jetzt mit der Messung dahinter.
+4. Emitter, die den Kommentar an den FOLGENDEN Knoten zurueckhaengen -- in
+   Mapping-Position als Kommentarzeile, in Sequenz-Position als Element. YAML::XS
+   kann weder das eine noch das andere; das ist dieselbe Wand wie in ADR 0006
+   und ADR 0008.
+
+WENN #76 LANDET: der Guard in Format::YAML::_reject_comment_leaves ist eine
+geradlinige Entfernung, absichtlich so geschnitten. t/40-comment-leaf-refused.t
+kehrt dann von "wird abgelehnt" auf "wird erhalten" um.
+
+FUER #36/#37 (ENV/INI) eine Randbedingung, die dort noch nicht steht: in diesen
+Formaten ist ein Kommentar-Leaf der Normalfall, nicht die Ausnahme -- ein
+.env mit Kommentaren ist alltaeglich. Die Ablehnung aus #108 waere dort keine
+gangbare Loesung; ENV und INI brauchen (b) von Anfang an. Bei INI zusaetzlich:
+mehrere aufeinanderfolgende Kommentarzeilen werden zu EINEM Leaf mit
+mehrzeiligem Klartext.
+2026-08-21 08:39 Sequenzfall erhalten, Digest-Ausschluss gegen sops gemessen, ADR 0024 abgeloest durch ADR 0041. Mapping-Position offen als karr #148.
+UMGESETZT 2026-08-21 gegen sops 3.13.3 (/tmp/sops), Basis HEAD 77587af.
+docs/adr/0041, das docs/adr/0024s Entscheidung abloest. Lane wire, ohne
+Metadata.pm oder Metadata/Flat.pm anzufassen.
+
+DIE VORFRAGE AUS SCHRITT 1, GEMESSEN: es gibt nur EINE Form, die vorkommt --
+ein Kommentar als SEQUENZ-ELEMENT, in YAML und (gemessen) in JSON mit
+--output-type json. Der schluessel-lose Leaf, fuer den dieses Ticket
+aufgemacht wurde, existiert nicht: ein Sequenz-Element IST ein Eintrag und hat
+im Baum laengst einen Platz. Damit ist das Ticket erheblich kleiner als sein
+Titel. Zwei Messungen tragen das:
+  * ein Kommentar in einem UNVERSCHLUESSELTEN Teilbaum bleibt bei sops eine
+    echte Kommentarzeile und wird nicht verschluesselt -- kein Leaf.
+  * ein Kommentar ueber einem Mapping-Key bleibt eine Kommentarzeile, und beim
+    Schreiben nach JSON verwirft sops ihn selbst.
+Mapping- und Sequenzfall brauchen also NICHT dieselbe Loesung: der
+Mapping-Fall ist heute harmlos (YAML::XS verwirft ihn, sops hasht ihn nicht)
+und bleibt offen -- als karr #148, nicht hier versteckt.
+
+PLATZ IM BAUM: File::SOPS::Comment, ein Leaf, das kein Wert ist -- dieselbe
+Bewegung, die type:bool mit JSON::PP::Boolean macht. detect_type bekommt eine
+Sprosse, value_to_bytes schreibt den Text (UTF-8, unbedingt, ADR 0003),
+_deserialize_value baut das Objekt aus dem type-Label. Eine Leiter, eine
+Konvertierung, wie gehabt. KEINE ueberladene Stringifizierung, absichtlich.
+
+DIGEST: raus, in beide Richtungen, ueber File::SOPS::_digested_leaves. Der
+MAC-VERGLEICH gegen von sops geschriebene Dokumente: der hier berechnete
+Digest stimmt mit dem gespeicherten EXAKT ueberein, sobald die
+Kommentar-Leaves fallen, und weicht ab, wenn nicht -- 4 Dokumente:
+  6 Kommentare/5 Positionen  drin B40539D2.. / raus 461FE3EA.. == sops
+  #108-Minimalfall           drin F327F66D.. / raus 05F70341.. == sops
+  --mac-only-encrypted       drin abweichend / raus == sops
+  neben _unencrypted         drin abweichend / raus == sops
+
+ROUND TRIP: sops -e -> decrypt -> encrypt -> sops -d, exit 0, MAC von sops
+verifiziert, und byteweise identisch zu sops EIGENEM -e/-d-Durchlauf derselben
+Datei bis auf den Mapping-Kommentar (karr #148). Auch: von uns von Grund auf
+geschriebener Kommentar -> sops -d exit 0; rotate erhaelt ihn; JSON ebenso;
+ein nicht-ASCII-Kommentar kommt als dieselben UTF-8-Bytes zurueck.
+
+NEBENBEFUND, mitgefixt: die JSON-Seite trug karr #108s Defekt noch ganz --
+ADR 0024s Guard sass in Format::YAML, und Format::JSON hatte keinen. Gemessen
+am alten Stand gab ignore_mac => 1 auf einem sops-geschriebenen JSON-Dokument
+die Liste mit dem Kommentartext als zusaetzlichem String zurueck, also genau
+die stille Korruption. Jetzt zu, ohne eine Zeile in Format/JSON.pm.
+
+WAS REFUSED BLEIBT (und ADR 0024 damit abloest statt umgeht): ein Kommentar
+als MAPPING-VALUE, in _decrypt_tree und _encrypt_tree, format-unabhaengig --
+gemessen mit geliftetem Guard liest sops so ein Dokument bei exit 0 und gibt
+den Key als Dump von Gos Kommentar-Struct zurueck (value:/inline:), also
+stille Korruption in einer Datei, die WIR geschrieben haetten. Und ein
+Kommentar, den der YAML-Emitter als KLARTEXT schreiben muesste: decrypt_file
+und edit lehnen ab, weil YAML::XS keinen Kommentar emittieren kann und eine
+Kommentarzeile beim Zurueckparsen wieder verloren ginge. Der Parse-Guard
+Format::YAML::_reject_comment_leaves ist ersatzlos ENTFERNT.
+
+DATEIEN: lib/File/SOPS/Encrypted.pm, lib/File/SOPS.pm,
+lib/File/SOPS/Format/YAML.pm, t/56-a-sops-comment-survives-the-round-trip.t
+(neu), docs/adr/0041-... (neu), Changes. Umgedrehte Pins: 6 Subtests in
+t/40-comment-leaf-refused.t und EINE Zusicherung in t/12-diagnostics.t
+(type:comment entschluesselt zu einem File::SOPS::Comment statt zu seinem
+Text; decrypt_bytes unveraendert). t/12 stand nicht in der Dateigrenze und
+ist gemeldet.
+
+TESTS: prove -lr t/ -> 57 Dateien, 1222 Tests, PASS. t/04-interop.t LIEF:
+32 Tests, /tmp/sops, sops 3.13.3, PASS. Netz faellt zuerst: t/56 gegen die
+unveraenderte lib stirbt in der ersten Zusicherung (File::SOPS::Comment
+existiert dort nicht), 0 von 8 Subtests; mit nur der Klasse angeflanscht
+fallen 3 weitere Zusicherungen, bevor is_comment fehlt.
+
+OFFEN, als eigene Tickets: #147 (File::SOPS::Comment hat keine .pm-Datei,
+dzil warnt bei jedem Build), #148 (Mapping-Position), #149 (t/40 heisst noch
+"refused").
+KORREKTUR zur Zeile "6 Subtests in t/40": es sind SIEBEN umgedrehte und DREI neue. t/40 hat jetzt 14 Subtests.
+
+UMGEDREHT (7): "a comment leaf in a sequence is handed on by parse" (war:
+refused), "a comment leaf is kept at every depth a sequence reaches" (war: the
+path is the full path, at any depth), "a damaged comment leaf is recognised
+without being decoded" (war: ... is still recognised as a comment -- die
+Ablehnung lag im Parse, jetzt liegt sie im Entschluesseln), "decrypt keeps the
+comment, in both MAC modes" (war: decrypt refuses ...), "the file-based read
+paths keep it too" (war: ... refuse as well; decrypt_file lehnt weiter ab,
+extract und rotate nicht mehr), "sops really writes a list comment as a list
+element" (die File::SOPS-Haelfte des Subtests), "a flow sequence with a
+trailing comment reads as sops reads it" (war: ... is the same defect).
+
+NEU (3): "the digest does not cover a comment" (pinnt den Ausschluss von der
+anderen Seite -- ein Dokument, dessen gespeicherter MAC den Kommentar deckt,
+darf hier NICHT verifizieren), "a comment as a mapping value is still refused,
+naming the path", "a comment this emitter would have to write as text is
+refused".
+
+UNVERAENDERT (4): die Mapping-Positions-Kontrolle, das Dokument ohne
+Kommentar-Leaf, encrypted_type, und das sops-Dokument, dessen Kommentare alle
+in Mapping-Position sitzen.
+ABGENOMMEN 2026-08-21. Commit 7eb9600, ADR 0041. Die Abnahme gilt zuerst der Widerlegung des eigenen TITELS: 'ein Leaf ohne Schluessel, fuer das der Baum keinen Platz hat' beschreibt etwas, das nicht vorkommt -- ein Sequenz-Element IST ein Eintrag. Damit entfaellt die Datenmodellaenderung, um die es angeblich ging. Zweitens dem Nebenbefund, der aus diesem Ticket einen BUG FIX macht: ADR 0024s Guard sass in Format::YAML, also trug JSON bei HEAD noch karr #108s VOLLEN Defekt -- gemessen, ignore_mac lieferte den Kommentartext als zusaetzlichen Listeneintrag. Drittens der Digest-Regel, die der Ticketkoerper falsch herum hatte: vier Dokumente, mit Kommentaren im Digest weicht unser MAC ab, ohne sie ist er byte-identisch mit dem, den sops gespeichert hat. Und _reject_comment_leaves ist WIRKLICH entfernt -- die glatte Entfernung, die ADR 0024 versprochen hat, statt eines zweiten Guards daneben.
