@@ -1,0 +1,42 @@
+---
+class: standard
+created: 2026-08-21T10:34:44Z
+id: 164
+priority: medium
+status: backlog
+tags:
+- api
+- interop
+- refactor
+title: 'Two RE2 detectors: SOPS::_re2_incompatible_construct is the narrow ancestor
+  of Metadata::_re2_divergent_construct'
+updated: 2026-08-21T10:35:12Z
+---
+
+There are now two scans for "will Go RE2 take this pattern", and they do not agree in coverage:
+
+- lib/File/SOPS.pm `_re2_incompatible_construct` (karr #53), for a .sops.yaml
+  creation rule path_regex. Text-match only, deliberately conservative:
+  lookarounds and \1..\9, nothing else. It is correct for what it covers
+  (verified: (?<=, (?<!, (?=, (?!, \1 all named; (?<name> not a false
+  positive).
+- lib/File/SOPS/Metadata.pm `_re2_divergent_construct` (karr #161,
+  docs/adr/0048), for unencrypted_regex/encrypted_regex. Escape-aware,
+  character-class aware, whitelist-shaped, and its verdicts were read off RE2
+  itself through the path_regex oracle: the escapes RE2 rejects, possessive
+  quantifiers, atomic groups, (?#), (?|), (?R)/(?1)/(?&), the (?name) quote
+  spelling, (?^), every flag letter RE2 has no rule for, and the two
+  constructs both dialects take and read DIFFERENTLY (\v, \Q/\E).
+
+So a path_regex using an atomic group, a possessive quantifier, \Z, \K or (?x)
+is still taken here and silently means something else at sops. They should be
+one mechanism, and the Metadata one is the measured one.
+
+Note the two croaks differ in more than wording and BOTH are right for their
+own path: for a path_regex sops DOES report the compile error ("error parsing
+regexp", exit 1, measured), and for an encryption rule it discards it and
+matches nothing (exit 0, measured). The shared piece is the SCAN, not the
+message.
+
+Not done with karr #161 because SOPS.pm was outside that change file boundary
+(the INI lane was working in it).
