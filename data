@@ -1,0 +1,69 @@
+---
+class: standard
+completed: 2026-08-21T04:45:14Z
+created: 2026-08-21T02:50:13Z
+id: 112
+priority: medium
+started: 2026-08-21T03:21:56Z
+status: done
+tags:
+- yaml
+- parser
+- robustness
+- dos
+title: An acyclic YAML alias bomb hangs encrypt and decrypt
+updated: 2026-08-21T04:45:14Z
+---
+
+Split off from karr #110 while fixing it. #110 fixed the RECURSIVE anchor (a node that is its own ancestor); this is the other half and is NOT fixed by that guard.
+
+A document whose aliases are acyclic but exponentially shared expands into a tree with 2**N leaves:
+
+  leaf: &l0
+    v: 1
+  n1: &l1
+    a: *l0
+    b: *l0
+  n2: &l2
+    a: *l1
+    b: *l1
+  ... 25 levels
+
+Measured at HEAD with the #110 guard in place:
+
+  File::SOPS->encrypt_file(input => laugh.yaml, ...)  -> no return, killed at 15s
+
+_assert_acyclic (ADR 0025) correctly does NOT fire: the document really is
+acyclic, and its $clean set makes the guard itself linear. What explodes is
+the walk after it -- _sorted_leaves and _encrypt_tree expand every alias, as
+they must, because sops expands them too (measured: base: &b / other: *b
+encrypts to two independent ENC values).
+
+sops 3.13.3 HAS a second guard for exactly this, and refuses:
+
+  $ sops -e --age age1... laugh.yaml
+  Error unmarshalling file: yaml: document contains excessive aliasing
+  (exit 2, in 0.022s)
+
+So refusing is again the reference-compatible answer, and the threshold is
+go-yaml's (it counts expanded alias nodes against a budget rather than
+measuring depth). Needs a decision on where the budget is counted -- at parse,
+which is the format lane, or as a second API guard next to _assert_acyclic.
+
+Reachability is the same as #110: the document has to come from somewhere the
+caller does not control. Resource exhaustion by a file.
+Implementiert (ADR 0027). ENTSCHEIDUNG zur offenen Frage: API-Guard, NICHT Parse-Zeit, NICHT Format-Lane. Grund gemessen: YAML::XS loest einen Alias auf DIESELBE Perl-Referenz auf, nicht auf eine Kopie -- Load gibt einen linearen DAG zurueck (200 Ebenen in 0,7 ms, 202 Knoten). Der Blowup entsteht erst in _sorted_leaves/_encrypt_tree/_decrypt_tree. Eine Rohbyte-Vorpruefung waere also gegenstandslos, und eine Parse-Zeit-Pruefung waere blind fuer den Ursprung ohne Parser (geteilte Perl-Struktur, format => json, gemessen 12,2 MB bei 15 Ebenen).
+
+SCHWELLE: go-yamls eigene, nachgerechnet, keine eigene. Wichtigster Befund: das Budget ist ein VERHAELTNIS, kein Zaehler. sops akzeptiert eine Expansion von 206.104 Knoten und lehnt eine von 8.146 ab. Bisektiert gegen sops 3.13.3 in vier Formfamilien: Verdopplung 8 Ebenen ACCEPT / 9 REFUSE; zwei Ebenen W=80 ACCEPT / W=81 REFUSE; flache Kette 264 tief ACCEPT / 265 REFUSE; ein Anker mit 2000 Referenzen ACCEPT / 4500 REFUSE. Passende Regel: aliasCount/decodeCount > allowedAliasRatio(decodeCount), 0,99 bis 400k, linear fallend auf 0,10 bei 4M -- Expansion also hoechstens ~100x das geschriebene Dokument, enger werdend. Beide Zaehler sind exakt aus dem Perl-DAG berechenbar (memoisiert, O(distinct nodes)); unsere Werte stimmen knotengenau mit go-yamls ueberein (non-alias 54/60/330/334/1062/1066/4104/10104).
+
+KOMPATIBILITAETSRISIKO: praktisch beseitigt, weil keine eigene Konstante. Validiert gegen das echte Binary: 1.151 zufaellig geformte Dokumente, 0 Abweichungen (eine gemischte Charge davon 431 ACCEPT / 69 REFUSE), plus beide Seiten aller vier Grenzen und der Verengungsast. Zum Vergleich: naheliegende EIGENE Metriken haetten an sops Grenze 82, 89, 97 und 154 ergeben -- keine einzelne Konstante haette gepasst.
+
+Restunschaerfe dokumentiert (ADR 0027, Known imprecision): Merge-Keys (YAML::XS expandiert << nicht) und Anker-Skalare zaehlen leicht anders; beide koennen die Schwelle nicht allein erreichen.
+
+TEST t/43-alias-bomb-refused.t, 39 Tests, 1 s. Fuer den naechsten Leser wichtig: t/41s Deep-Recursion-Netz greift hier NICHT -- #110 war unbegrenzte TIEFE, #112 ist unbegrenzte BREITE bei begrenzter Tiefe (25 Ebenen rekursieren nie ueber 27). Stattdessen billige Sonde auf den Guard, dann Fixtures knapp ueber der Schwelle (9 Ebenen), sodass ein fehlender Aufrufort in Millisekunden rot wird statt zu haengen; der 25-Ebenen-Bomber nur dort, wo der Haenger selbst der Punkt ist, geforkt unter alarm. Beide Rueckfallarten geprobt: Aufruforte entfernt -> 20/39 rot in 16 s; Guard-Rumpf entfernt -> 25/39 rot in 14 s.
+
+LAEUFE: prove -lr t/ 44 Dateien 1013/1013 PASS. SOPS_BIN=/tmp/sops prove -lv t/04-interop.t 32/32 PASS, GELAUFEN nicht geskippt (sops 3.13.3).
+
+Dateien: lib/File/SOPS.pm (Guard + POD), t/43-alias-bomb-refused.t (neu), docs/adr/0027-the-alias-budget-is-a-ratio-and-it-is-go-yamls-ratio.md (neu), Changes. Kein Git.
+2026-08-21 04:02 Bereit zum Review: Guard, ADR 0027, t/43, Changes. Interop gelaufen, nicht geskippt.
+ABGENOMMEN 2026-08-21. Die Abnahme gilt vor allem der Schwelle: es gibt KEINE eigene. go-yamls Ratio aus decode.go ist nachgebaut, beide Zaehler sind aus dem Perl-DAG exakt berechenbar, und gegen das Binary an 1.151 zufaelligen Dokumenten validiert -- null Abweichungen. Damit ist das Kompatibilitaetsrisiko, das eine selbstgewaehlte Schwelle bedeutet haette, nicht abgeschaetzt, sondern beseitigt. Die Messung, die alle naheliegenden Modelle killt: sops akzeptiert eine Expansion auf 206.104 Knoten und lehnt eine auf 8.146 ab. Commit 6ad42f6, ADR 0027.
