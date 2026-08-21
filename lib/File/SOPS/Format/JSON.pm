@@ -9,6 +9,9 @@ use Cpanel::JSON::XS::Type qw(JSON_TYPE_INT);
 use Math::BigFloat ();
 use Scalar::Util qw(blessed dualvar);
 use File::SOPS::Encrypted;
+# For parse_in_document_order only -- see the note there. This module owns no
+# order-preserving reader of its own, deliberately.
+use File::SOPS::Format::YAML;
 use namespace::clean;
 
 # Carp reports the caller of the frame croak stands in, and every frame between
@@ -403,6 +406,46 @@ sub _wide_number {
 
     return dualvar($number, $digits);
 }
+
+###############################################################################
+# The order-preserving reparse behind MAC verification (docs/adr/0001, 0036)
+#
+# ONE reader covers both formats, and it is the YAML one. That is ADR 0001's
+# decision, not an omission here: JSON is a subset of YAML 1.2, YAML::PP reads
+# what sops and Cpanel::JSON::XS write, and only ORDER AND SHAPE are read back
+# -- a scalar the two decoders resolve differently never reaches the digest,
+# because the values come from parse().
+#
+# Cpanel::JSON::XS has no order-preserving decode mode, so the alternative is a
+# second hand-written scanner over the raw text. ADR 0001 rejected exactly that
+# for exactly this job: the text-scraping order recovery it replaced is what
+# silently dropped values from the digest.
+#
+# The one measured divergence is a key spelled with a surrogate PAIR escape
+# (`"😀"`): Cpanel::JSON::XS combines it into U+1F600, YAML::PP keeps
+# two lone surrogates. Neither emitter writes that -- both put non-ASCII on the
+# wire as UTF-8 -- and where it is hand-written the key sets disagree and the
+# walk says so at the path. It is a false refusal, never a false pass.
+sub parse_in_document_order {
+    my ($class, $content) = @_;
+    return File::SOPS::Format::YAML->parse_in_document_order($content);
+}
+
+=method parse_in_document_order
+
+    my $ordered = File::SOPS::Format::JSON->parse_in_document_order($content);
+
+Reparses C<$content> for its B<key order only> and returns the document as a
+HashRef whose mappings iterate in the order the file writes them, with the
+C<sops> section removed. Returns nothing when the text cannot be read that way.
+
+The contract is L<File::SOPS::Format::YAML/parse_in_document_order>'s, and so
+is the implementation: a JSON document is one YAML 1.2 document, and this
+distribution keeps a single order-preserving reader for both formats
+(C<docs/adr/0001>, C<docs/adr/0036>). Only order and shape are taken from it,
+never a value.
+
+=cut
 
 sub serialize {
     my ($class, %args) = @_;

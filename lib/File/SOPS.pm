@@ -32,8 +32,9 @@ use JSON::MaybeXS;
 # Used directly by _load_creation_rules to read a .sops.yaml, which is a config
 # file rather than a SOPS document and so does not go through Format::YAML.
 use YAML::XS ();
-use YAML::PP;
-use YAML::PP::Common qw(PRESERVE_ORDER);
+# No YAML::PP here any more. The order-preserving reparse the MAC needs is
+# the format handler's, not this module's -- see _parse_in_document_order
+# and docs/adr/0036.
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
 use File::SOPS::Backend::Age;
@@ -983,10 +984,11 @@ sub decrypt {
     my $decrypted_data = _decrypt_tree($data, $data_key, $metadata, []);
 
     _verify_mac(
-        document => $encrypted,
-        data     => $data,
-        data_key => $data_key,
-        metadata => $metadata,
+        document     => $encrypted,
+        data         => $data,
+        data_key     => $data_key,
+        metadata     => $metadata,
+        format_class => $format_class,
     ) unless $args{ignore_mac};
 
     return $decrypted_data;
@@ -3234,11 +3236,6 @@ our $MAC_ONLY_ENCRYPTED_INIT = pack 'C*',
     0x0b, 0x97, 0x5b, 0x3b, 0xf4, 0x4f, 0x72, 0xc6,
     0xfd, 0xad, 0xec, 0x81, 0x76, 0xf2, 0x7d, 0x69;
 
-my $ORDERED_LOADER = YAML::PP->new(
-    boolean  => 'JSON::PP',
-    preserve => PRESERVE_ORDER,
-);
-
 sub _compute_mac {
     my ($data, $key, $metadata) = @_;
 
@@ -3304,7 +3301,11 @@ sub _verify_mac {
     # Document order where we can recover it, sorted order otherwise -- which
     # is the same thing for every file this library writes. Getting the order
     # wrong can only make verification fail, never wrongly succeed.
-    my $ordered = _parse_in_document_order($args{document});
+    #
+    # The format class is the one that PARSED this document, passed in rather
+    # than guessed, so the order and the values can never come from two
+    # different readings of the same text.
+    my $ordered = _parse_in_document_order($args{document}, $args{format_class});
     my $leaves  = $ordered
         ? _document_leaves($ordered, $args{data}, [], [])
         : _sorted_leaves($args{data}, [], []);
@@ -3484,37 +3485,65 @@ sub _document_leaves {
     return $out;
 }
 
-# Reparse the raw document with hash key order preserved, purely to recover
-# document order. YAML::PP is used for both formats: JSON is a subset of YAML
-# 1.2, and it agrees with YAML::XS and JSON::MaybeXS on everything sops emits.
-# Returns undef if the text will not parse that way, leaving the caller on
-# sorted order.
+# The order-preserving reparse that supplies _document_leaves with the
+# document's key order -- ASKED OF THE FORMAT HANDLER, not performed here.
+#
+# The mechanism is one thing, but it has two halves and only one of them is
+# format-independent. Reading a document's key order out of raw text is
+# entirely format knowledge: which reader can parse it, what "one document"
+# means for it, and WHERE its metadata sits (a `sops` mapping in YAML and JSON,
+# top-level `sops_*` keys in an env file, a `[sops]` section in an ini one).
+# Walking that order against the real tree and hashing what it points at is
+# not. So the handler answers the first question and this module owns the
+# second. See docs/adr/0036, which refines docs/adr/0001 rather than replacing
+# it: YAML::PP still supplies order and nothing else, and still supplies it for
+# both formats -- it is now Format::YAML that says so.
+#
+# THE CONTRACT a handler's parse_in_document_order must meet, in full:
+#
+#   * Take the raw document text. Return a HashRef of the same SHAPE as the
+#     handler's own parse() -- mappings where parse() has mappings, sequences
+#     of the same length, leaves where parse() has leaves. The VALUES are never
+#     read, only the shape, so a scalar the two readers resolve differently
+#     cannot move a digest.
+#   * Every mapping in it must iterate its KEYS in document order. Perl's plain
+#     hash cannot do that, so a handler whose parser has no order-preserving
+#     mode has to supply the ordering itself -- a tied hash is the whole of
+#     what "order-preserving" means here.
+#   * The metadata section must already be gone.
+#   * Decline -- return nothing, or die -- when the text cannot be read that
+#     way. Declining is safe; guessing is not.
+#
+# FAILING SAFE IS THE PROPERTY THAT MATTERS. Losing the order costs a fallback
+# to sorted keys, which is the same order for every file this library writes
+# and a failed verification for one it does not. Getting the order WRONG can
+# only make verification fail too, never wrongly succeed -- the digest is over
+# the same values either way. That is why every failure below returns undef
+# instead of raising: a handler that cannot read its own document must not be
+# able to turn a MAC check into an error the caller reads as corruption.
+#
+# The one thing that is NOT a document problem is a format class that cannot do
+# this at all. That is a hole in this distribution, not in the file, and it
+# would degrade every document in that format to sorted order silently -- which
+# is precisely the failure karr #74 exists to prevent for env and ini. It is
+# loud.
 sub _parse_in_document_order {
-    my ($content) = @_;
+    my ($content, $format_class) = @_;
     return unless defined $content;
 
-    # YAML::XS::Load hands back decoded characters, so the reparse has to
-    # decode too or a non-ASCII key would not match its twin in the tree.
-    my $text = $content;
-    utf8::decode($text) unless utf8::is_utf8($text);
+    # The historical one-argument form: no format class means the YAML
+    # handler, which is what read both formats before this split and still
+    # reads both (see File::SOPS::Format::JSON::parse_in_document_order).
+    $format_class ||= $FORMATS{yaml};
 
-    # LIST context, and exactly one document -- the same one-document rule the
-    # format handlers enforce, held here independently rather than assumed.
-    # The two parsers disagree in scalar context on a multi-document stream:
-    # YAML::PP->load_string returns the FIRST document, YAML::XS::Load the
-    # LAST. This walk takes its order from one and its values from the other,
-    # so on such a stream it would pair up two different documents. Refusing
-    # it means falling back to sorted order, which can only make verification
-    # fail, never wrongly succeed.
-    my @docs = eval { $ORDERED_LOADER->load_string($text) };
-    return unless @docs == 1 && ref $docs[0] eq 'HASH';
-    my $doc = $docs[0];
+    croak "Format handler $format_class cannot recover document key order "
+        . "(no parse_in_document_order method), so the MAC could only be "
+        . "checked in sorted key order -- which is not the order a document "
+        . "in this format is written in"
+        unless $format_class->can('parse_in_document_order');
 
-    # The metadata MAC lives here and must not hash itself. It is dropped the
-    # same way the format handlers drop it -- by removing the whole sops
-    # branch -- rather than by pattern-matching "mac:" in the raw text, which
-    # is what used to swallow any user key ending in "mac" (hmac, webmac).
-    delete $doc->{sops};
+    my $doc = eval { $format_class->parse_in_document_order($content) };
+    return unless ref $doc eq 'HASH';
 
     return $doc;
 }

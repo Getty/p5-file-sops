@@ -7,7 +7,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar refaddr);
 use YAML::PP;
 use YAML::PP::Parser;
-use YAML::PP::Common qw( YAML_PLAIN_SCALAR_STYLE );
+use YAML::PP::Common qw( PRESERVE_ORDER YAML_PLAIN_SCALAR_STYLE );
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -1178,6 +1178,82 @@ The refusal is on the B<read> side only, and covers C<ignore_mac =E<gt> 1> with
 everything else: that flag means decrypted but not authenticated, never a tree
 holding a value the file does not contain. Plaintext input has no C<ENC[...]>
 strings in it, so nothing on the encrypt side can trip this.
+
+=cut
+
+###############################################################################
+# The order-preserving reparse behind MAC verification (docs/adr/0001, 0036)
+#
+# The MAC is order dependent and the order is the DOCUMENT's, which a Perl hash
+# cannot carry. File::SOPS recovers it by reparsing the raw text with key order
+# preserved and walking that skeleton against the real tree. This is the half
+# of the mechanism that has to know the format, so it lives here rather than in
+# File::SOPS -- see parse_in_document_order's POD for the contract a handler
+# has to meet.
+#
+# YAML::PP supplies ORDER AND NOTHING ELSE. Values still come from parse()'s
+# tree, so a scalar this loader resolves differently from YAML::XS cannot reach
+# the digest -- which is why the boolean mode below is set for consistency and
+# not because anything reads what it produces.
+my $ORDERED_LOADER = YAML::PP->new(
+    boolean  => 'JSON::PP',
+    preserve => PRESERVE_ORDER,
+);
+
+sub parse_in_document_order {
+    my ($class, $content) = @_;
+    return unless defined $content;
+
+    # YAML::XS::Load hands back decoded characters, so the reparse has to
+    # decode too or a non-ASCII key would not match its twin in the tree.
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    # LIST context, and exactly one document -- the same one-document rule
+    # parse() enforces, held here independently rather than assumed. The two
+    # parsers disagree in scalar context on a multi-document stream:
+    # YAML::PP->load_string returns the FIRST document, YAML::XS::Load the
+    # LAST. The walk takes its order from one and its values from the other,
+    # so on such a stream it would pair up two different documents. Declining
+    # means falling back to sorted order, which can only make verification
+    # fail, never wrongly succeed.
+    my @docs = eval { $ORDERED_LOADER->load_string($text) };
+    return unless @docs == 1 && ref $docs[0] eq 'HASH';
+    my $doc = $docs[0];
+
+    # The metadata MAC lives here and must not hash itself. WHERE the metadata
+    # sits is format knowledge -- a `sops` mapping here, top-level `sops_*`
+    # keys in an env file, a `[sops]` section in an ini one -- so the handler
+    # drops it, the caller does not. It is dropped structurally, the same way
+    # parse() drops it, rather than by pattern-matching "mac:" in the raw text,
+    # which is what used to swallow any user key ending in "mac" (hmac,
+    # webmac).
+    delete $doc->{sops};
+
+    return $doc;
+}
+
+=method parse_in_document_order
+
+    my $ordered = File::SOPS::Format::YAML->parse_in_document_order($content);
+
+Reparses C<$content> for its B<key order only> and returns the document as a
+HashRef whose mappings iterate in the order the file writes them, with the
+C<sops> section removed. Returns nothing when the text cannot be read that way.
+
+This is the format half of the MAC's order recovery (C<docs/adr/0001>), and
+L<File::SOPS> asks the handler that parsed the document rather than reaching
+for a parser of its own (C<docs/adr/0036>). What comes back supplies B<order
+and shape>; the values are never looked at, so the loader used here does not
+have to agree with L<YAML::XS> about how a scalar resolves -- only about where
+the mappings, sequences and leaves are.
+
+Declining is safe and losing the order is not an error: the caller then hashes
+in sorted key order, which can make verification fail but can never make it
+wrongly succeed. A B<multi-document> stream is declined for exactly that
+reason -- L<YAML::PP> would hand back the first document where L<YAML::XS>
+hands back the last, and the walk would pair one document's order with
+another's values.
 
 =cut
 

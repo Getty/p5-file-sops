@@ -1,6 +1,25 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - The order-preserving reparse that gives MAC verification its key order is
+    now asked of the FORMAT HANDLER instead of being a YAML::PP call inside
+    File::SOPS. Both shipped handlers gained a documented
+    `parse_in_document_order` class method; `File::SOPS::Format::JSON`
+    delegates to `File::SOPS::Format::YAML`'s, which is what already happened
+    and is now stated where it can be revisited for one format alone. Nothing
+    a caller does changes and NO DIGEST MOVES: measured over 63 encrypted
+    documents - 21 written by sops 3.13.3, 42 by this library, 17 of them
+    order-sensitive - every one recovered document order before and after and
+    every digest is identical. The point is the formats that do not exist yet:
+    YAML::PP cannot read an env or ini file at all, so verification for those
+    would have fallen back to sorted key order in silence, and an env file
+    sops writes is in DOCUMENT order. Every such file whose keys were not
+    already sorted would have failed its MAC with nothing pointing at the
+    cause. A format class that cannot recover order at all is now a loud
+    error rather than a silent fallback - that is a hole in the distribution,
+    not in the file. See docs/adr/0036, which refines docs/adr/0001 rather
+    than changing it, and karr #74 (prerequisite for the ENV and INI handlers,
+    karr #36 and #37).
   - BUG FIX and BEHAVIOUR CHANGE: `edit` can now save a YAML document that
     holds a bare `.inf`, `-.inf` or `.nan` in an unencrypted slot, and so can
     `encrypt_file` and `encrypt_in_place`. Before this, opening such a
