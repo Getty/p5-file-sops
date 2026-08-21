@@ -1,0 +1,96 @@
+---
+class: standard
+created: 2026-08-20T16:06:00Z
+id: 104
+priority: low
+started: 2026-08-21T01:22:07Z
+status: backlog
+tags:
+- wire
+- json
+- guards
+title: assert_representable still refuses a caller-supplied UV in the int64..uint64
+  window that would verify
+updated: 2026-08-21T05:11:42Z
+---
+
+Split out of karr #101 / docs/adr/0021 rather than folded in, so that change stays the one gate the ADR describes.
+
+ADR 0021 fixes the window [2^63 .. 2^64-1] for values that arrive through Format::JSON::parse: the parser hands back the float Go reads, and rotate/encrypt of a sops-written document works again. A value that does NOT come from a JSON parse -- a Perl UV literal, a computed integer, or a scalar out of a YAML parse -- still hits assert_representable and croaks.
+
+Measured (sops 3.13.3 at /tmp/sops, 35 literals across the window, unencrypted JSON slot, guard switched off in a scratchpad patch): 14 of the 35 would have produced a document sops -d accepts, and are refused. The other 21 would fail their own MAC and the refusal is right. In an ENCRYPTED slot and in BOTH YAML slots, all 35 are correct refusals (type:int -> strconv.Atoi out of range, exit 25; YAML -> sops cannot walk uint64, exit 23).
+
+The acceptance condition is the ADR 0006 one, measured with no exceptions in either direction: the literal text equals FormatFloat(double,\x27f\x27,-1,64) of the double it names.
+
+So this is the slot-dependent guard karr #101 sketched, and the reason it is not in ADR 0021 is cost, not doubt: it needs a mac_covered-style flag threaded through Format::JSON::serialize, a reject_scalar hook the JSON emitter does not have today, and the int64 rung dropped from File::SOPS::_compute_mac\x27s slot-blind sweep and re-covered by Encrypted::encrypt_value for encrypted slots. Four files, and it LOOSENS a guard.
+
+Cheap partial fix worth doing on its own: assert_representable\x27s message currently offers only "Pass it as a string to store it exactly". Since ADR 0021 the answer that matches sops is also available -- pass the value as a float -- and the message should say so.
+
+Wire lane. Needs the sops binary to prove. Do not start before ADR 0021 has landed.
+VORSCHLAG aus karr #101 Lane 3 (API), 2026-08-20, gemessen aber NICHT umgesetzt -- gehoert in dieses Ticket. Die Meldung in Encrypted.pm assert_representable schliesst heute mit 'Pass it as a string to store it exactly.' Das ist unvollstaendig, seit ADR 0021 lebt: 'pass it as a float' ist inzwischen die Antwort, die zu sops passt, und die Meldung bietet sie nicht an. Gemessen mit einem vom Aufrufer gelieferten unpack('d',pack('d',$lit)), 3 Literale x 2 Formate x 2 Slots: JSON verschluesselt UND unverschluesselt geschrieben, YAML verschluesselt geschrieben, YAML UNVERSCHLUESSELT croakt (ADR 0013) solange die kanonische Dezimale noch unter uint64max liegt -- darueber deklariert _go_int ab und es wird geschrieben. sops -d der JSON-Faelle ist exit 0 mit 9223372036854776000 in beiden Slots. Die Formulierung darf den Float-Weg also NICHT bedingungslos versprechen. Vorgeschlagener Ersatz nur fuer den Schlusssatz: 'Two answers, and which one you want is yours to say: pass it as a string to store the digits exactly (type:str, written verbatim, both formats, both slots), or as a float -- unpack(d, pack(d, $value)) -- to get what sops writes for the same digits, type:float and the double canonical decimal, at the cost of the digits the double cannot hold. A bare JSON number in this range already takes the second answer, because Go own decoder read it as a float64 (karr #101, ADR 0021). The float answer does not reach a YAML UNENCRYPTED slot, which refuses it separately (ADR 0013) unless the canonical decimal is past uint64max.' OFFEN: die Wire-Lane soll die negative Haelfte nachmessen, bevor das uebernommen wird -- ein Integer-SV kann nicht unter int64min, der Fall ist vermutlich unerreichbar, aber Lane 3 hat dieses Ende nicht bewiesen.
+TEIL (a) ERLEDIGT 2026-08-21 in c8eee80, Wire-Lane. Dieses Ticket ist ab jetzt NUR NOCH Teil (b) -- der slot-abhaengige int64-Guard. Zurueck in den Backlog, Titel passt weiterhin.
+
+Was (a) geliefert hat: die Meldung von assert_representable nennt beide Antworten. Der in diesem Ticket vorgeschlagene Text ist NICHT uebernommen worden, weil er sich beim Nachmessen als falsch erwies -- siehe naechster Absatz. Dazu POD, ein Kommentarblock mit beiden Messreihen, und t/10-integer-range.t Abschnitte 7 und 8 (+166 Zeilen, gegen eine Scratch-Kopie der alten Encrypted.pm als Netz verifiziert: 3 von 88 fallen). prove -lr t/ 900/900 ueber 38 Dateien, SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 gegen sops 3.13.3, beide gelaufen, interop nicht geskippt.
+
+DIE OFFENE FRAGE DIESES TICKETS IST BEANTWORTET, und sie verkleinert Teil (b) um die Haelfte: die negative Seite ist UNERREICHBAR, strukturell und nicht zufaellig. SVf_IOK heisst, das SV traegt einen IV oder einen UV; ein IV endet bei genau int64min und ein UV kann nicht negativ sein, also existiert unterhalb des Fensters kein Integer-SV. Gemessen ueber 14 negative Dezimalzahlen um int64min und uint64max herum, 13 Konstruktionswege je Zahl (Perl-Literale, Exponentliterale, Arithmetik, 0+$s, ein numerisch gelesener PV, sprintf '%d', int(), dualvar, Format::JSON::parse bar und quoted, YAML::XS::Load plain/exponent/quoted): 182 Zeilen, 36 davon kind=int, KEINE unter int64min, null croaks. Unterhalb des Fensters kommt ein Wert als NOK oder POK an und nimmt eine Sprosse, die nicht refused. Wer (b) entwirft, braucht deshalb nur eine Regel fuer die POSITIVE Seite. ADR 0021 hat diese Praemisse behauptet; sie ist jetzt bewiesen.
+
+WARNUNG AN (b) UND AN JEDEN, DER DIE HIESIGE ANHANG-EMPFEHLUNG WEITERVERWENDET: der oben vorgeschlagene Schlusssatz enthielt die Regel "der Float-Weg erreicht einen YAML-UNVERSCHLUESSELTEN Slot nicht, ausser die kanonische Dezimale liegt jenseits von uint64max". Diese Regel ist FALSCH. Gemessen, 12 Literale x 2 Formate x 2 Slots gegen sops 3.13.3, Float-Antwort: 7 von 48 Zellen croaken, alle YAML-unverschluesselt -- aber 9300000000000000000, 9999999999999999999 und 18000000000000000000 haben eine kanonische Dezimale WEIT UNTER uint64max und kommen mit exit 0 durch. uint64max ist nicht der Unterscheider. Der echte Split liegt vor _go_int: wo Perls %.15g-Form round-trippt, geht das Leaf in EXPONENTENSCHREIBWEISE hinaus (9.3e+18, 1e+19, 1.8e+19), die _go_int gar nicht matcht, und ADR 0013 sieht es nie; wo sie nicht round-trippt, schreibt die ADR-0011-Reparatur die bare kanonische Dezimale und der Guard liest einen uint64. Zwei Wege hindurch, nicht einer. Die Meldung in c8eee80 hedged deshalb, statt eine der beiden Regeln zu behaupten.
+
+Die String-Antwort dagegen ist vollstaendig belegt: 48 von 48 Zellen sops -d exit 0, Ziffern woertlich. Und keine der beiden Antworten legt in irgendeiner Zelle eine Datei auf Platte, die sops ablehnt -- die 7 Fehlschlaege der Float-Antwort sind Refusals HIER, vor dem Schreiben.
+
+Nebenbei gemessen und fuer (b) relevant: $value + 0.0 und $value * 1.0 auf einem Perl-UV kommen als IOK+IVisUV zurueck und landen auf demselben croak. Perls Arithmetik ist integer-erhaltend. Nur unpack('d', pack('d', $value)) erzeugt das Float-SV.
+
+WAS (b) UNVERAENDERT KOSTET: ein mac_covered-Flag durch Format::JSON::serialize, ein reject_scalar-Hook, den der JSON-Emitter nicht hat, und die int64-Sprosse aus dem slot-blinden Sweep in File::SOPS::_compute_mac heraus und fuer verschluesselte Slots von Encrypted::encrypt_value wieder abgedeckt. Vier Dateien, und es LOCKERT einen Guard -- also eigene ADR-Entscheidung vor jeder Zeile Code, nicht Umsetzung.
+KORREKTUR EINER PRAEMISSE DIESES TICKETS, Format-Lane, 2026-08-21, beim
+Vermessen von karr #106, sops 3.13.3 in /tmp/sops.
+
+Der Ticketkoerper sagt: "In einem VERSCHLUESSELTEN Slot und in BEIDEN
+YAML-Slots sind alle 35 korrekte Refusals (... YAML -> sops kann uint64 nicht
+walken, exit 23)." Das gilt nur fuer die BLANKE DEZIMALSCHREIBWEISE, mit der
+gemessen wurde. In EXPONENTSCHREIBWEISE kippt es in beiden YAML-Slots.
+
+GEMESSEN, je verschluesselter und unverschluesselter Slot:
+
+  Literal                 sops -e            wir
+  10000000000000000000    exit 23            (croak, korrekt)
+  1e19                    exit 0, type:float CROAK   <- Divergenz
+  9300000000000000000     exit 23            (croak, korrekt)
+  9.3e18                  exit 0, type:float CROAK   <- Divergenz
+  18000000000000000000    exit 23            (croak, korrekt)
+  1.8e19                  exit 0, type:float CROAK   <- Divergenz
+
+  Im unverschluesselten Slot schreibt sops die Exponentform normalisiert
+  zurueck (1e+19, 9.3e+18, 1.8e+19), exit 0.
+
+Der Unterschied ist die SCHREIBWEISE, nicht der Wert: yaml.v3 loest eine
+blanke Dezimale in diesem Fenster als uint64 auf (das walkt sops nicht,
+exit 23), eine Exponentform dagegen als float64 (exit 0). YAML::XS setzt fuer
+beide Schreibweisen IOK+IVisUV, also sieht assert_representable in beiden
+Faellen einen int ausserhalb von int64 und croakt.
+
+Das Fenster, in dem wir eine Datei verweigern, die sops schreibt und wieder
+liest, ist damit exakt: eine YAML-Exponentschreibweise, deren NV ganzzahlig
+ist und in (int64max, UV_MAX] faellt. Gemessen an den Raendern:
+
+  9.22e18   -> IOK+IVisUV, passt in int64, wir schreiben, exit 0. Kein Problem.
+  9.3e18    -> IOK+IVisUV, ueber int64max, CROAK, sops schreibt.   <- Fenster
+  1.8e19    -> IOK+IVisUV, unter UV_MAX,   CROAK, sops schreibt.   <- Fenster
+  1.9e19    -> NOK+POK (ueber UV_MAX, kein Integer-SV mehr), float,
+               wir schreiben, exit 0. Kein Problem.
+
+Die Croak-Meldung ist die aus c8eee80: "value is an integer outside the range
+the SOPS int type can hold (... Go's int64)". Sie bietet dem Aufrufer zwei
+Antworten an -- nur hat der Aufrufer hier gar keinen Wert uebergeben, sondern
+eine YAML-Datei, in der `v: 1e19` steht. Fuer diesen Weg passt keine der
+beiden Antworten: die Datei umzuschreiben ist nicht "pass it as a float".
+
+Das aendert Teil (b) dieses Tickets nicht in der Sache, wohl aber im Umfang:
+der YAML-Teil des Fensters ist nicht leer, wie hier angenommen, sondern hat
+zwei Eintrittswege (blanke Dezimale -> korrektes Refusal; Exponentform ->
+falsches Refusal), und ein slot-abhaengiger Guard muss sie auseinanderhalten.
+Der Unterscheider ist bereits im SV vorhanden: welche Schreibweise im
+Dokument stand, steht im PV -- was ihn nach ADR 0002 als Typ-Entscheider
+ausschliesst. Wer (b) entwirft, sollte das zuerst aufloesen.
+
+t/37-json-int64-uint64-window-becomes-float.t deckt die JSON-Haelfte ab; fuer
+diese YAML-Haelfte gibt es kein Netz.
