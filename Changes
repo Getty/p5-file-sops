@@ -1560,6 +1560,34 @@ Revision history for File-SOPS
     0.417s where it took 0.807s. Not fixed yet: the walks in Encrypted.pm and
     Format/YAML.pm still warn, 168 of the original 505 lines, karr #120. See
     docs/adr/0029 and karr #117.
+  - NEW: a plaintext YAML tagging a scalar `!!bool true` or `!!bool false` is
+    now encrypted instead of refused, and the other yaml.org scalar tags are
+    refused with a message about the document instead of one about libyaml.
+    YAML::XS accepts only !!str, !!int and !!float on a scalar and dies on the
+    rest with `bad tag found for scalar`, which reads like a bug in a foreign
+    library; sops accepts them all, resolves them and drops the tag, so a
+    hand-written plaintext `sops -e` encrypts at exit 0 could not be opened
+    here. Only one of those tags carries nothing: measured against sops
+    3.13.3 with the stored MAC decrypted out of each document, `!!bool true`
+    and a bare `true` produce byte-identical output - type:bool, plaintext
+    True, same digest - so that tag is dropped before parsing, by the same
+    count-reconciled retry the !!merge repair uses (docs/adr/0028) and only on
+    a plain true/false. Every other tag carries a TYPE, and the type comes
+    from the scalar here (docs/adr/0002), so removing it would retype the
+    leaf: sops base64-DECODES !!binary (`aGVsbG8=` becomes the value `hello`),
+    re-renders !!timestamp in RFC3339 under type:time (`2026-08-21` becomes
+    `2026-08-21T00:00:00Z`), resolves !!bool on True/TRUE where libyaml leaves
+    a string, and suppresses its own resolver for !!value/!!set/!!omap/!!seq/
+    !!map. Those are refused by name, saying what sops resolves the tag to and
+    naming the leaf's key path - never quoting the scalar's own text back,
+    which is plaintext. Nothing that parsed before parses differently, and no
+    AAD path, digest byte or emitted byte moves. Two divergences found while
+    measuring and deliberately left open: `0755` is the integer 493 to sops
+    and 755 here, tagged or not (karr #29's class; writing it unencrypted was
+    already refused by the foreign-resolution guard), and `!!float 1` is
+    type:float there and type:int here with the same plaintext, so the file
+    still verifies. See docs/adr/0032 and karr #118.
+
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

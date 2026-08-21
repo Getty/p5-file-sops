@@ -177,11 +177,14 @@ subtest 'an unrelated parse failure reports itself, unchanged' => sub {
     ok(!defined $data, 'still a failure');
     unlike($@, qr/merge/, 'and the message is not about merge keys');
 
-    # The retry is for ONE tag. The others YAML::XS refuses are untouched --
-    # a separate gap, not this one.
+    # This retry is for ONE tag, and !!binary is not it: sops base64-DECODES a
+    # !!binary scalar, so removing the tag would change the value. It is still
+    # refused -- but since karr #118 (docs/adr/0032) the refusal is this
+    # module's own, naming what sops resolves the tag to, rather than libyaml's
+    # `bad tag found for scalar`. t/47 is where that message is pinned.
     $data = eval { File::SOPS::Format::YAML->parse("k: !!binary 1\n") };
     ok(!defined $data, '!!binary is still refused');
-    like($@, qr/\Qtag:yaml.org,2002:binary\E/, 'by libyaml, as before');
+    like($@, qr/tags a scalar !!binary/, 'by File::SOPS, naming the tag');
 };
 
 ###############################################################################

@@ -7,6 +7,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar refaddr);
 use YAML::PP;
 use YAML::PP::Parser;
+use YAML::PP::Common qw( YAML_PLAIN_SCALAR_STYLE );
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -137,15 +138,17 @@ sub parse {
     # Reproducing that is a data-model change well beyond this parser, so until
     # it exists the input is refused rather than quietly truncated.
     #
-    # The retry below exists for ONE token and runs only after YAML::XS has already
-    # refused the document. See _without_merge_tags: `die $load_error` reports
-    # libyaml's own message, unchanged, for everything that is not it.
+    # The retries below exist for TWO tokens and run only after YAML::XS has
+    # already refused the document. See _without_merge_tags and
+    # _without_bool_tags; _refuse_unreadable_tag names the tag for the ones
+    # that carry a type this module cannot reproduce, and reports libyaml's own
+    # message, unchanged, for everything that is not a tag at all.
     my @docs = eval { Load($content) };
     if (my $load_error = $@) {
-        my $retry = _without_merge_tags($content);
-        die $load_error unless defined $retry;
+        my $retry = _without_redundant_tags($content);
+        _refuse_unreadable_tag($content, $load_error) unless defined $retry;
         @docs = eval { Load($retry) };
-        die $load_error if $@;
+        _refuse_unreadable_tag($content, $load_error) if $@;
     }
 
     croak sprintf(
@@ -286,6 +289,274 @@ sub _merge_tagged_scalars {
 
     return unless $ok;
     return $count;
+}
+
+###############################################################################
+# The OTHER yaml.org tags on a scalar (karr #118, docs/adr/0030)
+#
+# YAML::XS accepts exactly three tags on a scalar -- !!str, !!int and !!float
+# -- and dies on every other one with `bad tag found for scalar`, which reads
+# like a bug in a foreign library rather than a statement about the document.
+# sops accepts them all, resolves them, and writes the resolved value with the
+# tag gone. So a hand-written plaintext that `sops -e` encrypts at exit 0 could
+# not be opened here at all. Measured, sops 3.13.3, one leaf encrypted and the
+# same leaf under a `_unencrypted` key, with the stored MAC decrypted out of
+# each document and reproduced here leaf by leaf:
+#
+#   plaintext leaf         type   ciphertext plaintext = MAC bytes   unencrypted slot
+#   !!bool true            bool   True                               true
+#   !!bool True            bool   True                               true
+#   !!binary aGVsbG8=      str    hello                              hello
+#   !!timestamp 2026-08-21 time   2026-08-21T00:00:00Z               2026-08-21T00:00:00Z
+#   !!null ~               -      (not encrypted, nothing hashed)    null
+#   !!str 5                str    5                                  "5"
+#   !!int 0755             int    493                                493
+#   !!float 1              float  1                                  1
+#
+# Only ONE of them carries nothing. `!!bool true` produces a document that is
+# byte-identical to the one a bare `true` produces -- same type:bool, same
+# plaintext `True`, and the two MAC digests measured out identical -- because a
+# plain `true` resolves to this very tag on both sides. That is the same shape
+# as the !!merge repair above, so it gets the same treatment: the tag is
+# removed from the text and the parse is retried, reconciled against YAML::PP's
+# parser so a mis-hit cannot reach libyaml.
+#
+# EVERY OTHER TAG HERE CARRIES A TYPE, and the type comes from the scalar in
+# this distribution (ADR 0002), so removing the tag is not a no-op:
+#
+#   !!binary    sops base64-DECODES it. `aGVsbG8=` becomes the value `hello`.
+#               Dropping the tag would encrypt the base64 text -- a different
+#               value and a different digest, not a tag removal. Decoding it
+#               here would be a value transformation on the wire path, which
+#               is not this module's to make.
+#   !!timestamp sops resolves it to a time.Time and re-renders it in RFC3339
+#               under type:time. Dropping the tag leaves the SOURCE spelling as
+#               a string, so `2026-08-21` would digest as `2026-08-21` here and
+#               as `2026-08-21T00:00:00Z` there.
+#   !!bool on a spelling libyaml does not resolve (True, False, TRUE, FALSE,
+#               or a quoted `true`): sops types the leaf bool, dropping the tag
+#               types it str here. The digest bytes still agree -- `True` both
+#               sides -- so such a file would verify; the TYPE would not.
+#   !!null on a spelling libyaml does not resolve (Null, NULL): sops makes it a
+#               null, which is hashed as nothing at all; dropping the tag makes
+#               it the string `Null`.
+#   !!value !!set !!omap !!seq !!map on a scalar: sops leaves the text verbatim
+#               under type:str, but only because the tag suppressed its own
+#               resolver -- `!!value 1` is the string `1` there and would be
+#               the integer 1 here.
+#
+# So those are REFUSED, by name, saying what sops resolves the tag to. That is
+# all this changes for them: they died before and they die now, with a message
+# about the document instead of one about libyaml. !!str, !!int, !!float and
+# !!merge are not spoken for here -- the first three YAML::XS reads, and the
+# fourth is the repair above -- so a document that fails on one of them keeps
+# libyaml's own message, unchanged.
+
+my $BOOL_TAG = 'tag:yaml.org,2002:bool';
+
+# Same lexical position as the merge tag, plus the node itself: the tag is only
+# removed from a PLAIN `true`/`false` ending the node, which is the only
+# spelling measured to be equivalent. Every other spelling fails the count
+# reconciliation below and lands in the refusal instead.
+my $BOOL_TAG_ON_A_PLAIN_BOOLEAN = qr/
+    ( ^[ \t]* (?: -[ \t]+ )* | :[ \t]+ | -[ \t]+ )
+    !!bool [ \t]+
+    (?= (?: true | false ) [ \t]* (?: \# | $ ) )
+/mx;
+
+sub _without_redundant_tags {
+    my ($content) = @_;
+
+    # Composed, not chained: a document may carry both, and each repair is
+    # reconciled against its own count. Either one landing is enough to retry.
+    my $repaired = _without_merge_tags($content);
+    my $with_bools = _without_bool_tags(defined $repaired ? $repaired : $content);
+    return defined $with_bools ? $with_bools : $repaired;
+}
+
+sub _without_bool_tags {
+    my ($content) = @_;
+
+    return unless $content =~ /!!bool/;
+
+    my $wanted = _plain_boolean_tagged_scalars($content);
+    return unless $wanted;
+
+    my $stripped = $content;
+    # s///g returns the empty string, not 0, when it matches nothing.
+    my $removed  = ($stripped =~ s/$BOOL_TAG_ON_A_PLAIN_BOOLEAN/$1/g) || 0;
+
+    return unless $removed == $wanted;
+    return $stripped;
+}
+
+# The count is deliberately NOT "how many !!bool tags are in the document" but
+# "how many of them sit on a plain true/false" -- the ones the substitution is
+# allowed to touch. A document mixing `!!bool true` with `!!bool True` therefore
+# has its equivalent tag removed, fails the parse again on the other one, and
+# gets the refusal that names it. Fails safe like its merge twin: a document
+# YAML::PP refuses counts as nothing to repair.
+sub _plain_boolean_tagged_scalars {
+    my ($content) = @_;
+
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    my $count = 0;
+    my $ok = eval {
+        YAML::PP::Parser->new(receiver => sub {
+            my (undef, $name, $event) = @_;
+            return unless $name eq 'scalar_event';
+            return unless ($event->{tag} // '') eq $BOOL_TAG;
+            return unless ($event->{style} // 0) == YAML_PLAIN_SCALAR_STYLE;
+            $count++ if $event->{value} eq 'true' || $event->{value} eq 'false';
+        })->parse_string($text);
+        1;
+    };
+
+    return unless $ok;
+    return $count;
+}
+
+# Which scalar tags this module has measured and can therefore speak about, and
+# for each one whether THIS scalar is readable here. A tag outside the table is
+# left to libyaml.
+my %TAG_IS_READABLE = (
+    binary    => sub { 0 },
+    timestamp => sub { 0 },
+    value     => sub { 0 },
+    set       => sub { 0 },
+    omap      => sub { 0 },
+    seq       => sub { 0 },
+    map       => sub { 0 },
+    bool      => sub {
+        my ($event) = @_;
+        return 0 unless ($event->{style} // 0) == YAML_PLAIN_SCALAR_STYLE;
+        return $event->{value} eq 'true' || $event->{value} eq 'false';
+    },
+    null      => sub {
+        my ($event) = @_;
+        return $event->{value} =~ /\A(?: | ~ | null )\z/x ? 1 : 0;
+    },
+);
+
+my %TAG_REFUSAL = (
+    binary => 'sops resolves !!binary by base64-DECODING the scalar and '
+        . 'encrypting the decoded bytes -- measured against sops 3.13.3, '
+        . '`!!binary aGVsbG8=` becomes the value `hello` under type:str, and '
+        . 'those decoded bytes are what its MAC covers. Removing the tag here '
+        . 'would encrypt the base64 text instead: a different value, a '
+        . 'different digest, and a document that disagrees with the one sops '
+        . 'writes from the same plaintext. Decode the value yourself and write '
+        . 'it as a plain scalar, or quote the base64 text to keep it a string '
+        . 'on both sides',
+    timestamp => 'sops resolves !!timestamp to a Go time.Time and re-renders '
+        . 'it in RFC3339 under type:time -- measured against sops 3.13.3, '
+        . '`2026-08-21` becomes `2026-08-21T00:00:00Z` and '
+        . '`2001-12-14t21:59:43.10-05:00` becomes `2001-12-14T21:59:43.1-05:00` '
+        . '-- and that rendering is what its MAC covers. This module has no '
+        . 'date type and would keep the source spelling as a string, so the two '
+        . 'would digest different bytes. Remove the tag and quote the scalar to '
+        . 'make it a string on both sides, or write the RFC3339 form sops would '
+        . 'have written',
+    bool => 'File::SOPS supports !!bool on a plain `true` or `false`, where the '
+        . 'tag carries nothing and is dropped before parsing -- measured '
+        . 'against sops 3.13.3, `!!bool true` and a bare `true` produce the '
+        . 'identical document, type:bool with the plaintext True, down to the '
+        . 'MAC. This scalar is spelled some other way. sops also resolves '
+        . 'True, False, TRUE and FALSE under the tag; libyaml leaves those a '
+        . 'string, so File::SOPS would write type:str where sops writes '
+        . 'type:bool. Spell the value `true` or `false`',
+    null => 'File::SOPS reads !!null on `~`, `null` or an empty scalar. sops '
+        . 'also resolves Null and NULL, and a null is hashed as nothing at all, '
+        . 'so removing the tag would turn a value the MAC does not cover into a '
+        . 'string it does. Spell the value `null`',
+);
+
+my $TAG_REFUSAL_GENERIC =
+      'YAML::XS accepts only !!str, !!int and !!float on a scalar. sops '
+    . 'resolves this tag and writes the resolved value without it -- measured '
+    . 'against sops 3.13.3, a scalar under !!value, !!set, !!omap, !!seq or '
+    . '!!map keeps its text under type:str, which is NOT what removing the tag '
+    . 'would give here (`!!value 1` is the string `1` there and the integer 1 '
+    . 'here). Remove the tag and write the value sops would have written';
+
+# Runs only on a document YAML::XS has already refused. It answers from the
+# document rather than from libyaml's message, which names whichever tag it
+# reached first and not necessarily the one that is still there after a repair.
+# No value is ever quoted back: an error message is no place for plaintext
+# (same rule as _reject_comment_leaves).
+sub _refuse_unreadable_tag {
+    my ($content, $load_error) = @_;
+
+    my ($where, $tag) = _first_unreadable_tag($content);
+    die $load_error unless defined $tag;
+
+    croak sprintf(
+        '%s: this document tags a scalar !!%s, which File::SOPS cannot read. %s.',
+        $where, $tag, ($TAG_REFUSAL{$tag} // $TAG_REFUSAL_GENERIC)
+    );
+}
+
+# The key path is tracked the way the rest of this distribution paths a leaf:
+# mapping keys join with a colon and a sequence contributes NO component, which
+# is the AAD rule (see File::SOPS::_encrypt_tree). Fails safe -- a document
+# YAML::PP cannot parse either yields no tag and leaves libyaml's message.
+sub _first_unreadable_tag {
+    my ($content) = @_;
+
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    my (@stack, $found);
+    my $close_value = sub {
+        return unless @stack && $stack[-1]{kind} eq 'map';
+        $stack[-1]{expect} = 'key';
+    };
+    my $inspect = sub {
+        my ($event) = @_;
+        return if $found;
+        my $tag = $event->{tag} // '';
+        return unless $tag =~ m{\Atag:yaml\.org,2002:(\w+)\z};
+        my $short = $1;
+        my $readable = $TAG_IS_READABLE{$short} or return;
+        return if $readable->($event);
+        my @path = map { $_->{key} } grep { defined $_->{key} } @stack;
+        $found = [ (@path ? join(':', @path) : '(document root)'), $short ];
+    };
+
+    my $ok = eval {
+        YAML::PP::Parser->new(receiver => sub {
+            my (undef, $name, $event) = @_;
+            if ($name eq 'mapping_start_event') {
+                $close_value->() if @stack && $stack[-1]{kind} eq 'seq';
+                push @stack, { kind => 'map', expect => 'key' };
+                return;
+            }
+            if ($name eq 'sequence_start_event') {
+                push @stack, { kind => 'seq' };
+                return;
+            }
+            if ($name eq 'mapping_end_event' || $name eq 'sequence_end_event') {
+                pop @stack;
+                $close_value->();
+                return;
+            }
+            return unless $name eq 'scalar_event' || $name eq 'alias_event';
+            if (@stack && $stack[-1]{kind} eq 'map' && $stack[-1]{expect} eq 'key') {
+                $inspect->($event) if $name eq 'scalar_event';
+                $stack[-1]{key}    = $event->{value};
+                $stack[-1]{expect} = 'value';
+                return;
+            }
+            $inspect->($event) if $name eq 'scalar_event';
+            $close_value->();
+        })->parse_string($text);
+        1;
+    };
+
+    return unless $ok && $found;
+    return @$found;
 }
 
 ###############################################################################
@@ -814,10 +1085,47 @@ go-yaml re-tags for itself (measured, C<sops -d> on a document we wrote as
 C<< <<: >> prints C<< !!merge <<: >>).
 
 A merge tag this cannot see -- flow style, or a C<%TAG>-directive spelling --
-is refused as it is today, as are the other tags L<YAML::XS> rejects
-(C<!!bool>, C<!!null>, C<!!binary>, C<!!timestamp>, C<!!value>). sops was not
-measured to write any of them into an encrypted document. See
+is refused as it is today. The other tags L<YAML::XS> rejects are covered by
+the section below; sops was not measured to write any of them into an
+encrypted document. See
 L<docs/adr/0028|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0028-the-merge-tag-is-dropped-because-the-merge-key-is-an-ordinary-key.md>.
+
+=head3 An explicit type tag on a scalar
+
+L<YAML::XS> accepts exactly three tags on a scalar -- C<!!str>, C<!!int> and
+C<!!float> -- and dies on every other one. sops accepts them all, resolves
+them, and writes the resolved value with the tag gone, so a hand-written
+plaintext that C<sops -e> encrypts at exit 0 could not be B<opened> here.
+
+Since 0.003, C<!!bool> on a plain C<true> or C<false> is dropped from the text
+and the parse retried, by the same count-reconciled mechanism as C<!!merge>
+above and under the same conditions: only after L<YAML::XS> has already refused
+the document, and only when L<YAML::PP>'s parser confirms the substitution
+removed exactly as many such scalars as the document really contains. That tag
+is the only one here that carries nothing. Measured against sops 3.13.3 with
+the stored C<mac:> decrypted out of each document, C<!!bool true> and a bare
+C<true> produce byte-identical output -- C<type:bool>, plaintext C<True>, and
+the same MAC digest.
+
+B<Every other tag here carries a type>, and in this distribution the type comes
+from the scalar rather than from the document's text, so removing one would
+retype the leaf. Those are refused, naming the tag, the leaf's key path, and
+what sops resolves the tag to -- in place of libyaml's
+C<bad tag found for scalar>, which reads like a defect in a foreign library.
+The scalar's own text is never quoted back; it is plaintext. Measured:
+
+    !!binary aGVsbG8=        sops base64-DECODES it   -> the value `hello`
+    !!timestamp 2026-08-21   sops re-renders it       -> `2026-08-21T00:00:00Z`, type:time
+    !!bool True              sops resolves it bool    -> a string to libyaml
+    !!null Null              sops resolves it null    -> a string to libyaml
+    !!value 1                sops keeps the text      -> the integer 1 to libyaml
+
+C<!!null> on C<~>, C<null> or an empty scalar has always been read and still is.
+A tag L<YAML::XS> accepts but cannot resolve -- C<!!int 0x10>, C<!!int 1_000>,
+C<!!float .inf>, all of which sops resolves -- keeps libyaml's own message,
+because that is a resolver disagreement rather than a tag this module refuses.
+See
+L<docs/adr/0032|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0032-a-scalar-tag-is-dropped-only-where-it-carries-no-type.md>.
 
 =head3 A comment inside a list is refused
 
