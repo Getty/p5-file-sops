@@ -394,19 +394,40 @@ what Go digests, reads it, and L</decrypt_file> writes it out with the same
 normalisation C<sops -d> writes. Measured against sops 3.13.3 on both sides.
 
 Three things around these windows are still B<refused> rather than written --
-the magnitude above them, one whole format, and one kind of caller -- and a
-caller meeting a wide number should know where all three are.
+the magnitude above them wherever a real non-finite double reaches the tree,
+one whole format, and one kind of caller -- and a caller meeting a wide number
+should know where all three are.
 
 A literal that overflows a double -- C<1> followed by 400 zeros -- B<dies> in
-L<File::SOPS::Encrypted/assert_representable>'s non-finite guard on every path
-that B<writes> the value: L</encrypt>, L</encrypt_file>, L</encrypt_in_place>,
-L</rotate> and L</edit>. Until 0.003 it was written as a string. This is not an
-extra restriction of ours -- sops refuses the same document itself and never
-reaches a type, C<Error unmarshalling file: [...] strconv.ParseFloat: value out
-of range>, exit 2, measured against sops 3.13.3 in an encrypted and an
-unencrypted slot alike. The B<read> paths do not die: L</decrypt> and
-L</extract> hand such a leaf back with C<Inf> as its number and its digits as
-its text, because nothing there has to write it.
+L<File::SOPS::Encrypted/assert_representable>'s non-finite guard wherever it
+reaches the tree as a real non-finite double, on every path that B<writes> the
+value: L</encrypt>, L</encrypt_file>, L</encrypt_in_place>, L</rotate> and
+L</edit>. That is a caller's own C<9**9**9>, and it is any B<JSON> document,
+where L<Cpanel::JSON::XS> returns a bare C<Inf> and the digits are gone before
+anything here sees them. In JSON it is not an extra restriction of ours -- sops
+refuses the same document itself and never reaches a type: C<sops -e> stops at
+C<Error unmarshalling file: [...] strconv.ParseFloat: value out of range>, exit
+2, in an encrypted and an unencrypted slot alike, and C<sops -d> stops with the
+same message, exit 1, on a document hand-edited to carry one. Measured against
+sops 3.13.3.
+
+B<In YAML that literal is not refused any more, because it is not a number
+there.> Since 0.003 L<File::SOPS::Format::YAML/parse> hands back the string
+go-yaml reads -- C<1e400>, a 401-digit integer and the bare spellings C<Inf>,
+C<NaN> and their relatives -- so the guard never sees a float, and the leaf is
+written as C<type:str>, which is what C<sops -e> writes for the identical
+plaintext (exit 0, measured against sops 3.13.3, encrypted and unencrypted slot
+alike). Until 0.003 the same document could be neither written here -- all 20
+measured hit the guard -- nor read, 17 of those 20 failing with C<MAC
+verification failed>.
+
+The B<read> paths follow from that and differ by format. In YAML L</decrypt>
+and L</extract> hand the leaf back as a plain string carrying the literal's own
+text, and the document verifies; L</A YAML literal that overflows a double
+comes back as a string> under L</decrypt> has what that changed for a caller.
+In JSON no such document verifies in either implementation: L</decrypt> stops
+at C<MAC verification failed>, and with C<ignore_mac> the value is C<Inf> with
+its digits gone.
 
 The lower window in a B<YAML> document is refused, and sops cannot write one
 either. L<YAML::XS> hands those digits back as a Perl integer, so the C<int64>
@@ -837,6 +858,45 @@ nothing detects a value that was deleted, duplicated, moved to another key, or
 replaced with one taken from elsewhere in the same document. Use it to recover
 data, not to consume it.
 
+=head3 A YAML literal that overflows a double comes back as a string
+
+B<New in 0.003, and a change for existing callers.> From an B<unencrypted>
+YAML slot, a literal libyaml resolves to a non-finite double -- C<1e400>, a
+401-digit integer, and the bare spellings C<Inf>, C<inf>, C<INF>, C<Infinity>,
+C<NaN>, C<nan>, C<NAN>, C<-Inf> and C<+Inf> -- comes back as a plain B<string>
+holding the literal's own text. It used to carry C<Inf> or C<NaN> as its
+numeric half as well, because L<YAML::XS> returns those literals with both
+halves set.
+
+B<This is a correction, and it does not extend to the encrypted slot.>
+go-yaml -- the parser sops reads a document with -- resolves none of those
+spellings to a number either: C<strconv.ParseFloat> answers C<ErrRange>, so
+sops keeps a string, writes C<type:str> and digests the literal's own text. The
+old return value also belonged to a document this library mostly could not read
+at all: of 20 such documents C<sops -e> wrote and C<sops -d> read, 17 failed
+here with C<MAC verification failed> and 3 verified by coincidence. An
+B<encrypted> C<type:float> whose plaintext is C<+Inf>, C<-Inf> or C<NaN> is
+B<unchanged> and still decrypts to a real Perl non-finite float, bit for bit --
+measured on a document sops wrote, C<000000000000f07f>, C<000000000000f0ff> and
+C<000000000000f8ff> -- because such a leaf is still an C<ENC[...]> string when
+the document is parsed and cannot reach the retyping walk at all.
+
+Arithmetic is not what changes. Perl numifies every one of those spellings to
+the same double and does not warn, so C<0 + $value> answers exactly as before.
+What moves is the scalar's B<type>, and with it what re-encrypting the returned
+tree writes: C<type:str>, which is what sops writes for the same leaf, where
+the numeric half used to hit the non-finite refusal in
+L<File::SOPS::Encrypted/assert_representable>. Untouched: the twelve spellings
+go-yaml really does resolve to a non-finite float (C<.inf>, C<.nan> and their
+case variants, which L<YAML::XS> hands back as plain strings with no numeric
+half -- an B<encrypted> one of those decrypts to a real C<Inf> here as it
+always did, while an B<unencrypted> one still fails verification, which is a
+separate defect and open as karr #105), and JSON, where sops refuses the
+document itself. See
+L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float>,
+karr #102 and
+L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
+
 =cut
 
 sub encrypt_file {
@@ -1199,6 +1259,21 @@ L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-
 What changes is the spelling at the extremes -- C<1e300> written as 301
 positional digits rather than C<1e+300> -- and an encrypted slot is unaffected
 either way.
+
+B<Since 0.003 a non-finite YAML literal comes back from an unencrypted slot as
+a string, and is not wrapped either.> C<1e400>, a 401-digit integer and the
+bare spellings C<Inf>, C<inf>, C<INF>, C<Infinity>, C<NaN>, C<nan>, C<NAN>,
+C<-Inf> and C<+Inf> are the string go-yaml reads there, and a string is not a
+float. This is a B<correction> -- such a leaf used to carry C<Inf> or C<NaN> as
+its numeric half, on the few of those documents that could be read here at all
+-- and it stops at the unencrypted slot: an B<encrypted> C<type:float> whose
+plaintext is C<+Inf>, C<-Inf> or C<NaN> still comes back as the real Perl
+non-finite float it always did. That one is the single float this method does
+B<not> wrap, because C<+Inf> and C<NaN> are wire spellings rather than a
+number's decimal, so C<"$value"> is Perl's own C<Inf> / C<NaN> and not a
+canonical form. See L</A YAML literal that overflows a double comes back as a
+string> under L</decrypt> and
+L<File::SOPS::Encrypted/canonical_float_dualvar>.
 
 B<Dies if the path does not exist>, at any depth, naming the component that was
 not found. Before 0.003 a missing B<top-level> key returned C<undef> while a
