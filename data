@@ -1,0 +1,185 @@
+---
+class: standard
+completed: 2026-08-21T08:01:19Z
+created: 2026-08-21T05:23:55Z
+id: 122
+priority: low
+started: 2026-08-21T05:49:36Z
+status: done
+tags:
+- wire
+- yaml
+- json
+- float
+- guards
+title: A non-finite float in an ENCRYPTED slot is refused, where a YAML document carries
+  it at exit 0
+updated: 2026-08-21T08:01:19Z
+---
+
+Split out of karr #113, measured with the same corpus (sops 3.13.3 at /tmp/sops).
+
+karr #113 narrowed the non-finite guard for the UNENCRYPTED slot, where the
+leaf reaches the document as a plain token. The ENCRYPTED slot is untouched
+and still refuses every non-finite float -- now from an explicit croak in
+Encrypted::encrypt_value rather than from assert_representable.
+
+MEASURED, guard bypassed in a scratch process, twelve %GO_CONSTANT tokens as
+dualvars plus three bare NVs, encrypted slot:
+
+  YAML   sops -d exit 0  in every row -- the wire is ENC[...,type:float] with
+         the plaintext +Inf / -Inf / NaN, and sops writes .inf / -.inf / .nan
+         back out. The string half plays no part: dualvar(+Inf, "banana")
+         gives the same document as a bare 9**9**9.
+  JSON   sops -d exit 4 in every row -- "Error dumping file: Error marshaling
+         to json: Error encoding value" (Go cannot marshal a non-finite
+         float64), so there is no JSON document for it, encrypted or not.
+
+So the refusal is right for JSON and too wide for YAML, and the two cannot be
+told apart where it lives: encrypt_value is format-blind, and so is
+assert_representable, which it is reached from. Widening it needs the document
+format at the leaf, which today is known only in File::SOPS (_encrypt_tree,
+_compute_mac) -- see the same wall karr #113 hit for the unencrypted slot.
+
+Consequence today: rotate of a sops-written YAML document whose ENCRYPTED slot
+holds a .inf still croaks. The leaf decrypts to a bare Perl infinity (no token,
+karr #113s gate cannot help it), and re-encrypting it would produce exactly the
+document sops itself writes.
+
+Wire lane. Needs the binary to prove, and probably an argument through
+File::SOPS first.
+MESSUNG ABGESCHLOSSEN, KEIN CODE GEAENDERT. sops 3.13.3 /tmp/sops.
+ENTSCHEIDUNG: die Reparatur ist auf ihre Sache RICHTIG und in dieser Lane
+NICHT MACHBAR. Uebergabe an die API-Lane (lib/File/SOPS.pm), nicht "won't fix".
+
+DIE PRAEMISSE DES TICKETKOPFS IST UNVOLLSTAENDIG, und daran haengt alles.
+Der Kopf sagt, die Ablehnung komme "aus einem expliziten croak in
+Encrypted::encrypt_value". Gemessen bekommt ein Aufrufer im Reproduktionsfall
+dieses Tickets -- rotate eines sops-geschriebenen YAML mit verschluesseltem
+.inf -- die Meldung von assert_representable, eine Ebene FRUEHER, aus
+_compute_mac's Blattdurchlauf. encrypt_value's croak ist ueberhaupt nur fuer
+ein dualvar erreichbar, das das ADR-0031-Gate schon passiert hat.
+
+Gegengeprueft mit drei Scratch-Kopien von lib/, je ein Guard umgangen:
+  nur encrypt_value umgangen        -> rotate croakt weiter (assert_representable)
+  nur assert_representable umgangen -> rotate croakt weiter (encrypt_value)
+  beide umgangen                    -> rotate OK, sops -d exit 0, wire byte-identisch
+Also muessen BEIDE Tore auf, und jedes braucht eine andere Tatsache:
+
+  assert_representable braucht den SLOT. Unbedingt aufmachen heisst die
+  unverschluesselte YAML-Zelle fuer eine nackte NV wieder aufmachen -- exit 51
+  fuer +Inf, exit 0 mit stillem Umtypen fuer -Inf/NaN, genau was ADR 0031
+  geschlossen gehalten hat. Den Slot kennt _compute_mac
+  ($metadata->should_encrypt_path). canonical_float_tree kann es NICHT
+  uebernehmen: ein nacktes non-finites Blatt ohne Token laeuft dort heute
+  unveraendert durch ("return $node unless _carries_go_non_finite_token").
+
+  encrypt_value braucht das FORMAT. Unbedingt aufmachen heisst die JSON-Zelle
+  aufmachen. Das Format kennt nur File::SOPS; _encrypt_tree($node,$key,
+  $metadata,$path,$depth) traegt es nicht.
+
+MESSTABELLE, verschluesselter Slot, 15 Blaetter (12 %GO_CONSTANT-dualvars +
+3 nackte NVs), beide Formate, je ein echtes File::SOPS->encrypt an sops -d:
+  YAML 15/15 exit 0, type:float, Klartext +Inf/-Inf/NaN, sops -d schreibt
+       .inf/-.inf/.nan zurueck. Die Stringhaelfte spielt KEINE Rolle: das
+       nackte 9**9**9 gibt dasselbe Dokument wie dualvar(+Inf,'.inf').
+  JSON 15/15 exit 4, "Error marshaling to json: Error encoding value : json:
+       unsupported value: +Inf".
+NEU GEMESSEN und entscheidend fuer die Begruendung: sops -d --output-type yaml
+auf genau dieses JSON-Dokument ist exit 0. Der MAC verifiziert also; nur Gos
+JSON-Marshaller weigert sich beim DUMP. Die Ablehnung fuer JSON bleibt trotzdem
+richtig -- das voreingestellte sops -d scheitert.
+
+Gegenrichtung, sops schreibt: 12/12 Tokens -> type:float, MAC-Klartext aus dem
+mac:-Feld ENTSCHLUESSELT (nicht abgeleitet) und gegen SHA-512 ueber die beiden
+entschluesselten Blattklartexte geprueft: 12/12 YES. Eine JSON-Gegenrichtung
+existiert nicht: sops -e auf {"v":Infinity|NaN|1e400|.inf} ist exit 2 schon
+beim Unmarshal.
+
+WAS UEBERGEBEN WIRD (API-Lane, lib/File/SOPS.pm, plus eine Signatur hier):
+  1. _compute_mac ueberspringt die non-finite-Haelfte von assert_representable
+     fuer ein Blatt, das should_encrypt_path ohnehin verschluesseln wird.
+  2. encrypt_value bekommt das Format durchgereicht und lehnt nur dort ab, wo
+     es ablehnen muss (JSON).
+Beides zusammen, sonst bewegt sich nichts. Eigene ADR, eigener Korpus.
+
+BEIDE TESTZEILEN GELAUFEN, unveraendert gegenueber 0da0170: prove -lr t/
+49 Dateien 1100/1100 PASS; SOPS_BIN=/tmp/sops prove -lv t/04-interop.t 32/32
+PASS, AUSGEFUEHRT nicht geskippt, Binary /tmp/sops.
+2026-08-21 06:04 Gemessen, entschieden, nicht implementiert: die Reparatur ist richtig und braucht lib/File/SOPS.pm (Slot in _compute_mac, Format in _encrypt_tree). Dateigrenze dieser Lane haelt. Uebergabe an die API-Lane.
+GEMESSEN 2026-08-21 von der Wire-Lane, KEIN CODE GESCHRIEBEN, an der Dateigrenze angehalten. Zurueck in den Backlog mit praezisiertem Auftrag.
+
+DIE PRAEMISSE DIESES TICKETS IST UNVOLLSTAENDIG, und daran haengt alles: der Kopf sagt, die Ablehnung komme aus einem expliziten croak in Encrypted::encrypt_value. Gemessen ist der croak, den ein Aufrufer in der HIER BESCHRIEBENEN Reproduktion tatsaechlich trifft (rotate eines sops-geschriebenen YAML-Dokuments mit verschluesseltem .inf), der von assert_representable -- eine Schicht frueher, aus dem Leaf-Sweep von _compute_mac. encrypt_values croak ist nur fuer ein dualvar erreichbar, das ADR 0031s Gate schon passiert hat.
+
+Drei Scratch-Kopien von lib/, je ein Guard umgangen:
+  nur encrypt_value umgangen        -> croakt weiter, aus assert_representable
+  nur assert_representable umgangen -> croakt weiter, aus encrypt_value
+  beide umgangen                    -> OK, sops -d exit 0, byte-identisch, 3/3
+
+BEIDE GATES MUESSEN ALSO OEFFNEN, und jedes braucht eine Tatsache, die in Encrypted.pm nicht vorliegt:
+  - assert_representable braucht den SLOT. Bedingungslos zu oeffnen macht die unverschluesselte YAML-Zelle fuer ein bares NV wieder auf (+Inf exit 51; -Inf und NaN exit 0 mit still umtypisiertem Leaf) -- genau das, was ADR 0031 zugehalten hat. canonical_float_tree kann das NICHT uebernehmen: ein bares nicht-endliches Leaf ohne Token laeuft dort heute ungeprueft durch. Der Slot ist in _compute_mac bekannt, ueber should_encrypt_path.
+  - encrypt_value braucht das FORMAT. Bedingungslos zu oeffnen macht die JSON-Zelle auf (15/15 exit 4, Error marshaling to json). _encrypt_tree fuehrt das Format nicht mit, und das verschluesselte Leaf ist zur Emit-Zeit ein ENC[...]-String.
+
+Beide Tatsachen leben in lib/File/SOPS.pm. NAECHSTER SCHRITT ist deshalb API-Lane, nicht Wire-Lane, und beide Haelften gehoeren in DIESELBE Aenderung -- einzeln bewegt sich nichts.
+
+MESSUNG, die ADR 0031s Behauptung bestaetigt UND weitet: verschluesselter Slot, YAML, beide Guards umgangen -> 15 von 15 sops -d exit 0, type:float, MAC-Klartext bestaetigt. ADR 0031 sprach von 12 von 12 (die %GO_CONSTANT-Dualvars); die drei baren NVs funktionieren ebenfalls. Die String-Haelfte spielt im verschluesselten Slot keine Rolle -- 9**9**9 und dualvar(+Inf,'.inf') erzeugen dasselbe Dokument.
+
+JSON hat GAR KEINE Schreibrichtung von sops aus: sops kann einen JSON-Klartext mit nicht-endlicher Zahl nicht lesen (exit 2). Neu und fuer die Begruendung entscheidend: sops -d --output-type yaml auf unserem JSON-Dokument ist exit 0 -- der MAC verifiziert, nur Gos JSON-Marshaller lehnt beim Dump ab. Die JSON-Ablehnung bleibt trotzdem richtig, weil das voreingestellte sops -d scheitert.
+MEASURED NOTE from karr #134 / docs/adr/0037 (sops 3.13.3 at /tmp/sops).
+
+This ticket's stated premise -- inherited from ADR 0031, which refused the
+encrypted slot because 'the two formats disagree about it (YAML exit 0, JSON
+exit 4)' -- did not survive re-measurement. Six documents, three spellings x
+two wire formats:
+
+  sops -e --output-type json of a plaintext .inf   -> exit 0, JSON wire holds
+                                                      type:float, plaintext +Inf
+  sops -d --input-type yaml --output-type yaml     -> exit 0, secret: .inf
+  sops -d --input-type json --output-type yaml     -> exit 0, secret: .inf
+  sops -d --input-type yaml --output-type json     -> exit 4
+  sops -d --input-type json --output-type json     -> exit 4
+
+The two WIRE formats behave identically. What differs is the OUTPUT format,
+and that is not a property of the document being written. So the format
+encrypt_value was said to need may not be needed at all: the refusal could be
+lifted outright rather than made format-aware, which would take this out of
+SOPS.pm and into Encrypted.pm alone.
+
+Worth re-deriving before designing the fix. It changes the shape of the change
+and it changes which lane owns it.
+
+Also: since ADR 0037, edit of a YAML document with a non-finite float in an
+encrypted slot CROAKS at encrypt_value where it used to silently retype the
+leaf to type:str. That is this ticket's row -- sops edit is exit 0 and keeps
+the leaf a type:float -- and it is now the only thing standing between that
+round trip and closing. Pinned in t/52 section 7 and t/49 section 8.
+IMPLEMENTIERT. docs/adr/0040, t/54-an-encrypted-non-finite-float-is-written.t. sops 3.13.3 /tmp/sops.
+
+DIE FORMATKORREKTUR AUS DEM ZWEITEN ANHANG HAELT, selbst nachgemessen, 18 Zeilen: sops -e --output-type json schreibt ein JSON-Wire-Dokument mit type:float bei exit 0 (3 von 3 Schreibweisen), und beide Wire-Formate lesen bei --output-type yaml exit 0 und bei --output-type json exit 4 (12 Zeilen). Der Unterschied liegt im OUTPUT-Format, nicht im Dokument; Gos Marshaller scheitert beim DUMP, nach Entschluesselung und nach MAC-Pruefung. encrypt_value braucht das Format also NICHT.
+
+WAS ES NICHT WEGFALLEN LAESST: der SLOT. Gemessen mit fuenf Scratch-Kopien von lib/. Nur encrypt_value zu oeffnen schliesst rotate und decrypt->encrypt NICHT (das Blatt kommt dort als nacktes NV aus der Entschluesselung und stirbt an assert_representable); nur mit dem Slot gehen alle vier Rundlaeufe auf.
+
+DER EMIT-WALK KANN DEN SLOT NICHT BEANTWORTEN, strukturell: zur Emit-Zeit ist ein verschluesseltes Blatt ein ENC[...]-String, canonical_float_tree sieht also NUR den unverschluesselten Slot. Genau das macht ADR 0037s Carrier-Frage zum Waechter des unverschluesselten Slots und zugleich unfaehig, der des verschluesselten zu sein. Der Slot ist an zwei Stellen bekannt: encrypt_value IST der verschluesselte Slot, und _compute_macs Blattdurchlauf hat die Metadaten (should_encrypt_path).
+
+DIE AENDERUNG, drei Stellen:
+  1. assert_representable bekommt `encrypted`, Default false (die strengere Antwort; ein direkter Aufrufer merkt nichts).
+  2. encrypt_value uebergibt encrypted => 1, sein eigener croak faellt weg.
+  3. _compute_macs Sweep uebergibt should_encrypt_path($path).
+
+36-ZEILEN-KORPUS (9 Blaetter x 2 Slots x 2 Formate): 12 Zeilen bewegen sich, ALLE im verschluesselten Slot, croak -> geschrieben, type:float, sops -d exit 0 (YAML) bzw. exit 0 unter --output-type yaml (JSON). Die 18 unverschluesselten Zeilen sind Zeile fuer Zeile identisch, ebenso die 6 Widerspruchszeilen im verschluesselten Slot (banana, -.inf auf +Inf, .INf bleiben abgelehnt).
+
+ADR-0037-GEGENPROBE BESTANDEN: t/52 Abschnitt 9, zwoelf Encrypt-Pfad-Zeilen ueber den unverschluesselten Slot, identisch vor und nach der Aenderung.
+
+RUNDLAEUFE, 3 Schreibweisen x 2 Formate: YAML rotate/edit/decrypt_file->encrypt_file/decrypt->encrypt 0/3 -> 3/3 exit 0 in allen vier. JSON rotate und decrypt->encrypt 0/3 -> 3/3; JSON edit und decrypt_file bleiben abgelehnt, weil sie einen JSON-KLARTEXT schreiben muessten -- ADR 0037s Entscheidung, und sops edit ist auf demselben Dokument exit 4.
+
+KOSTEN: ein should_encrypt_path pro Blatt im MAC-Sweep, 1.87 us, ~4% auf ein 1000-Blatt-encrypt (41.4 -> 43.0 ms). Die faule Variante (Coderef) wurde gebaut und ist LANGSAMER als der Aufruf, den sie spart (43.7-45.1 ms). Als karr #142 notiert.
+
+ABGELEHNT, weil es ADR 0037s Gegenprobe bewegt: das Tor bedingungslos oeffnen. Das ginge ohne SOPS.pm und ohne Slot, macht aber auch die unverschluesselte YAML-Zelle fuer ein bares NV auf (3 von 3 geschrieben, sops -d exit 0 -- ADR 0031s Messung dieser Zelle stammt von VOR ADR 0037 und reproduziert nicht mehr). Eigenes Ticket: karr #141.
+
+UMGEDREHTE PINS, acht Subtests, alle in place editiert: t/39 #11, t/46 #5 #6 #7, t/49 #4 #16, t/52 #10 #12.
+
+NETZ: t/54 gegen das ungepatchte 77e4fdc mit perl -I und ohne use lib -- 12 von 17 Subtests und 88 von 240 Assertions fallen. Die fuenf, die halten, sind genau die Must-not-move-Abschnitte.
+
+BEIDE TESTZEILEN: prove -lr t/ mit NUR dieser Aenderung auf 77e4fdc: 54 Dateien 1189/1189 PASS (77e4fdc war 53/1172). Mit der parallelen Lane (Format::YAML, t/53) im Baum: 55 Dateien 1199/1199 PASS. SOPS_BIN=/tmp/sops prove -lv t/04-interop.t: 32/32 PASS, AUSGEFUEHRT nicht geskippt, Binary /tmp/sops, sops 3.13.3 (latest).
+2026-08-21 07:51 Implementiert: ADR 0040, t/54, acht Pins umgedreht, karr #114 mit geschlossen. 1189/1189 isoliert, interop 32/32 ausgefuehrt.
+ABGENOMMEN 2026-08-21. Commit 0a158b9, ADR 0040. Zwei Dinge tragen die Abnahme. Erstens: die Lane hat die ererbte Formatpraemisse SELBST neu hergeleitet, statt sie aus dem Bericht zu uebernehmen, der sie zuerst widerlegte -- 18 Zeilen gegen das Binary, und beide Wire-Formate verhalten sich identisch. Genau diese Kette (ein Bericht wird zur Praemisse des naechsten Tickets) hat in dieser Sitzung dreimal zu falschen Ticketkoerpern gefuehrt. Zweitens: die naheliegende Abkuerzung wurde gefunden UND verworfen. Das Gate bedingungslos zu oeffnen braucht kein SOPS.pm, keinen Slot und eine Bedingung -- und oeffnet gemessen zugleich die unverschluesselte YAML-Zelle, weil ADR 0031s Messung jener Zelle vor ADR 0037 liegt und nicht mehr reproduziert. Als karr #141 abgetrennt statt als Nebenwirkung mitgenommen.
