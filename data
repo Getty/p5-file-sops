@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-08-21T08:59:39Z
+created: 2026-08-21T08:24:23Z
+id: 143
+priority: low
+started: 2026-08-21T08:30:57Z
+status: done
+tags:
+- metadata
+- docs
+- api
+title: Flat.pm's POD still says the from_hash coercion has not landed
+updated: 2026-08-21T08:59:39Z
+---
+
+karr #138 landed the weak decoding in File::SOPS::Metadata->from_hash (docs/adr/0042). Two sentences in lib/File/SOPS/Metadata/Flat.pm are now stale and say the opposite:
+
+  * =method unflatten, section "Every leaf comes back a string, and one of them is a trap": "Until that lands in from_hash, a caller wiring this up has to map the string itself, and say so." It HAS landed - unflatten output can now be handed straight to from_hash, and that is the supported path.
+  * The same section calls mac_only_encrypted "a live hazard for the caller, and the caller is the one that has to close it". It is closed one level up now.
+
+What stays right and must NOT change: unflatten keeps returning strings, faithfully. That is ADR 0035s decision and ADR 0042 reaffirms it; t/38 and t/50 pin it.
+
+Out of karr #138s file boundary, which was Metadata.pm / t/ / docs/adr / Changes only. Lane: api.
+DONE. Both stale sentences in lib/File/SOPS/Metadata/Flat.pm are rewritten:
+
+  * 'That makes mac_only_encrypted a live hazard for the caller, and the caller is the one that has to close it' -> 'mac_only_encrypted is why that matters, and it is closed one level up', with the rest of the paragraph re-pointed from the caller to from_hash.
+  * 'Until that lands in from_hash, a caller wiring this up has to map the string itself, and say so' -> 'So this method's output is what from_hash is built to take: hand it over unchanged, strings and all.'
+  * The same paragraph said 'karr #77 has now decided it' and cited only ADR 0035, i.e. the decision without the implementation. It now names karr #138 and ADR 0042 as where it landed, and the ADR list at the bottom gained a 0042 entry.
+
+CHECKED IN THE NEIGHBOURHOOD, as asked, and NOT changed because they are still right: the escape_value comment at line ~156 (a metadata JSON::PP::Boolean is written lowercase 'true' there) and the '=head3 A data value's bytes are not this method's job' section at ~241 (escape the digest bytes, never the leaf; the data-leaf boolean is titlecase). Both describe flatten/escape and are untouched by the coercion landing. The 'Empty lists vanish' section's claim that from_hash defaults the six backend lists to [] is still true.
+
+WHAT STAYS, as the ticket required: unflatten still returns strings, faithfully. t/38 and t/50 are unchanged and green.
+2026-08-21 08:54 Two stale sentences rewritten in Flat.pm, plus the ADR-0035-without-0042 citation in the same paragraph; neighbouring sections checked and left alone. t/38 and t/50 unchanged and green.
