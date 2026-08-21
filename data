@@ -1,0 +1,172 @@
+---
+class: standard
+completed: 2026-08-21T05:13:13Z
+created: 2026-08-21T01:36:58Z
+id: 106
+priority: low
+started: 2026-08-21T04:57:38Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- types
+title: A YAML float literal that underflows to zero is an int here and a float to
+  sops
+updated: 2026-08-21T05:13:13Z
+---
+
+Found by the format lane while measuring karr #102 (sops 3.13.3 at /tmp/sops).
+Pre-existing. A type divergence only -- the MAC holds and both implementations
+read the file, so nothing fails and nothing warns.
+
+  plaintext:  v: 1e-400          (also 1e-500, 0.<399 zeros>1)
+
+  sops -e     encrypted slot -> type:float, unencrypted slot rewritten to `0`
+              sops -d exit 0, reads the float 0
+  File::SOPS  YAML::XS returns IOK+NOK+POK with NV 0, detect_type says INT,
+              encrypted slot -> type:int, unencrypted slot written as `1e-400`
+              verbatim, sops -d exit 0 (measured)
+
+Both sides digest the bytes `0` -- ours from the int rung, Go's from
+strconv.FormatFloat(0,'f',-1,64) -- so the MAC agrees by construction and the
+document is valid either way. What differs is the type sops hands the value on
+as, exactly the class ADR 0019 / karr #92 warns about for a string Go reads as a
+boolean. Nothing warns here: _go_retypes only checks %GO_BOOL_TOKEN.
+
+Why it is a separate thing from #102, and why #102's fix cannot catch it: Go's
+decimal.floatBits raises its overflow flag on OVERFLOW only, so ParseFloat
+underflow returns 0 with no error and yaml.v3 keeps the float. Measured at the
+bit: 2**1024-2**970 is where the overflow behaviour flips, and there is no
+matching flip at the small end -- 1e-400 and 1e-500 are floats to Go and finite
+zeros to Perl. #102's predicate is "our NV is non-finite", which cannot fire here.
+
+Two questions, neither answered: whether _go_retypes should widen from the
+boolean tokens to any leaf whose Go-resolved TYPE differs while its bytes agree
+(that is a general widening, and it would need its own corpus), and whether an
+underflowing literal is worth a rung of its own in detect_type. Low because a
+config file holding 1e-400 is close to hypothetical.
+
+Wire lane. Needs the sops binary to prove.
+Note on the mechanism: the overflow/underflow ASYMMETRY is measured here (overflow -> str, underflow -> float 0, both against sops 3.13.3). The explanation offered above -- that Go's decimal.floatBits raises its range flag on overflow only, so ParseFloat underflow returns 0 with no error -- is read from Go's source from memory and was NOT verified in this run. Confirm it against strconv/decimal.go before relying on it.
+MESSREIHE UND EMPFEHLUNG, file-sops-format, 2026-08-21, sops 3.13.3 in /tmp/sops.
+Nichts geaendert: kein ADR, kein Changes-Eintrag, kein Test, keine Zeile Code.
+EMPFEHLUNG: schliessen als dokumentierte, bewusste Divergenz. Begruendung unten.
+
+=== 1. DER TICKETKOERPER IRRT IN DER URSACHE, UND DAS ENTSCHEIDET DAS TICKET ===
+
+Nicht der Unterlauf macht das Leaf zum int. YAML::XS setzt public SVf_IOK auf
+JEDES Exponent-Literal, dessen NV exakt ganzzahlig ist und in einen IV/UV passt.
+Der Unterlauf ist nur EIN Weg, ganzzahlig zu sein -- naemlich 0.
+
+  v: 1e0    IOK+NOK+POK  ->  int hier, float zu sops, beide digesten "1"
+  v: 1e3    IOK+NOK+POK  ->  int hier, float zu sops, beide digesten "1000"
+  v: 1.5e1  IOK+NOK+POK  ->  int hier, float zu sops, beide digesten "15"
+  v: 100e-2 IOK+NOK+POK  ->  int hier, float zu sops, beide digesten "1"
+  v: 1e-400 IOK+NOK+POK  ->  int hier, float zu sops, beide digesten "0"
+  v: 1.0    NOK+POK      ->  float hier, float zu sops   (kein Exponent)
+  v: 1e-1   NOK+POK      ->  float hier, float zu sops   (nicht ganzzahlig)
+
+1e-400 ist also kein eigener Fall, sondern ein Mitglied der Klasse, deren
+Vertreter 1e3 ADR 0019 bereits vermessen und bewusst NICHT gewarnt hat
+("08 und 1e3 sind dieselbe Form eine Stufe tiefer ... Not warned about").
+
+DIE DRITTE SCHREIBWEISE DES TICKETKOERPERS IST FALSCH: 0.<399 Nullen>1 hat
+keinen Exponenten, kommt als NOK+POK zurueck, ist hier ein FLOAT und stimmt
+mit Go ueberein. Gemessen, beide Slots, beide Formate.
+
+=== 2. WO DIE GRENZE LIEGT ===
+
+(a) Perls Unterlaufgrenze, exakt vermessen -- der Kipppunkt ist das Literal,
+    dessen strtod exakt 0.0 ergibt, also 2^-1075 = die Haelfte des kleinsten
+    Denormals, ties-to-even auf 0:
+      2.470328229206233e-324   -> NV 4.94065645841247e-324, NOK+POK, float
+      2.4703282292062327e-324  -> NV 0, IOK+NOK+POK, int      <- Kipppunkt
+    Es gibt am kleinen Ende KEINE passende Go-Grenze: Go behaelt ueber die
+    ganze Reihe den float. Die Praemisse des Tickets stimmt insoweit.
+(b) Die Denormale dazwischen sind korrekt: 5e-324, 1e-322, 1e-323 und
+    2.470328229206233e-324 sind auf beiden Seiten float, in beiden Slots,
+    beiden Formaten. karr #102s Korpus behaelt recht.
+(c) Die Grenze, die tatsaechlich zaehlt, ist keine Unterlaufgrenze, sondern
+    "Exponentschreibweise + ganzzahliger NV + passt in IV/UV" (siehe 1).
+
+=== 3. KORPUS: 82 ZEILEN, 41 je Format, beide Slots, sops 3.13.3 ===
+
+41 Literale ueber die Grenze verteilt (Exponentformen ganzzahlig und nicht,
+Unterlauf positiv und negativ, Nicht-Exponentformen, blanke Ints, das
+int64/uint64-Fenster), je verschluesselter und unverschluesselter Slot.
+
+  YAML: 20 von 41 Zeilen divergieren im TYP (int hier, float zu sops).
+        Davon haben 8 mit Unterlauf zu tun (1e-400 1e-500 1e-1000 1E-400
+        +1e-400 2.4e-324 2.4703282292062327e-324 1e-4000000000) und
+        12 NICHT (1e0 1e1 1e3 2e0 1.0e0 1.5e1 100e-2 -1e3 +1e2 1E3 1e18 1e19).
+  JSON: 0 von 41. Cpanel::JSON::XS liefert fuer jedes dieser Literale NOK
+        ohne IOK -- float auf beiden Seiten. (+1e2 und +1e-400 sind kein
+        gueltiges JSON und werden von beiden Seiten abgelehnt; keine Divergenz.)
+
+  IN ALLEN 20 DIVERGENTEN ZEILEN GEHT NICHTS VERLOREN:
+    - sops -d auf unserer Datei: exit 0, gleicher Zahlenwert
+    - unser decrypt auf der sops-Datei: ok, gleicher Zahlenwert
+    - sops rotate -i schreibt denselben Token zurueck ("same" in allen 20)
+    - der MAC stimmt konstruktionsbedingt: beide Seiten leiten die Bytes aus
+      demselben Double ab, und _go_agrees beweist die Uebereinstimmung auf
+      dem Schreibpfad pro Leaf. Kein Zufall, der aufhoeren koennte.
+  Unterschiedlich ist ausschliesslich das Etikett, nie der Wert.
+
+=== 4. ANTWORT AUF FRAGE (a): _go_retypes NICHT ausweiten ===
+
+ADR 0019 hat genau diese Ausweitung schon gemessen und als "zu grob"
+verworfen (3 Falschwarnungen je echter Warnung in 364 Zeilen). Meine Messung
+widerspricht dem nicht, sie verschaerft es: eine Ausweitung auf "Typ weicht ab,
+Bytes stimmen" wuerde in diesem Korpus 20 von 41 YAML-Zeilen neu warnen, und
+KEINE EINZIGE davon verliert etwas (siehe 3). 20 Falschwarnungen, 0 echte.
+Eine abgenommene ADR-Entscheidung wieder aufzumachen braucht eine Messung,
+die ihr widerspricht -- diese bestaetigt sie. Das Korpus, das es kosten wuerde
+(91 Leaves x 2 Slots x 2 Handler), kaufte genau dieses Ergebnis.
+
+=== 5. ANTWORT AUF FRAGE (b): KEINE eigene detect_type-Sprosse ===
+
+Drei Gruende, jeder fuer sich ausreichend:
+  1. detect_type wohnt in Encrypted.pm, die karr #113 haelt und die ausserhalb
+     meiner Dateigrenze liegt. Ich halte hier an, statt hineinzugreifen.
+  2. Der Unterlauf ist nicht das Praedikat, das feuert (siehe 1). Eine auf
+     Unterlauf gestellte Sprosse repariert 8 der 20 Zeilen und laesst 12
+     identische stehen -- eine Regel, die 1e-400 anders behandelt als 1e0,
+     aus einem Grund, den weder Go noch das Wire-Format kennt.
+  3. Sie bricht ADR 0002. v: 0 (int auf beiden Seiten, muss int bleiben) und
+     v: 1e-400 erreichen detect_type mit IV 0 und NV 0.0 -- ununterscheidbar.
+     Trennen koennte sie nur der PV, also das TEXTMUSTER des Literals, und
+     "nirgends den Text eines Wertes mustern" ist genau die Regel, deren
+     Verletzung ADR 0002 abgeloest hat.
+
+=== 6. DIE DRITTE ANTWORT, UND SIE IST DIE RICHTIGE ===
+
+Dokumentieren, nichts aendern. Der MAC haelt konstruktionsbedingt, beide
+Implementierungen lesen die Datei, ein sops-Write-back schreibt denselben
+Token zurueck, JSON ist unberuehrt, und 1e-400 ist kein eigener Fall, sondern
+das Mitglied einer 20 Zeilen grossen Klasse, deren Vertreter eine abgenommene
+ADR bereits geprueft und stehengelassen hat. Vor 1e-400 zu warnen und bei 1e0
+zu schweigen waere eine willkuerliche Linie; vor beiden zu warnen ist das,
+was ADR 0019 gemessen verworfen hat. low ist die richtige Prioritaet aus dem
+richtigen Grund.
+
+Beide Testzeilen gelaufen, nichts geskippt: prove -lr t/ 45 Dateien 1025/1025
+PASS; SOPS_BIN=/tmp/sops prove -lv t/04-interop.t 32/32 PASS gegen sops 3.13.3.
+Unveraendert gegenueber dem Ausgangsstand -- ich habe nichts angefasst.
+
+Zwei NEUE Befunde aus derselben Messreihe liegen ausserhalb dieses Tickets und
+sind getrennt abgelegt (siehe den Anhang an #104 und das neue Ticket zum
+-0-Token).
+GESCHLOSSEN 2026-08-21 als bewusste, dokumentierte Divergenz. KEIN CODE GEAENDERT, und das ist die Entscheidung, nicht ein Aufschub.
+
+DIE PRAEMISSE DIESES TICKETS WAR FALSCH, und darin liegt die Antwort: Unterlauf ist nicht das Praedikat. YAML::XS setzt public SVf_IOK auf JEDES Literal in Exponentform, dessen NV exakt integral ist und in einen IV/UV passt -- Unterlauf ist nur EINE Art, integral zu sein, naemlich 0. Gemessen: 1e0, 1e3, 1.5e1, 2e0, 100e-2, -1e3, 1e18, 1e19 sind hier alle int und fuer sops alle float, ganz ohne Unterlauf. Die dritte im Body genannte Schreibweise ist ausserdem falsch: 0.<399 Nullen>1 hat keinen Exponenten, kommt NOK+POK zurueck, ist hier ein FLOAT und stimmt mit Go ueberein.
+
+KORPUS: 82 Zeilen, 41 Literale x 2 Formate, beide Slots, sops 3.13.3. YAML 20 von 41 typdivergent -- 8 mit Unterlauf, 12 OHNE. JSON 0 von 41, weil Cpanel::JSON::XS fuer jedes davon NOK ohne IOK liefert. In allen 20 Zeilen geht nichts verloren: sops -d unserer Datei exit 0, unser decrypt von sops' Datei geht, sops rotate -i schreibt dasselbe Token zurueck. Nur das Etikett unterscheidet sich.
+
+Die exakte Unterlaufgrenze, nebenbei gemessen: der Kipppunkt ist das Literal, dessen strtod exakt 0.0 ist -- 2**-1075, die Haelfte des kleinsten Subnormals, ties-to-even auf null. 2.470328229206233e-324 -> NV 4.94e-324, float. 2.4703282292062327e-324 -> NV 0, int. Go hat am kleinen Ende KEINE entsprechende Grenze.
+
+WARUM NICHT (a), _go_retypes ausweiten: ADR 0019 hat genau diese Ausweitung schon gemessen und verworfen (3 Fehlwarnungen je echter in 364 Zeilen). Diese Messung widerspricht ihr nicht, sie bestaetigt sie schaerfer -- 'Typ weicht ab, Bytes stimmen' wuerde neu bei 20 von 41 YAML-Zeilen warnen: 20 falsch, 0 richtig. Ein akzeptiertes ADR in seiner verworfenen Alternative aufzumachen braucht eine Messung, die ihm WIDERSPRICHT.
+
+WARUM NICHT (b), eine eigene detect_type-Sprosse: sie faellt in Encrypted.pm und damit in eine fremde Lane, sie repariert 8 von 20 Zeilen und laesst 12 identische stehen, und sie BRICHT ADR 0002 -- v: 0 und v: 1e-400 kommen beide mit IV 0 und NV 0.0 an, nur der PV, also der Text des Literals, koennte sie trennen. Das ist genau das Pattern-Matching, das ADR 0002 abgeschafft hat.
+
+WARUM (c): der MAC haelt konstruktionsbedingt, beide Implementierungen lesen die Datei, ein sops-Rueckschreiben ist byte-identisch, JSON ist nicht betroffen. Und 1e-400 ist keine eigene Klasse, sondern ein Mitglied einer 20-Zeilen-Klasse, deren Vertreter 1e3 ein akzeptiertes ADR bereits untersucht und stehengelassen hat. Vor 1e-400 zu warnen und bei 1e0 zu schweigen waere eine willkuerliche Linie.
