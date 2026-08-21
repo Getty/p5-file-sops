@@ -62,6 +62,32 @@ Revision history for File-SOPS
     is unchanged too - `new(mac_only_encrypted => $flag)` still means Perl's
     truth of `$flag`; the weak decoding belongs to reading a document. See
     docs/adr/0042 and karr #138, handed over from karr #77.
+  - BUG FIX: `File::SOPS::Metadata->from_hash` now refuses a LIST or a MAP in
+    a `sops`-section field that holds a string, instead of carrying the
+    reference into the object. All nine of them: `mac`, `lastmodified`,
+    `version`, the four encryption rules and the two comment-based rules this
+    distribution recognises without implementing. sops refuses each of those
+    documents at exit 1 with "'<field>' expected type 'string', got
+    unconvertible type", without opening them - measured, sops 3.13.3, all
+    nine fields - and here the reference reached the encryption rule: with
+    `encrypted_regex: []` in a document, `File::SOPS->rotate` used the
+    reference as the pattern, matched no key, and wrote every value of the
+    file in PLAINTEXT while reporting success. A reference in `lastmodified`
+    became the AAD of the MAC, whose bytes were then a memory address. A
+    field this distribution does not model keeps whatever it holds, including
+    `key_groups`' list, because sops ignores an unknown field whatever shape
+    it has. NOT CHANGED, and now documented with the measurement instead:
+    a non-string SCALAR is still passed through rather than restringified
+    (sops reads `unencrypted_suffix: 3` as "3" and `1e20` as
+    "100000000000000000000" where Perl would write "1e+20", but sops writes
+    these fields as quoted strings always, so the divergence needs a
+    hand-edited document and the first sops write removes it); and `version`
+    is still accepted whatever it says, where sops semver-parses it and stops
+    at exit 1 on `3`, `3.13`, `true`, `""` and an absent version. Nothing
+    here reads that field, no write path carries a document's version into a
+    new document, and a partial check would refuse `v3.13.3`, `3.13.3-rc.1`
+    and `1.a.b`, which sops reads at exit 0 and preserves across a rotate.
+    See docs/adr/0043, karr #145 and karr #146.
   - BUG FIX: the refusal for a YAML leaf whose spelling Go's parser resolves
     differently stopped giving an int leaf's answer for a leaf that is a
     STRING. It ended with "sops itself resolves such a spelling when it

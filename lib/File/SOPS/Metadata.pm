@@ -44,6 +44,18 @@ my %MODELLED_FIELD = map { $_ => 1 } qw(
     mac lastmodified version mac_only_encrypted
 ), @ENCRYPTION_RULES;
 
+# The fields sops declares as a Go string. Everything a `sops` section holds
+# is one of these except the per-backend key lists, mac_only_encrypted (bool)
+# and shamir_threshold (int) -- and except a field neither implementation
+# knows, which sops ignores whatever it holds. The two comment rules are in
+# the list although this distribution does not implement them: it reads them,
+# and to sops they are strings exactly like the four it does implement.
+my @STRING_FIELDS = (
+    qw( mac lastmodified version ),
+    @ENCRYPTION_RULES,
+    @UNSUPPORTED_ENCRYPTION_RULES,
+);
+
 =head1 SYNOPSIS
 
     use File::SOPS::Metadata;
@@ -170,6 +182,15 @@ has version => (is => 'rw', default => sub { $SOPS_VERSION });
 =attr version
 
 SOPS version string. Defaults to C<3.7.3> for compatibility with the Go implementation.
+
+B<sops semver-parses this field and refuses a document it cannot parse>, on
+every read path -- C<3>, C<3.13>, C<true>, C<""> and an B<absent> version are
+each exit 1. L</from_hash> accepts all of them and defaults an absent one to
+C<3.7.3>, which is a deliberate divergence in the permissive direction:
+nothing here reads the field, and no value read out of a document is ever
+written back into one, because L</policy_args> does not carry it across a
+re-encryption. See L</from_hash> for the measured table and why a partial
+check would be worse than none.
 
 =cut
 
@@ -335,6 +356,13 @@ L</Two fields are decoded weakly, because sops decodes them weakly>. It stays
 in C<extra> because this class models what the field B<is>, not what it
 B<means>: C<key_groups> is what gives a threshold its meaning, and that is the
 field this distribution cannot implement.
+
+The two comment-based encryption rules pass through here as well, and they are
+B<checked> rather than decoded: they are strings to sops, so a list or a map in
+one of them is refused with everything else in
+L</The string fields are checked for their shape, and only for that>. A field
+neither implementation knows keeps whatever it holds, C<key_groups>' list
+included.
 
 =cut
 
@@ -525,6 +553,32 @@ sub _is_unconvertible {
 sub _is_text {
     my ($value) = @_;
     return File::SOPS::Encrypted->detect_type($value) eq 'str' ? 1 : 0;
+}
+
+# The other side of the same weak decoding: the fields that ARE strings.
+# mapstructure stringifies whatever scalar it finds there -- measured on sops
+# 3.13.3, `unencrypted_suffix: 3` is read as "3", `true` as "1" and `1e20` as
+# "100000000000000000000", and `sops rotate` writes that text back out -- but
+# a LIST or a MAP is refused outright, in every one of them, exit 1. So this
+# refuses the container and passes the scalar through; Perl's own text agrees
+# with Go's for every spelling but a float outside positional range, which no
+# document either implementation writes can carry. docs/adr/0043.
+#
+# The refusal is not decoration. Measured before it landed: `encrypted_regex:
+# []` reached should_encrypt_key as the pattern, matched no key, and
+# File::SOPS->rotate wrote every value of the document in PLAINTEXT and
+# reported success -- for a document sops will not open at all. A reference in
+# `lastmodified` becomes the AAD of the MAC, whose bytes are then a memory
+# address.
+sub _assert_string_field {
+    my ($field, $value) = @_;
+
+    croak "the 'sops' section's '$field' is " . _shape_of($value) . ", and a "
+        . "string is what belongs there. sops refuses the same document with "
+        . "\"'$field' expected type 'string', got unconvertible type\", exit 1."
+        if _is_unconvertible($value);
+
+    return $value;
 }
 
 sub _decode_bool_field {
@@ -727,6 +781,13 @@ sub from_hash {
         . "a mapping' when reading, exit code 203 when encrypting."
         unless ref $hash eq 'HASH';
 
+    # Before anything is built out of the section: a reference where sops
+    # wants a string. It refuses such a document at exit 1 without opening it,
+    # and here the reference would reach an encryption rule and be used as the
+    # suffix or the pattern.
+    _assert_string_field($_, $hash->{$_})
+        for grep { exists $hash->{$_} } @STRING_FIELDS;
+
     my %extra = map  { $_ => $hash->{$_} }
                 grep { !$MODELLED_FIELD{$_} } keys %$hash;
 
@@ -875,6 +936,86 @@ B<Nothing moves for a document that already carried a real boolean or a real
 number>, which is every document sops itself writes: measured before and after,
 the MAC plaintext of a YAML and a JSON document with C<mac_only_encrypted>
 absent, explicitly C<false>, and set, is unchanged in all six cases.
+
+=head2 The string fields are checked for their shape, and only for that
+
+Every other field the C<sops> section models is a Go string, and the same weak
+decoding reaches them from the other side: sops B<stringifies whatever scalar
+it finds> and reads on. Measured against sops 3.13.3 --
+C<unencrypted_suffix: 3> is read as C<"3">, C<true> as C<"1">, C<false> as
+C<"0">, C<1e20> as C<"100000000000000000000">, C<0755> as C<"493"> -- and
+C<sops rotate> writes that text back out as a quoted string.
+
+A B<list or a map> in one of those fields is a different answer: sops refuses
+the document outright, without opening it, with
+
+    '<field>' expected type 'string', got unconvertible type
+
+exit 1. Measured for all nine of them -- L</mac>, L</lastmodified>,
+L</version>, the four encryption rules and the two comment-based rules this
+distribution recognises without implementing. B<This method refuses the same>,
+naming the field and the shape it got.
+
+That refusal is not tidiness. A reference in L</encrypted_regex> reached
+L</should_encrypt_key> as the pattern, matched no key, and
+L<File::SOPS/rotate> then wrote every value of the document in B<plaintext> and
+reported success -- for a document C<sops -d> will not open. One in
+L</lastmodified> becomes the AAD the MAC is authenticated with, whose bytes are
+then a memory address. A field this class does B<not> model keeps whatever it
+holds, because sops ignores an unknown field whatever shape it has (measured),
+and because C<key_groups> is a list by definition.
+
+=head3 What is deliberately not done: a non-string scalar is not restringified
+
+C<< unencrypted_suffix => 3 >> stays the number 3 here rather than becoming
+C<"3">. For every spelling Perl's own text and Go's agree -- a
+L<JSON::PP::Boolean> numifies to C<1>/C<0>, an integer stringifies to its
+digits -- so the suffix a rule matches with is the same either way. The one
+spelling where they differ is a float outside positional range: Go's
+C<strconv.FormatFloat(v, 'f', -1, 64)> writes C<1e20> as
+C<100000000000000000000> where Perl writes C<1e+20>.
+
+It is left alone because it is not reachable from any document either
+implementation produced. sops writes these fields as B<quoted strings>, always
+-- including when normalising a hand-written float, measured -- and this
+library writes back the scalar the parser gave it. So the divergence needs a
+hand-edited document to exist at all, and the first time sops touches such a
+document it is gone. docs/adr/0043 records the measurement.
+
+=head3 What is deliberately not done: L</version> is not parsed
+
+sops does not merely stringify that field, it B<semver-parses> it and stops on
+a document it cannot parse -- on every read path (C<sops -d>, C<-d --extract>,
+C<rotate>), exit 1. Measured, sops 3.13.3:
+
+    3.13.3  "3.13.3"  v3.13.3  3.13.3-rc.1  3.13.3+build.5  1.a.b     accepted
+    3       3.13      true     ""  null  (and an ABSENT version)      refused
+    03.13.3   3.13.03   3.13.3-   3.13.3+   3.13.3-!   3.13.3-01      refused
+
+This method accepts every one of them, and defaults an absent one to C<3.7.3>.
+That is permissive -- it reads documents sops refuses, it never writes one --
+and it is deliberate rather than forgotten:
+
+=over 4
+
+=item * B<Nothing here reads the field.> It is not in the MAC, not in the AAD,
+and not in any decryption decision; sops's own use of it is a comparison
+against its binary version.
+
+=item * B<Every write path stamps a fresh C<3.7.3>>, which sops accepts.
+L</policy_args> does not carry L</version> across a re-encryption, so a value
+read out of a document never reaches a document.
+
+=item * B<A partial check would be worse than none.> Refusing what does not
+look like C<N.N.N> would refuse C<v3.13.3>, C<3.13.3-rc.1>, C<3.13.3+build.5>
+and C<1.a.b> -- every one of which sops reads at exit 0 and writes back
+verbatim on a C<rotate>. Reproducing the refusal faithfully means reproducing
+C<blang/semver>'s strict grammar (leading zeroes, uint64 bounds, prerelease and
+build components) B<plus> two sops-specific rules on top of it: a leading C<v>
+is stripped, and a version whose text begins C<1.> is accepted without being
+parsed at all.
+
+=back
 
 =cut
 

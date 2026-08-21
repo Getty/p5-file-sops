@@ -486,32 +486,31 @@ number and C<true> a boolean, the way YAML::XS and Cpanel::JSON::XS do for the
 nested format. This method is faithful to that and hands back exactly what the
 file holds, unescaped and otherwise untouched.
 
-B<That makes C<mac_only_encrypted> a live hazard for the caller, and the caller
-is the one that has to close it.> Measured against sops 3.13.3:
-C<sops_mac_only_encrypted=false> added to a document whose MAC covers every
-value decrypts fine (exit 0), and C<sops_mac_only_encrypted=true> on the same
-document fails with C<MAC mismatch>, exit 51 -- the option selects the digest.
-Perl's C<'false'> is B<true>, so handing this method's output straight to
-L<File::SOPS::Metadata/from_hash> turns a document sops reads into one this
-library computes the wrong digest for.
+B<C<mac_only_encrypted> is why that matters, and it is closed one level up.>
+Measured against sops 3.13.3: C<sops_mac_only_encrypted=false> added to a
+document whose MAC covers every value decrypts fine (exit 0), and
+C<sops_mac_only_encrypted=true> on the same document fails with C<MAC
+mismatch>, exit 51 -- the option selects the digest. Perl's C<'false'> is
+B<true>, so a caller reading that string as Perl would turn a document sops
+reads into one this library computes the wrong digest for.
 
-B<karr #77 has now decided it, and the decision is that this method keeps
-doing exactly what it does.> docs/adr/0035 measured where the coercion belongs
-and the answer is not here: sops decodes its metadata section B<weakly in every
-format>, not only in the flat ones. In a B<nested YAML> C<sops:> section a
-quoted C<mac_only_encrypted: "false"> is the boolean false and a quoted
-C<"true"> is true -- C<strconv.ParseBool>'s accepted set exactly
+B<karr #77 decided where the coercion belongs and karr #138 landed it, and the
+decision is that this method keeps doing exactly what it does.> docs/adr/0035
+measured it and docs/adr/0042 implemented it: sops decodes its metadata section
+B<weakly in every format>, not only in the flat ones. In a B<nested YAML>
+C<sops:> section a quoted C<mac_only_encrypted: "false"> is the boolean false
+and a quoted C<"true"> is true -- C<strconv.ParseBool>'s accepted set exactly
 (C<1 t T TRUE true True> / C<0 f F FALSE false False>, plus the empty string as
 false), with C<yes>, C<no>, C<on> and C<off> B<refused> at exit 1; and
 C<shamir_threshold: "2"> is the integer 2 while C<"false"> there is refused.
 
-So the coercion belongs in L<File::SOPS::Metadata/from_hash>, the one place
-every format's parsed section arrives -- typed or not -- and B<not> in this
-method, which is the structural inverse of L</flatten> and has no schema.
-Putting it here would leave the same quoted spelling in a B<YAML> document
-still reading as Perl-true, which is the identical bug in the format that has a
-handler today. Until that lands in C<from_hash>, a caller wiring this up has to
-map the string itself, and say so.
+So the coercion lives in L<File::SOPS::Metadata/from_hash>, the one place every
+format's parsed section arrives -- typed or not -- and B<not> in this method,
+which is the structural inverse of L</flatten> and has no schema. Putting it
+here would have left the same quoted spelling in a B<YAML> document still
+reading as Perl-true, which is the identical bug in the format that has a
+handler today. B<So this method's output is what C<from_hash> is built to
+take>: hand it over unchanged, strings and all.
 
 =head1 SEE ALSO
 
@@ -525,6 +524,9 @@ map the string itself, and say so.
 
 =item * docs/adr/0035 - what an untyped store writes for a typed leaf, and why
 the metadata typing above belongs in C<from_hash> rather than here
+
+=item * docs/adr/0042 - the decoding as it landed there, and the accepted set
+for each of the two fields that are not strings
 
 =back
 
