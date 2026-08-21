@@ -233,15 +233,18 @@ SKIP: {
         }
     };
 
-    # karr #144's second direction, recorded rather than fixed. go-yaml v3
-    # resolves a BARE RFC3339 scalar as !!timestamp, where mapstructure wants
-    # a string, so sops refuses the document -- and this library reads it,
-    # because a bare and a quoted scalar arrive here as the same Perl string
-    # (ADR 0038 measured that). It is the permissive direction and nothing is
-    # decrypted wrongly; closing it needs plain/quoted state carried from the
-    # parse, which is the format handler's. This library never WRITES such a
-    # document -- t/06-wire-format-regressions.t pins the quoting.
-    subtest 'an unquoted timestamp: sops refuses it, we read it' => sub {
+    # karr #144's second direction, closed by karr #159 and docs/adr/0050.
+    # go-yaml v3 resolves a BARE RFC3339 scalar as !!timestamp, where
+    # mapstructure wants a string, so sops refuses the document. This library
+    # still READS it -- the values and the MAC are unaffected, and a refusal
+    # would take away the only thing that can repair such a file -- but it now
+    # says so, from the YAML handler, which is the only place the plain/quoted
+    # state exists (ADR 0038 measured that both arrive at from_hash as the same
+    # Perl string). This library never WRITES such a document --
+    # t/06-wire-format-regressions.t pins the quoting, and
+    # t/64-a-plain-lastmodified-is-warned-about-not-refused.t owns the guard.
+    subtest 'an unquoted timestamp: sops refuses it, we read it and say so'
+    => sub {
         my $bare = $document;
         $bare =~ s/^(\s+lastmodified: )"([^"]*)"$/$1$2/m
             or die 'the fixture has no quoted lastmodified line';
@@ -249,12 +252,21 @@ SKIP: {
         is run_sops($sops_bin, $dir, $bare), 1,
             'sops refuses a bare timestamp (mapstructure gets a time.Time)';
 
-        ok eval {
+        my @warnings;
+        my $back = do {
+            local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+            eval {
                 File::SOPS->decrypt(
                     encrypted => $bare, identities => [$sec], format => 'yaml',
                 );
-            },
-            'this library reads it -- a known divergence, permissive, karr #144';
+            };
+        };
+
+        ok $back, 'this library reads it -- permissive on purpose, karr #159';
+        is scalar @warnings, 1, 'and warns about it exactly once'
+            or diag(explain(\@warnings));
+        like $warnings[0], qr/unconvertible type 'time\.Time'/,
+            "the warning quotes sops's own refusal";
     };
 }
 

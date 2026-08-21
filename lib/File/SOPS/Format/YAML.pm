@@ -163,7 +163,15 @@ sub parse {
 
     my $metadata;
     if (exists $data->{sops}) {
-        $metadata = File::SOPS::Metadata->from_hash(delete $data->{sops});
+        # The RAW section, read before from_hash and not from $metadata:
+        # from_hash stores the timestamp Go RE-FORMATS (docs/adr/0044), and the
+        # question here is about the text the document holds. Warns, never
+        # refuses -- see _warn_plain_lastmodified for why, and for what it can
+        # never fire on.
+        my $section = delete $data->{sops};
+        _warn_plain_lastmodified($section, $content);
+
+        $metadata = File::SOPS::Metadata->from_hash($section);
     }
 
     # AFTER the split, so the sops section is never rewritten -- and after the
@@ -896,6 +904,192 @@ sub _plain_infinity_token {
     return defined _go_non_finite_double($token) ? $token : undef;
 }
 
+###############################################################################
+# A `lastmodified` the DOCUMENT wrote plain (karr #159, docs/adr/0050)
+#
+# The mirror of _quote_sops_timestamp below, on the read side. That one exists
+# because YAML::XS emits an RFC3339 timestamp bare and go-yaml resolves a bare
+# RFC3339 scalar to a time.Time, where sops's decoder wants a string:
+#
+#   decoding failed due to the following error(s):
+#   'lastmodified' expected type 'string', got unconvertible type 'time.Time'
+#
+# So this library has never WRITTEN such a document. It has always READ one,
+# and karr #144 / docs/adr/0044 could not close that from Metadata.pm: a bare
+# and a quoted scalar arrive at from_hash as the same Perl string. The missing
+# fact is not in the SV, it is in the bytes -- the same shape as
+# _restore_plain_infinities above, and the reason both live in this file.
+#
+# THE MECHANISM IS NOT ADR 0026's, though. There YAML::PP is asked as a
+# RESOLVER: its Core schema answers `+Inf` for a plain `.inf` and the string
+# `.inf` for a quoted one, so the resolution IS the plain/quoted answer. That
+# does not carry here, measured: YAML 1.2's Core schema has no timestamp type,
+# so YAML::PP hands back the same Perl string for `lastmodified: 2026-08-21T...`
+# and `lastmodified: "2026-08-21T..."`. What carries is the QUESTION, and
+# YAML::PP's parser answers it directly -- the scalar event's style, the same
+# oracle _plain_boolean_tagged_scalars already uses for the !!bool retry.
+#
+# WHAT IS REFUSED IS NOTHING. This warns, and that is the measured choice
+# rather than the timid one. Every write path here re-stamps and quotes the
+# timestamp, so `rotate` on such a document produces one `sops -d` reads at
+# exit 0 -- measured. A refusal would take the one tool that can still repair
+# the file and make the file unopenable by every tool, which in a secrets
+# library is a worse outcome than the divergence it closes.
+#
+# THE GUARD NEVER FIRES ON A DOCUMENT SOPS READS, which is karr #145's
+# condition and the reason that ticket was closed unimplemented. Measured
+# against sops 3.13.3, one document per spelling, each carrying a `mac` built
+# under the AAD ADR 0044 derives:
+#
+#   * all 15 RFC3339 spellings sops accepts QUOTED (exit 0) are refused BARE
+#     (exit 1, `unconvertible type 'time.Time'`) -- there is no accepted bare
+#     one to warn about wrongly;
+#   * `!!str 2026-08-21T09:05:08Z` -- bare, but TAGGED -- is exit 0 at sops,
+#     because an explicit tag stops go-yaml's implicit resolver before
+#     parseTimestamp runs. Hence the tag check below; without it this guard
+#     would fire on a document sops reads, which is the whole thing karr #145
+#     was protecting.
+#
+# The two places where _go_timestamp and go-yaml's own parseTimestamp were
+# measured to disagree both land in the safe direction: `...09:05:08,123Z` (a
+# comma fraction) is a timestamp to go-yaml and not to this model, so the
+# guard stays quiet on a document sops refuses; `...09:05:08+25:00` is a
+# timestamp to this model and a string to go-yaml, so the guard fires on a
+# document sops refuses anyway -- for the other of its two reasons.
+sub _warn_plain_lastmodified {
+    my ($section, $content) = @_;
+
+    # The cheapest gate first: no metadata, or a `lastmodified` that is not a
+    # scalar, and there is nothing a plain/quoted question could be about.
+    # ADR 0043 refuses a reference here further down the read path.
+    return unless ref $section eq 'HASH';
+    my $text = $section->{lastmodified};
+    return unless defined $text && !ref $text;
+
+    # Then the model, which is a regex and no parse: go-yaml only resolves a
+    # scalar to a timestamp when parseTimestamp takes it, and _go_timestamp is
+    # this module's measured reimplementation of that (see _go_scalar_bytes,
+    # where the emit-side guard asks the same question of the same tokens).
+    return unless defined _go_timestamp($text);
+
+    # Only then the second parser, and only for the style of one scalar.
+    return unless _plain_lastmodified($content);
+
+    carp "sops:lastmodified: this timestamp is written as a PLAIN scalar. "
+        . "gopkg.in/yaml.v3 resolves a bare RFC3339 scalar to a Go time.Time "
+        . "where sops's decoder wants a string, so sops refuses this whole "
+        . "document before decrypting anything -- measured against sops "
+        . "3.13.3: `'lastmodified' expected type 'string', got unconvertible "
+        . "type 'time.Time'`. Nothing here is affected: the values and the MAC "
+        . "are read normally, and every file this library writes quotes the "
+        . "timestamp, so re-encrypting the document (rotate, edit, "
+        . "encrypt_in_place, or decrypt_file plus encrypt_file) repairs it. "
+        . "Quoting the line by hand does the same";
+
+    return;
+}
+
+# Was the `sops` section's `lastmodified` value written as a plain scalar?
+# 1 yes, 0 no, undef for "this parser could not say" -- an unreadable document,
+# or no such key in that position at all.
+#
+# Ground truth from the PARSER, not from a regex over the text and not from a
+# tree: a plain scalar may sit on the line below its key, inside a flow
+# mapping, or behind an explicit `? key`, and all three are the ordinary YAML
+# a hand edit produces. Measured over 17 spellings, the event stream places
+# every one of them; the value's own bytes are never looked at.
+#
+# A TAGGED scalar answers 0 whatever its style. go-yaml runs parseTimestamp
+# only for an untagged node, so `!!str 2026-08-21T09:05:08Z` is a string there
+# and sops reads the document at exit 0 -- measured. The one tag that would
+# resolve to a timestamp, `!!timestamp`, never reaches here: YAML::XS refuses
+# it at parse and %TAG_REFUSAL names it (docs/adr/0032).
+#
+# An ALIAS answers 0 as well. `lastmodified: *t` carries the anchor's resolved
+# type in go-yaml, so it CAN be a time.Time there, but the event carries no
+# style of its own and nothing here would be measuring the right scalar. A
+# quiet miss on a document sops refuses is this guard's safe direction.
+#
+# Fails safe like its merge and !!bool twins: a document YAML::PP will not read
+# answers undef, which leaves today's behaviour exactly in place.
+sub _plain_lastmodified {
+    my ($content) = @_;
+
+    # YAML::XS::Load takes bytes and hands back characters; YAML::PP wants the
+    # characters. Same decode as parse_in_document_order, for the same reason.
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    # One frame per open collection, innermost last. @key holds the key each
+    # mapping frame is currently on, so the target is recognised by position:
+    # the value of `lastmodified` in the mapping that is the value of `sops`
+    # in the root mapping -- never a user's own `lastmodified` somewhere else.
+    my (@kind, @expect_key, @key);
+    my ($plain, $done);
+
+    my $ok = eval {
+        YAML::PP::Parser->new(receiver => sub {
+            my (undef, $name, $event) = @_;
+            return if $done;
+
+            if ($name eq 'mapping_start_event' || $name eq 'sequence_start_event') {
+                _consume_node_slot(\@kind, \@expect_key, \@key, undef);
+                push @kind, $name eq 'mapping_start_event' ? 'map' : 'seq';
+                push @expect_key, 1;
+                push @key, undef;
+                return;
+            }
+            if ($name eq 'mapping_end_event' || $name eq 'sequence_end_event') {
+                pop @kind; pop @expect_key; pop @key;
+                return;
+            }
+            # The one-document rule is parse()'s, held here independently: a
+            # second document's `sops` section is not the one that was read.
+            if ($name eq 'document_end_event') {
+                $done = 1;
+                return;
+            }
+            return unless $name eq 'scalar_event' || $name eq 'alias_event';
+
+            my $slot = _consume_node_slot(\@kind, \@expect_key, \@key,
+                $name eq 'scalar_event' ? $event->{value} : undef);
+            return unless ($slot // '') eq 'value';
+            return unless @kind == 2
+                && $kind[0] eq 'map'
+                && ($key[0] // '') eq 'sops'
+                && ($key[1] // '') eq 'lastmodified';
+
+            $plain = $name eq 'scalar_event'
+                && !defined $event->{tag}
+                && ($event->{style} // 0) == YAML_PLAIN_SCALAR_STYLE ? 1 : 0;
+        })->parse_string($text);
+        1;
+    };
+
+    return unless $ok;
+    return $plain;
+}
+
+# One node has started. Tell the enclosing mapping whether it is that
+# mapping's key or its value, and advance it; a sequence element is neither.
+# Returns 'key', 'value' or undef for "not inside a mapping".
+sub _consume_node_slot {
+    my ($kind, $expect_key, $key, $scalar) = @_;
+
+    return undef unless @$kind && $kind->[-1] eq 'map';
+
+    if ($expect_key->[-1]) {
+        # A complex key -- `? [a, b] : v` -- has no name this walk can use, and
+        # undef is not a key any sops document writes, so it matches nothing.
+        $key->[-1] = $scalar;
+        $expect_key->[-1] = 0;
+        return 'key';
+    }
+
+    $expect_key->[-1] = 1;
+    return 'value';
+}
+
 =method parse
 
     my ($data, $metadata) = File::SOPS::Format::YAML->parse($yaml_string);
@@ -1004,6 +1198,43 @@ L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-
 L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>
 and
 L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-plain-scalar-is-resolved-the-same-way-on-every-parse.md>.
+
+=head3 A plain C<lastmodified> in the C<sops> section is warned about
+
+The read-side mirror of what L</serialize> does on the way out. sops writes
+C<lastmodified: "2026-08-21T09:05:08Z"> B<quoted>, and so does this
+distribution, because go-yaml resolves a B<bare> RFC3339 scalar to a Go
+C<time.Time> where sops's own decoder wants a string. Measured against sops
+3.13.3:
+
+    lastmodified: "2026-08-21T09:05:08Z"    sops -d exit 0
+    lastmodified: 2026-08-21T09:05:08Z      sops -d exit 1
+          'lastmodified' expected type 'string', got unconvertible type
+          'time.Time'
+
+This method reads both, and since 0.003 it B<carps> on the second: the values
+and the MAC are unaffected, but the file is one no sops can open. It is not
+refused, because every write path here re-stamps and quotes the timestamp --
+so C<rotate>, C<edit>, C<encrypt_in_place> and C<decrypt_file> plus
+C<encrypt_file> all turn such a document into one C<sops -d> reads at exit 0,
+and a refusal would take that away and leave the file unopenable by every tool.
+
+The warning cannot fire on a document sops reads. All 15 RFC3339 spellings sops
+accepts quoted were measured refused bare, and a B<tagged> plain scalar --
+C<!!str 2026-08-21T09:05:08Z>, where the explicit tag stops go-yaml's implicit
+resolver -- is read by sops at exit 0 and is not warned about here.
+
+The question is B<plain or quoted>, which is a fact about the source bytes and
+not about the value: both spellings arrive at
+L<File::SOPS::Metadata/from_hash> as the same Perl string, which is why this
+lives here and not there. Unlike the infinity above, the answer does not come
+from a resolver -- YAML 1.2's Core schema has no timestamp type, so L<YAML::PP>
+reads both spellings as the same string too -- but from L<YAML::PP>'s B<parser>,
+asked for one scalar's style. A document that parser will not read is not warned
+about. See
+L<docs/adr/0050|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0050-a-plain-lastmodified-is-warned-about-because-only-we-can-still-repair-it.md>
+and
+L<docs/adr/0044|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0044-the-macs-aad-is-the-timestamp-go-re-formats-not-the-text-the-document-holds.md>.
 
 =head3 A merge key keeps its C<< << >>, and loses its C<!!merge> tag
 
@@ -1122,9 +1353,25 @@ comment in it, rather than dropping the comment on the way through. A comment in
 a B<mapping value> slot is refused too, by L<File::SOPS> and in both formats,
 because no SOPS store writes that shape.
 
-A comment above a mapping key is still B<lost> on a read here, as it always has
-been: L<YAML::XS> discards it before this method sees a tree, and nothing here
-can write one back. That is the open half of karr #76.
+A comment above a B<mapping> key -- and one on the file's first line, which sops
+writes the same way -- is still B<lost> on a read here, as it always has been:
+L<YAML::XS> discards it before this method sees a tree, and nothing here can
+write one back. That is the open half of karr #76, filed as karr #148, and it
+is not a lane handoff but a wall: L<YAML::XS> is libyaml, whose emitter cannot
+write a comment at all, and L<YAML::PP>'s emitter has no comment event either --
+its own documentation lists comment-preserving round trips as a TODO. The read
+half is nearer than that reads: L<YAML::PP>'s B<parser> keeps the comment text
+in its raw token stream, so the line can be seen. But there is nowhere to put
+it. A sequence comment is preserved because a sequence B<element> is a slot the
+tree model already has; a mapping-position comment sits before a key, and a
+Perl hash has no slot before a key.
+
+The two positions therefore behave differently, and the difference is measured:
+a document whose comment is a sequence element is B<refused> by L</emit> --
+which is what makes L<File::SOPS/decrypt_file> and L<File::SOPS/edit> refuse it
+rather than drop it -- while a document whose only comment is above a mapping
+key is written back B<silently without it>. C<sops -d> returns both comments
+intact for both documents.
 
 =cut
 

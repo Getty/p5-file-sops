@@ -122,6 +122,28 @@ Revision history for File-SOPS
     reads it - a bare and a quoted scalar arrive here as the same Perl string,
     so closing it needs the YAML handler and not this. See docs/adr/0044 and
     karr #144.
+  - NEW DIAGNOSTIC: reading a YAML document whose `sops` section spells
+    `lastmodified` as a PLAIN scalar now warns. Such a file is one no sops can
+    open: go-yaml resolves a bare RFC 3339 scalar to a Go `time.Time` where
+    sops's decoder wants a string, and it refuses the whole document at exit 1
+    (`'lastmodified' expected type 'string', got unconvertible type
+    'time.Time'`) before decrypting anything. All 15 RFC 3339 spellings sops
+    reads QUOTED were measured refused BARE, so the warning cannot fire on a
+    document sops opens - including `!!str <bare timestamp>`, which sops reads
+    at exit 0 because an explicit tag stops its resolver, and which is
+    therefore not warned about.
+    NOT a refusal, and that is measured rather than cautious: every write path
+    here re-stamps and quotes the timestamp, so `rotate`, `edit`,
+    `encrypt_in_place` and `decrypt_file` plus `encrypt_file` all turn such a
+    document into one `sops -d` reads at exit 0. Refusing would take away the
+    only tool that can still repair the file. Nothing is decrypted differently,
+    no byte on the wire moves and no digest changes; this library has never
+    WRITTEN such a document. The question is plain-or-quoted, which is a fact
+    about the source bytes, so it is answered by YAML::PP's PARSER - the
+    scalar's style - and not by its resolver, which reads both spellings as the
+    same string because YAML 1.2 has no timestamp type. A user's own
+    `lastmodified` key elsewhere in the document is not this field and is never
+    warned about. See docs/adr/0050 and karr #159.
   - BEHAVIOUR CHANGE and BUG FIX: a sops COMMENT is now preserved instead of
     refused. sops attaches a comment to the node that follows it, and where
     that node is a sequence entry it has nowhere to put a comment line, so it
