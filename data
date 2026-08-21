@@ -1,0 +1,142 @@
+---
+class: standard
+completed: 2026-08-21T05:36:39Z
+created: 2026-08-21T01:52:10Z
+id: 109
+priority: medium
+started: 2026-08-21T04:45:58Z
+status: done
+tags:
+- wire
+- format
+- env
+- mac
+- roadmap
+title: ENV applies the metadata newline escape to DATA values too, and that moves
+  the digest
+updated: 2026-08-21T05:37:01Z
+---
+
+Gemessen an sops 3.13.3 waehrend karr #75 (Metadata-Flattening).
+
+Der \n-Escape ist NICHT auf die Metadaten beschraenkt. Der env-Store wendet dieselbe Transformation auf DATENWERTE an:
+
+  plaintext yaml:  plain_unencrypted: "line1\nline2"   (echtes Newline)
+  sops -e --output-type dotenv:
+                   plain_unencrypted=line1\nline2      (literales Backslash-n)
+
+und der Rueckweg macht daraus wieder ein echtes Newline. Gemessen mit
+`sops -d --output-type json`: ein env-Datenwert `a\nb` (Backslash, n) kommt als
+"a\nb" mit ECHTEM Newline zurueck.
+
+INI macht das NICHT: dort schreibt go-ini einen mehrzeiligen Datenwert als
+"""line1
+line2""" und ein literales a\nb bleibt a\nb (json: "a\\nb").
+
+WARUM DAS DIE WIRE-LANE ANGEHT: der MAC deckt den Klartext jedes Werts ab
+(auch der unverschluesselten). Der Escape ist in der Schreibrichtung verlustig
+-- ein Backslash wird nicht verdoppelt --, also liest sich ein ENV-Klartextwert,
+der ein literales Backslash-n enthaelt, als Newline zurueck. Der Wert, den der
+Digest deckt, aendert sich damit zwischen Schreiben und Lesen: MAC mismatch,
+und zwar weit weg von der Ursache.
+
+Die Schicht aus #75 (File::SOPS::Metadata::Flat) stellt escape_value/
+unescape_value oeffentlich bereit, GENAU damit der ENV-Handler sie
+wiederverwendet statt sie ein zweites Mal zu bauen. Was dort noch entschieden
+werden muss, gehoert der Wire-Lane:
+
+  - Wird ein Klartextwert mit literalem Backslash-n refused (Hausregel, ADR
+    0008/0012-Form) oder still durchgereicht wie in sops?
+  - Deckt der Digest den Wert VOR oder NACH dem Escape ab?
+
+Beides ist eine Wire-Entscheidung, keine Format-Entscheidung. Vorarbeit fuer
+#36, nicht fuer #37.
+
+Lane: wire. Gemessen und aufgeschrieben in docs/adr/0022.
+ABGEARBEITET 2026-08-21, wire-109. Entschieden, nicht vertagt.
+
+FRAGE 2 (messbar): der Digest deckt den Wert VOR dem Escape.
+
+  Dokument A  plain_unencrypted = echtes Newline    -> Datei: line1\nline2
+  Dokument B  plain_unencrypted = Backslash + n     -> Datei: line1\nline2
+  Die beiden Datenzeilen sind BYTE-IDENTISCH.
+
+  sops_mac-Klartext, entschluesselt ueber unsere eigenen Module
+  (Metadata::Flat->unflatten -> Metadata->from_hash ->
+   Backend::Age->decrypt_data_key -> Encrypted->parse/decrypt_bytes):
+
+    A  84D8F269D10AD408537928599B4843C563D8A028E1B0949D53ED59A1B5EDFEEA
+       DE74DD8463EBF378B51863ABB2F07343FCB8F53BB417020697F588A8DCB910E4
+       == SHA-512(echtes Newline)
+    B  186B7EF001E44B188989CD3CE55DE7C435E64ED56E992E3CE6B66D743C7D3F5B
+       AF273525074A311EC3B8CEC3F3E2FD56ED86FA768E638D77B992B3208511FEA0
+       == SHA-512(Backslash-n)
+
+WAS SOPS MIT SEINEM EIGENEN VERLUSTIGEN WERT MACHT: es schreibt B mit exit 0
+und ohne ein Wort, und liest B dann NICHT zurueck:
+
+  sops -d A.env   exit 0
+  sops -d B.env   MAC mismatch. File has 186B7EF0..., computed 84D8F269...
+                  exit 51
+
+Mit --ignore-mac kommt der Wert als echtes Newline heraus -- der literale
+Backslash-n ist still weg. Und der env-Store-READER escapet ebenso, eine
+plaintext .env kann den Wert also auch nicht ausdruecken: die Zeichenfolge
+hat in ENV ueberhaupt keine Schreibweise.
+
+VERSCHLUESSELTER SLOT: immun, gemessen statt vermutet. Beide Werte exit 0,
+byte-genau zurueck; die ENC[...]-Zeile enthaelt keinen Backslash (base64).
+
+FRAGE 1: REFUSED, beim Schreiben, nur unverschluesselte Leaves, nur ENV.
+
+  Begruendung in einem Satz: wir refusen nichts, was sops annimmt -- sops
+  nimmt es beim Schreiben an und weist es beim Lesen zurueck. Der
+  Unterscheider zu den vier Faellen, die diese Sitzung in die Gegenrichtung
+  repariert hat, ist genau: liest sops zurueck, was es geschrieben hat? Dort
+  ja, hier nein. Das ist wortwoertlich die Lage aus ADR 0008 ("jede Eingabe,
+  die jetzt croakt, hat vorher eine Datei erzeugt, die durch ihren eigenen
+  MAC faellt").
+
+  Die Regel fragt das Escape statt auf ein Zeichen zu testen:
+    unescape_value(escape_value($bytes)) eq $bytes
+  mit $bytes aus Encrypted::value_to_bytes. Ort: reject-Hook des
+  ENV-Emitters, nicht assert_representable (ADR 0008 hat die Platzierung
+  schon einmal verworfen, aus Gruenden die hier unveraendert gelten).
+
+FRAGE 3: escape_value/unescape_value liegen richtig -- die TRANSFORMATION
+reproduziert den Datenwert-Writer byte fuer byte (16 Eingaben). Die
+Leaf-TYPISIERUNG darum herum ist metadatenspezifisch und darf nicht
+mitbenutzt werden (lowercase true/false vs. titlecase True/False im Digest).
+Steht jetzt im POD an der Methode. Kein Verhalten geaendert.
+
+INI: direkt nachgemessen, braucht die Guard nicht.
+
+GELIEFERT
+  docs/adr/0030-an-env-value-the-escape-cannot-carry-is-refused-not-written.md
+  t/46-env-data-value-escape.t                (neu, interop-gated)
+  lib/File/SOPS/Metadata/Flat.pm              (nur POD, +47 Zeilen, 0 geloescht)
+  kein Changes-Eintrag -- kein Verhalten geaendert, es gibt keinen ENV-Handler
+
+NEBENBEFUNDE, als eigene Tickets statt Scope-Erweiterung: #124 (ENV-Boolean
+lowercase geschrieben / titlecase gehasht, exit 51) und #125 (null als <nil>,
+exit 51 unverschluesselt / exit 25 verschluesselt). Beide in ADR 0030 benannt,
+beide haengen an der Typpolitik #77, die entsprechend ergaenzt ist. #36 hat
+die Entscheidungen als Anhang.
+
+TESTLAEUFE (sops 3.13.3, /tmp/sops, interop LIEF)
+  prove -lv t/46-env-data-value-escape.t   PASS, 5 Subtests / 78 Assertions,
+                                           davon 3 Subtests gegen die Binary
+  prove -lr t/ (HEAD-lib + nur meine Aenderungen, isolierte Kopie)
+                                           PASS, 47 Dateien, 1067/1067
+  prove -lr t/04-interop.t                 PASS, 32/32
+
+  Im ARBEITSBAUM schlagen t/42 (2) und t/44 (1) fehl -- das ist die laufende
+  Bearbeitung von lib/File/SOPS/Format/YAML.pm durch karr #118, nicht diese
+  Aenderung: mit HEADs YAML.pm und meinen Aenderungen sind beide gruen.
+2026-08-21 05:34 Entscheidung getroffen und als ADR 0030 festgehalten; t/46 pinnt die Messung; Flat.pm nur POD. Nebenbefunde als #124/#125 abgelegt.
+NACHTRAG: t/46-env-data-value-escape.t heisst jetzt t/48-env-data-value-escape.t
+-- karr #113 hat parallel t/46-non-finite-token-is-written.t angelegt und #118
+t/47-yaml-scalar-type-tags.t. ADR 0030 verweist auf die neue Nummer. ADR-Nummer
+0030 ist kollisionsfrei (#113 hat 0031 genommen).
+ABGENOMMEN 2026-08-21. Frage 2 ist gemessen und nicht abgewogen: der Digest deckt den Wert VOR dem Escape -- zwei Dokumente mit byte-identischen Datenzeilen haben MAC-Klartexte, die exakt SHA-512 der beiden verschiedenen Vor-Escape-Werte sind. Frage 1 ist REFUSE, und der Unterscheider ist derselbe, den diese Sitzung viermal in die andere Richtung benutzt hat: liest sops zurueck, was es geschrieben hat? Viermal ja, und wir lagen falsch. Hier NEIN -- sops schreibt bei exit 0 ohne Diagnose und lehnt die eigene Datei dann mit exit 51 ab, und die Zwei-Zeichen-Folge hat in ENV ueberhaupt keine Schreibweise, weil auch der Leser unescaped. 'Faithfully durchreichen' ist keine existierende Option. Commit 099bc4d, ADR 0030.
+KORREKTUR: der Commit ist 1d788ec, nicht 099bc4d. Der Hash in der Abnahmenotiz wurde vor dem Commit geschrieben und geraten -- derselbe Fehler wie bei #117. Inhalt unveraendert.
