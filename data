@@ -1,0 +1,48 @@
+---
+class: standard
+completed: 2026-08-21T04:45:09Z
+created: 2026-08-21T01:55:24Z
+id: 110
+priority: low
+started: 2026-08-21T02:39:01Z
+status: done
+tags:
+- yaml
+- parser
+- robustness
+title: A recursive YAML anchor hangs encrypt and decrypt
+updated: 2026-08-21T04:45:09Z
+---
+
+Found by the wire lane while implementing karr #102 (ADR 0023). Pre-existing at c8eee80, independent of #102, and NOT introduced by it.
+
+YAML::XS builds a real Perl cycle for a recursive anchor. Measured:
+
+  root: &a
+    b: *a
+
+  YAML::XS::Load  -> $d->{root} and $d->{root}{b} are the SAME hashref
+
+Format::YAML->parse returns that tree. Every tree walk downstream then
+recurses forever:
+
+  File::SOPS->encrypt(data => $tree, ...)   -> no return, killed at 30s
+
+_encrypt_tree, _decrypt_tree, _sorted_leaves, _document_leaves and
+canonical_float_tree all walk without a visited set, so decrypt and rotate
+are exposed the same way. It is a hang and a memory climb, not a croak.
+
+Reachability: the document has to contain a recursive anchor. sops itself
+was NOT measured against such a document in this pass -- worth doing before
+choosing between refusing the document at parse and giving every walk a
+visited set, since if sops refuses it, refusing is the compatible answer.
+
+The parse-time walk added for karr #102 (_restring_non_finite_leaves) carries
+its own visited set and terminates, deliberately: it must not be the thing
+that turns a returning parse() into a hang. It does not and cannot fix the
+walks above.
+
+Wire lane, with format lane for the parse-side refusal if that is the answer.
+Needs the sops binary to decide.
+Implementiert und committet (ADR 0025). Alle acht Einstiegspunkte hingen, in zwei Walks: _sorted_leaves (encrypt-Seite) und _decrypt_tree (decrypt-Seite). Entscheidung: refusen, nicht terminieren -- ein Visited-Set haette ein Dokument mit einmal expandiertem Alias geschrieben, unter einem MAC ueber einen Baum, der nicht der uebergebene ist. ANCESTOR-Set, nicht Visited-Set, weil ein bloss wiederverwendeter Anchor von sops akzeptiert wird und akzeptiert bleiben muss. Zweite Haelfte als #112 abgetrennt.
+ABGENOMMEN 2026-08-21. Alle acht Einstiegspunkte hingen, in zwei Walks. Die Abnahme gilt der Entscheidung, zu REFUSEN statt zu terminieren: ein Visited-Set haette ein Dokument mit einmal expandiertem Alias geschrieben, unter einem MAC ueber einen Baum, der nicht der uebergebene ist -- wieder eine stille falsche Antwort. Und dem ANCESTOR-Set statt eines Visited-Sets, weil ein bloss wiederverwendeter Anchor von sops akzeptiert wird und akzeptiert bleiben muss. Commit f5d433d, ADR 0025.
