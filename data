@@ -1,0 +1,172 @@
+---
+class: standard
+completed: 2026-08-21T08:01:24Z
+created: 2026-08-21T06:07:08Z
+id: 135
+priority: medium
+started: 2026-08-21T06:48:29Z
+status: done
+tags:
+- yaml
+- emitter
+- interop
+- guards
+- wire
+title: a STRING leaf whose spelling libyaml leaves bare is refused where sops quotes
+  it
+updated: 2026-08-21T08:01:42Z
+---
+
+Found while measuring karr #123 (sops 3.13.3 at /tmp/sops). Pre-existing, not
+introduced or moved by that change -- filed rather than acted on.
+
+ADR 0013s foreign-resolution guard refuses a leaf whose emitted token Go
+resolves differently from what the MAC digest covers. For a leaf this library
+types `int` or `float` that is right and sops agrees: `mode: 0755` is 493 to
+sops, and ADR 0013 recorded the maintainer decision not to retype it by
+quoting.
+
+But the same guard also fires for a leaf that is ALREADY a STRING, where
+quoting retypes nothing and is exactly what sops does. Measured, one document
+per row, leaf under _unencrypted, source value quoted in the plaintext so both
+implementations agree it is a string:
+
+  source          sops -e wire        sops -d   File::SOPS->encrypt_file
+  ".inf"          "\".inf\""          exit 0    CROAK
+  "1_000"         "\"1_000\""         exit 0    CROAK
+  "2015-01-01"    "\"2015-01-01\""    exit 0    CROAK
+  "0o10"          "\"0o10\""          exit 0    CROAK
+  "0755"          "\"0755\""          exit 0    written as '0755'  (YAML::XS quotes
+                                                this one by itself)
+
+So four of five are documents sops writes, sops reads, and this library
+refuses to produce. The fifth is the shape of the fix: YAML::XSs own
+$YAML::XS::QuoteNumericStrings already quotes a string its resolver would read
+as a number, and the gap is only the spellings libyamls resolver does not
+recognise but go-yamls does.
+
+WHY THIS IS NOT THE ALTERNATIVE ADR 0013 REJECTED. There the objection was
+that quoting CHANGES THE TYPE -- `mode: 0755` would become a string where the
+callers parser said integer, and sops would have written the integer 493.
+Here the leaf is a string on both sides already; quoting it states the type the
+document has rather than inventing one, and sops itself writes exactly those
+bytes. The two cases are separable by what detect_type says about the leaf, and
+the guard currently does not separate them.
+
+NOT to be confused with a BARE .inf in a plaintext (karr #123): there the leaf
+is a float to sops, and the answer is to resolve it, not to quote it.
+
+Format lane (Format::YAML::_reject_foreign_resolution and the emitter), with a
+corpus per row and its own ADR -- it changes bytes on the wire, so it is a
+wire-lane handover if the emitted document moves for any leaf that is written
+today.
+CONFIRMED A REAL DEFECT AND HANDED TO THE WIRE LANE -- docs/adr/0038 (measured jointly with #127, #128, #131: 50 scalars x 3 slot configurations, sops 3.13.3, each sops_mac decrypted and the digest SOLVED per row).
+
+WIDER THAN FILED. Not 4 rows, 22. In the unencrypted slot the guard refuses 28 of 50
+scalars; 6 of those refusals are right (#127's 0755/010/!!int 0755 and #128's three
+timestamp spellings -- sops writes the RESOLVED form and never the source spelling).
+The other 22 are strings sops writes double-quoted and reads back at exit 0:
+  ".inf" ".Inf" ".INF" "+.inf" "-.inf" ".nan" ".NaN"
+  "1_000" "0_7" "685_230.15"
+  "2015-01-01" "2015-1-2" "2015-01-01t12:00:00Z" "2015-01-01 12:00:00"
+  "0o10" "0O10" "0x1f" "0b101"
+  "Null" "NULL" "TRUE" "FALSE"
+The 22 written rows in the same slot are byte-identical to sops's output, all exit 0.
+This is the ONLY one of the four tickets in the class 'sops writes it, sops reads it,
+we refuse' -- the class fixed in karr #102, #105, #116, #118.
+
+WHY THE FIFTH ROW IS DIFFERENT. Probed over 68 spellings: ::XS::QuoteNumericStrings
+quotes a string that looks like a DECIMAL number ('0755' '007' '08' '1e3' '-010'), plus
+lower-case 'true' 'false' 'null' '~' and the empty string, and NOTHING else. It leaves
+.inf .nan Null NULL TRUE FALSE True False yes on 1:30 0x1f 1_000 and every date bare --
+even the ones libyaml's own RESOLVER reads as YAML 1.1 types. So _emitted_plain_scalar
+returns undef for "0755" and the guard returns before any verdict. The whole difference
+is the width of one emitter option.
+
+THE MESSAGE IS WRONG TOO. For a string leaf the croak says 'sops itself resolves such a
+spelling when it writes: a plaintext mode: 0755 becomes the integer 493'. True for an int
+leaf, false for these -- sops resolves nothing, it quotes the string and keeps it.
+
+HANDOVER, and the three reasons are measured rather than read off the lane boundary:
+  (a) It moves bytes on the wire: 22 leaves that produce no document today would produce
+      one. That is this ticket's own handover condition.
+  (b) YAML::XS has NO per-scalar style control -- no tag, no forced-quote hook, as
+      _quote_sops_timestamp has recorded since 0.003. The only route is rewriting the
+      text after Dump, and doing that for arbitrary DATA leaves rather than one metadata
+      key in one block is a new mechanism on the wire path.
+  (c) THE OBVIOUS FIX IS WRONG. 'Quote every str leaf the guard would refuse' also
+      silently changes #128's unencrypted half: bare 'v_unencrypted: 2015-01-01' and
+      quoted 'v_unencrypted: "2015-01-01"' arrive as the SAME Perl string (verified,
+      both [2015-01-01] length 10). The bare one is a time to sops, normalised to
+      2015-01-01T00:00:00Z; quoting it turns today's loud refusal into a silent
+      divergence -- the direction ADR 0032 refused for !!bool True.
+
+WHERE THE FIX LIVES. The plain/quoted distinction is in the SOURCE TEXT, and this module
+already makes it for one token family: _restore_plain_infinities re-parses with a
+plain-style loader so a bare .inf becomes a float (ADR 0026) while a quoted ".inf" stays
+a string (ADR 0034). Measured, that asymmetry is visible from outside TODAY:
+    v_unencrypted: .inf     -> WRITTEN as .inf
+    v_unencrypted: ".inf"   -> CROAK
+    v_unencrypted: .nan     -> WRITTEN as .nan
+    v_unencrypted: ".nan"   -> CROAK
+That is both the proof a correct fix is reachable with machinery this module already has,
+and the proof it needs plain/quoted state carried from parse into emit. New cross-phase
+state on the wire path is not the format lane's to add.
+
+ENCRYPTED SLOT IS CLEAN: all 36 string rows written here are byte-identical to sops's,
+36/36 sops -d exit 0. JSON is clean too: 10 spellings, both slots, 10/10 identical label,
+plaintext and slot text. The defect is YAML + unencrypted slot only.
+WIRE LANE, MEASURED AND DECIDED -- docs/adr/0039. The refusal STAYS; the message
+is corrected; nothing on the wire moves.
+
+WHY NOT FIXED, in the order the handover asked:
+ (1) THE CARRIER ROUTE (ADR 0037) IS DEAD, and dead in the worse direction.
+     6 SV shapes x 9 spellings through Dump: no shape makes YAML::XS quote
+     anything it would not quote anyway, because its rule reads the SV --
+     dualvar(0,'0755') writes 0755 BARE, i.e. a carrier REMOVES the one quoting
+     we get today. ADR 0037's carrier works there because its target form is a
+     PLAIN token; here the target form is the one thing a carrier cannot make.
+ (2) NO WIDER EMITTER OPTION. $YAML::XS::QuoteNumericStrings probed at 0/1/2/3
+     over 19 spellings: it is a BOOLEAN (1, 2, 3 byte-identical) and quotes
+     exactly what Perl's looks_like_number accepts, plus lower-case
+     true/false/null/~ and the empty string. No other knob exists in the module.
+ (3) NO IN-WALK REPLACEMENT. reject_scalar's return value is discarded by
+     Encrypted::_written_leaf by construction, so surgery would need a SECOND
+     full tree walk inside emit (or an edit to canonical_float_tree -- another
+     lane's file, with karr #122 in flight).
+ (4) THE AMBIGUITY IS 15 OF 22, not 4. Measured, bare vs quoted source through
+     Format::YAML->parse, compared by detect_type + value_to_bytes: 15 arrive as
+     the IDENTICAL Perl string; only the 7 non-finite tokens differ, and only
+     because ADR 0026/0034 already resolve a plain one at parse the way Go does.
+     The date family is 4 of those 15. Measured what sops writes from a BARE
+     source (44 sops -e runs, all exit 0): 1_000 -> 1000, 0x1f -> 31,
+     Null -> null, TRUE -> true, 2015-01-01 -> 2015-01-01T00:00:00Z. Quoting
+     would overwrite that silently -- ADR 0032's direction.
+ (5) SENTINEL TEXT SURGERY was costed and rejected: it buys 7 of 23 rows -- the
+     rarest family -- for a new write-path mechanism, and pre-empts karr #99 in
+     passing, which is the one thing ADR 0019 asked the next lane not to do.
+
+WHAT UNBLOCKS THE TICKET, with numbers: karr #99 (an emitter that can quote one
+scalar) alone makes 7 of 22 writable; karr #99 + karr #127 (a plain scalar
+resolved as Go resolves it, at parse) makes all 22 writable, because the
+bare/quoted ambiguity disappears where the information still exists.
+
+A 23RD ROW, same class, found here: "0xffffffffffffffff" -- sops writes it
+double-quoted and reads it back at exit 0, we refuse it (the guard's model
+cannot decide a uint64, ADR 0013). Its neighbour "9223372036854775808" IS
+written, because looks_like_number is true and YAML::XS quotes it for us.
+
+ALSO MEASURED: the READ direction has never been the defect -- 22 of 22
+sops-written documents read back here with the MAC verified, in both slots. And
+both remedies the message recommends work: encrypt the leaf, 22/22 sops -d exit
+0; JSON, both slots, 22/22.
+
+DONE IN THIS CHANGE: the croak and the mac_only_encrypted carp split by
+detect_type -- an int leaf keeps the 493 sentence word for word, a str leaf gets
+one that is true for it. docs/adr/0039,
+t/53-a-string-leaf-sops-quotes-is-refused-and-says-why.t (10 subtests; 3 of them
+and 54 assertions fail against the unpatched lib, the other 7 are must-not-move),
+Changes entry. Files touched: lib/File/SOPS/Format/YAML.pm, docs/adr/0039, t/53,
+Changes. No git.
+ABGENOMMEN 2026-08-21 als 'heute nicht sicher machbar', Commit c17945e, ADR 0039. Die Abnahme gilt der Begruendung, nicht dem Verzicht: vier Wege gemessen statt abgewogen, und der aussichtsreichste -- ADR 0037s Carrier -- ist nicht nur tot, sondern tot in die SCHLECHTERE Richtung, weil dualvar(0,'0755') das Token BAR schreibt, wo ein schlichter String es quotet. Ein Carrier entfernt die eine Quotierung, die wir heute bekommen. Die Sentinel-Textchirurgie wurde durchgerechnet und verworfen: 7 von 23 Zeilen fuer einen neuen Mechanismus auf dem Schreibpfad, und sie nimmt karr #99 vorweg, was ADR 0019 der naechsten Lane ausdruecklich untersagt hat. Geliefert wurde trotzdem etwas: die Meldung war fuer ein String-Leaf FALSCH und ist es nicht mehr.
+KORREKTUR: der Commit ist e379cbf, nicht c17945e -- der Hash in der Abnahmenotiz wurde wieder vor dem Commit geschrieben und geraten. Dritter Fall in dieser Sitzung (siehe #117 und #109). Inhalt unveraendert.
