@@ -1,0 +1,36 @@
+---
+claimed_at: 2026-08-21T05:14:02Z
+claimed_by: orchestrator
+class: standard
+completed: 2026-08-21T05:14:02Z
+created: 2026-08-21T04:42:01Z
+id: 119
+priority: low
+started: 2026-08-21T05:14:02Z
+status: done
+tags:
+- yaml
+- parser
+- guards
+- docs
+title: ADR 0027 says go-yaml expands the merge key; sops does not, and its own alias
+  census may agree better than the note claims
+updated: 2026-08-21T05:14:02Z
+---
+
+Gefunden beim Abarbeiten von karr #116, gemessen gegen sops 3.13.3.
+
+docs/adr/0027, Abschnitt "Known imprecision", sagt:
+
+  "Merge keys. YAML::XS does not expand <<: *base; it hands back a literal <<
+   key whose value is the shared hash. go-yaml expands the merge. The sharing
+   is visible to the census either way, so a merge-key bomb is still refused,
+   but the two node counts differ slightly on such a document."
+
+Die erste Haelfte stimmt, die zweite ist ungenau: go-yaml loest einen Merge-Key auf, wenn es in eine Go-Map oder ein Struct dekodiert -- sops dekodiert aber in einen yaml.Node-Baum, und dort loest go-yaml keinen Merge auf. Gemessen: sops -e auf `derived:` / `<<: *b` schreibt `!!merge <<:` mit einem eigenen, unter `derived:<<:x:` verschluesselten Blatt, und `sops -d` gibt genau das wieder aus. Der Schluessel `<<` ist bei sops ein ganz gewoehnlicher Schluessel -- AAD-Pfadkomponente und Digest-Mitglied (Messung in docs/adr/0028).
+
+Folge fuer 0027: unsere Zaehlung und die von sops weichen bei einem Merge-Key wahrscheinlich WENIGER voneinander ab als die Notiz sagt, nicht mehr. Das Verdikt des Guards bewegt sich dadurch nicht -- die Notiz selbst sagt schon, dass kein gemessenes Dokument betroffen ist -- aber die Begruendung stimmt nicht.
+
+Zu tun: die Notiz in 0027 korrigieren, und wenn jemand den Alias-Budget-Census ohnehin anfasst, die Ratio auf einem Merge-Key-Dokument einmal gegen das Binary nachmessen statt sie abzuleiten. Reine Doku-/Praezisionssache, kein Bug.
+
+ADR 0028 haelt die Korrektur bereits fest (Kopfzeile "Corrects a parenthetical in ADR 0027"). API-/Wire-Lane, weil der Guard dort sitzt.
