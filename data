@@ -1,0 +1,30 @@
+---
+class: standard
+created: 2026-08-21T10:59:39Z
+id: 168
+priority: low
+status: backlog
+tags:
+- mac
+- comments
+- guard
+title: A caller string spelling ENC[...,type:comment] in an UNENCRYPTED slot writes
+  a file this library cannot read
+updated: 2026-08-21T10:59:39Z
+---
+
+Pre-existing, not introduced by karr #37; found while reviewing its AAD change and reproduced against the tree without that change.
+
+_is_comment_leaf gates its wire half on `defined $data_key`, and the comment above it says why: without the gate, a caller plain string that happens to spell ENC[...,type:comment] would be dropped from the digest on the read side while _encrypt_tree wrote it as an ordinary type:str value. That reasoning covers the ENCRYPTED slot, and there the round trip is fine (verified).
+
+It does not cover the slot the encryption rule EXCLUDES. There the literal string reaches the document verbatim, so on the way back in it IS an ENC[...,type:comment] token: _digested_leaves drops it from the digest, where the encrypt side hashed its text. The document fails its own MAC.
+
+    File::SOPS->encrypt(
+        data => { db_unencrypted => { q{} => [ $literal_enc_comment_string ] },
+                  k => q{v} },
+        recipients => [$pub], format => q{yaml},
+    );
+
+Written at exit 0; decrypt then croaks. Today the croak comes from the leaf ("Authentication failed") rather than from the MAC, because _decrypt_tree reaches the token first and tries to decrypt it -- so the symptom is louder than a MAC mismatch and the outcome is not silent. That is why this is low priority rather than a defect that ships wrong data. Still: a file this library writes and cannot read back.
+
+Same shape as the guard _encrypt_tree already has for a comment in a mapping value slot (docs/adr/0041). The candidate fix is the twin of that one -- refuse a caller string that parses as type:comment in a slot the rule excludes -- and belongs with whoever revisits ADR 0041/0046. No AAD or wire byte moves either way.
