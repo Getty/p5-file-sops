@@ -92,9 +92,14 @@ my @OVERFLOW = (
 # The second class, same mechanism: libyaml numifies each of these too.
 my @SPELLINGS = qw( Inf inf INF NaN nan NAN -Inf +Inf Infinity -nan );
 
-# The twelve go-yaml really does resolve to a non-finite float. These must NOT
-# move: they are POK-only here, they are type:float to sops, and the gap between
-# the two is karr #105, which this change deliberately does not touch.
+# The twelve go-yaml really does resolve to a non-finite float. In THIS file's
+# plaintext parse -- yaml_leaf() below hands Format::YAML->parse a document
+# with no sops: section -- these must NOT move: they stay POK-only here, and
+# they are type:float to sops but str to us. ADR 0026 (karr #105, resolved)
+# is why that is no longer the whole story: the same twelve DO move -- they
+# come back a float whose digest is +Inf / -Inf / NaN -- once the document
+# carries a sops: section, which this file's helper never gives it. See
+# t/42-yaml-plain-infinity-is-a-float.t sections 1 and 7 for that other half.
 my @GO_RESOLVES = qw(
     .inf .Inf .INF +.inf +.Inf +.INF -.inf -.Inf -.INF .nan .NaN .NAN
 );
@@ -125,9 +130,13 @@ subtest 'a bare Inf / NaN spelling is the same leaf' => sub {
 };
 
 ###############################################################################
-# 2. WHAT MUST NOT MOVE. The predicate reads SVf_NOK, and every token Go
-#    resolves to a non-finite float arrives here POK-ONLY -- that disjointness
-#    is the whole safety of this change, so it is pinned rather than assumed.
+# 2. WHAT MUST NOT MOVE, IN A PLAINTEXT PARSE. The predicate reads SVf_NOK, and
+#    every token Go resolves to a non-finite float arrives here POK-ONLY --
+#    that disjointness is the whole safety of ADR 0023's walk, so it is pinned
+#    rather than assumed. ADR 0026 (karr #105) narrows this on the OTHER side:
+#    the same twelve tokens DO move -- they come back a float -- once the
+#    document carries a sops: section, which yaml_leaf() here never gives it.
+#    See t/42-yaml-plain-infinity-is-a-float.t sections 1 and 7 for that half.
 ###############################################################################
 
 subtest 'the twelve tokens Go reads as a float are untouched' => sub {
