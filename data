@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-08-21T09:02:06Z
+created: 2026-08-21T08:37:30Z
+id: 147
+priority: low
+started: 2026-08-21T08:45:46Z
+status: done
+tags:
+- wire
+- packaging
+title: File::SOPS::Comment has no .pm file, and dzil says so on every build
+updated: 2026-08-21T09:02:06Z
+---
+
+Gefunden beim Umsetzen von karr #76 (docs/adr/0041). Die Klasse File::SOPS::Comment ist in lib/File/SOPS/Encrypted.pm definiert, weil die Dateigrenze des Tickets keine neue Datei unter lib/ vorsah.
+
+Folge, gemessen mit `dzil build --no-tgz`:
+
+  [@Author::GETTY/MetaProvides::Package] 1 provide map entries did not map
+  to .pm files and may not be loadable at install time: File::SOPS::Comment
+
+Der Build laeuft durch und die Klasse IST erreichbar (File::SOPS laedt
+File::SOPS::Encrypted), aber `use File::SOPS::Comment;` schlaegt fehl und die
+Warnung erscheint bei jedem Build -- der Release-Checker wird sie melden.
+
+FIX: lib/File/SOPS/Comment.pm anlegen und die Klasse dorthin verschieben, mit
+`use File::SOPS::Comment;` oben in Encrypted.pm. Ein VERSCHIEBEN, kein
+Umbenennen -- der Paketname bleibt, ADR 0041 sagt das ausdruecklich voraus
+("a file of its own is a move, not a rename"). Die POD-Sektion
+"THE COMMENT LEAF" in Encrypted.pm wandert mit.
+
+Lane: wire.
+ABGENOMMEN 2026-08-21. Commit 9f0df4d. Die Abnahme gilt besonders der Pruefmethode: die dzil-Warnung wurde an BEIDEN Enden gemessen, nicht nur nach dem Umzug. Git::GatherDir gathert keine untracked Dateien, ein Build im Arbeitsbaum haette die Warnung also allein dadurch 'verloren', dass er die neue Datei weglaesst -- die Pruefung haette nichts bewiesen. Zwei Scratch-Kopien, die neue Datei nur in einer git-added. Ebenso gemessen statt angenommen: kein zirkulaerer Load, mit Encrypted.pm nachweislich ausserhalb von %INC. Genau dieser Fehler ist heute Nacht schon einmal passiert (use B () in Format/YAML.pm, das nur funktionierte, weil Encrypted.pm B mitlud).
