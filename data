@@ -1,0 +1,40 @@
+---
+class: standard
+completed: 2026-08-21T04:43:25Z
+created: 2026-08-21T01:43:06Z
+id: 107
+priority: low
+started: 2026-08-21T01:55:28Z
+status: done
+tags:
+- yaml
+- json
+- docs
+- adr
+title: 'ADR 0021''s cross-format YAML row states a rule that is one of two: the split
+  is ADR 0011''s repair, not uint64max'
+updated: 2026-08-21T04:43:25Z
+---
+
+Gefunden von der Wire-Lane 2026-08-21 beim Abarbeiten von karr #104 Teil (a), gemessen gegen sops 3.13.3 in /tmp/sops. Reiner Dokumentationsfehler -- kein Code ist falsch, aber ein ADR behauptet eine Regel, die messbar nicht gilt, und zwei Stellen haben sie schon voneinander abgeschrieben.
+
+DIE FALSCHE REGEL. Die Konsequenztabelle in docs/adr/0021 sagt fuer die formatuebergreifende Zeile (ein Wert aus dem int64..uint64-Fenster als Float in einen YAML-UNVERSCHLUESSELTEN Slot), er croake, solange die kanonische Dezimale <= uint64max liege, und werde geschrieben, sobald sie darueber liege. Derselbe Satz stand im Anhang von karr #104 und war der Grund, warum dessen vorgeschlagener Meldungstext nicht uebernommen wurde.
+
+WAS GEMESSEN WURDE. 12 Literale ueber das Fenster x 2 Formate x 2 Slots, Float-Antwort (unpack('d',pack('d',$lit))). 7 von 48 Zellen croaken, alle YAML-unverschluesselt -- aber drei Literale mit einer kanonischen Dezimale WEIT UNTER uint64max kommen mit exit 0 durch:
+
+  Literal                kanonische Dezimale     yaml/unverschluesselt
+  9223372036854775808    9223372036854776000     CROAK
+  9300000000000000000    9300000000000000000     exit 0
+  9999999999999999999    10000000000000000000    exit 0
+  12345678901234567890   12345678901234567000    CROAK
+  18000000000000000000   18000000000000000000    exit 0
+  18446744073709551615   18446744073709552000    exit 0
+
+uint64max ist also nicht der Unterscheider.
+
+DER ECHTE SPLIT liegt vor _go_int und hat zwei Wege hindurch, nicht einen: YAML::XS schreibt Perls %.15g-Form. Wo die round-trippt (9.3e+18, 1e+19, 1.8e+19), geht das Leaf in EXPONENTENSCHREIBWEISE hinaus, die _go_int gar nicht matcht -- ADR 0013 sieht es nie. Wo sie nicht round-trippt, feuert die Reparatur aus ADR 0011, schreibt die bare kanonische Dezimale, und _go_int liest einen uint64: Refusal. Jenseits von uint64max deklariert _go_int wieder ab, und 18446744073709552000 wird bar geschrieben, exit 0. Das ist die eine Zeile, bei der die alte Regel zufaellig das richtige Ergebnis nannte.
+
+WAS ZU TUN IST: die Zeile in docs/adr/0021 korrigieren und die Begruendung durch die gemessene ersetzen. Kein Code. Pruefen, ob ADR 0011 oder ADR 0013 dieselbe Verkuerzung enthalten -- die Regel klingt plausibel und ist genau deshalb wanderungsfaehig. Die vollstaendige Messreihe steht im Kommentarblock ueber dem croak in lib/File/SOPS/Encrypted.pm (Commit c8eee80) und muss nicht neu erhoben werden.
+
+Lane: die, die ADR 0021 geschrieben hat (wire), oder format. Braucht das sops-Binary nur, wenn jemand die Messung nachvollziehen will.
+ABGENOMMEN 2026-08-21. Reine Dokumentationskorrektur, Messung aus c8eee80 uebernommen und die %.15g-Erklaerung vom Orchestrator selbst nachgerechnet. uint64max kommt in keinem anderen ADR vor, die Verkuerzung war nicht gewandert. Commit 7eb85cb.
