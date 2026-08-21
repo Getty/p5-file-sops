@@ -174,9 +174,12 @@ sub parse {
     # walk above turns a leaf whose PUBLIC NOK and POK are both set and whose
     # NV is non-finite back into its string half, which is exactly the shape of
     # the dualvar the walk below produces. Second, it would undo this one leaf
-    # for leaf. See _restore_plain_infinities for why it runs only for a
-    # document that carried a sops section.
-    _restore_plain_infinities($data, $content) if $metadata;
+    # for leaf.
+    #
+    # It runs for EVERY document, plaintext included. It used to be gated on
+    # `if $metadata`, and karr #123 and docs/adr/0034 are why that gate is
+    # gone: sops has one parse, and this had two.
+    _restore_plain_infinities($data, $content);
 
     # Same placement, same reason: after the split, so the metadata's own
     # mac: ENC[...] is out of reach. See _reject_comment_leaves.
@@ -779,12 +782,18 @@ sub _restring_non_finite_leaf {
 # comes from %GO_CONSTANT, and the token has to be in %GO_CONSTANT before
 # YAML::PP is consulted at all.
 #
-# ONLY FOR A DOCUMENT THAT CARRIED A `sops:` SECTION. A plaintext document has
-# no MAC for a foreign reader to disagree with, and on the encrypt path
-# ADR 0013's guard already refuses this leaf with a message that names the key
-# path and both resolvers -- a better error than the non-finite guard's, whose
-# advice ("store the value as a string") leads straight back to that refusal,
-# because the string `.inf` is written bare in YAML.
+# FOR EVERY DOCUMENT, PLAINTEXT INCLUDED (karr #123, docs/adr/0034). This was
+# gated on a `sops:` section until 0.003, on the argument that a plaintext has
+# no MAC for a foreign reader to disagree with and that ADR 0013's guard gives
+# a better error on the encrypt path anyway -- "a worse message for no gain,
+# since neither path can write the document".
+#
+# ADR 0031 removed the premise: an unencrypted YAML slot holding one of these
+# tokens IS written now, byte-identical to what sops writes. So the gate was
+# refusing three documents this library can produce, and the two parses
+# disagreed about identical bytes -- measured, `decrypt_file` wrote
+# `v_unencrypted: .inf` and `encrypt_file` refused to read its own output back.
+# sops resolves a plain scalar the same way on every parse; so does this now.
 #
 # WHAT IS WRITTEN BACK is a dualvar, not a bare infinity, and that is measured
 # rather than tidy: YAML::XS writes a bare non-finite NV as `Inf` / `-Inf` /
@@ -794,9 +803,10 @@ sub _restring_non_finite_leaf {
 # round trip. Same shape as ADR 0011's carrier: a float leaf whose string half
 # is the text the document contains.
 #
-# The karr #59 non-finite guard is untouched, so such a document still cannot
-# be written back -- by that guard now, naming the leaf, rather than by a MAC
-# error naming nothing. Narrowing it is karr #113 and needs its own corpus.
+# Since karr #113 (docs/adr/0031) such a document is written back as well: the
+# non-finite guard lets a leaf carrying one of these tokens through to
+# ADR 0013's foreign-resolution guard, which measures the token the emitter
+# really writes. An ENCRYPTED slot is still refused there (karr #122).
 my $PLAIN_STYLE_LOADER = YAML::PP->new(schema => [qw( Core )]);
 
 sub _restore_plain_infinities {
@@ -1031,16 +1041,26 @@ written plain, and only a token that is already in this module's model of
 go-yaml is repaired at all. If L<YAML::PP> refuses the document, or the two
 parse trees disagree about its shape, B<nothing> is repaired.
 
-Two limits worth knowing. This runs only for a document that carried a
-C<sops:> section: a plaintext document has no MAC for a foreign reader to
-disagree with, and on the encrypt path L</emit>'s own guard already refuses
-such a leaf with a message that names the key path. And such a document still
-cannot be B<written> -- L<File::SOPS/rotate> and L<File::SOPS/edit> croak from
-the non-finite refusal in L<File::SOPS::Encrypted/assert_representable>, which
-is untouched, though it now names the leaf where a MAC error named nothing.
+B<This runs on every document, plaintext included>, and the plaintext half is
+newer than the rest. Until 0.003 it was gated on the C<sops:> section, on the
+argument that a plaintext has no MAC for anyone to disagree with; that gate is
+gone, because the document such a plaintext turns into I<can> now be written
+(see below), so the gate was refusing a document this module produces. sops
+resolves a plain scalar the same way on every parse it makes, and so does this.
+
+B<Such a document is written back> since 0.003: an B<unencrypted> YAML slot
+holding one of the twelve tokens reaches the file as that token, with the
+digest covering C<+Inf> / C<-Inf> / C<NaN>, which is what sops writes and what
+sops digests for the same document. An B<encrypted> slot is still refused --
+the wire form there is C<type:float> with the plaintext C<+Inf>, which
+L<File::SOPS::Encrypted/encrypt_value> refuses because it cannot see which
+format is being written (karr #122).
 
 See
-L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>.
+L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>,
+L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>
+and
+L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-plain-scalar-is-resolved-the-same-way-on-every-parse.md>.
 
 =head3 A merge key keeps its C<< << >>, and loses its C<!!merge> tag
 

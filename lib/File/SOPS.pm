@@ -898,6 +898,52 @@ above 10000 produces documents sops will refuse to read.
 
 See karr #117.
 
+=head3 A plain YAML infinity is the float go-yaml reads
+
+B<New in 0.003, and a change for existing callers of every method that reads a
+YAML file.> A leaf a YAML document wrote as a B<plain> scalar whose token
+go-yaml resolves to a non-finite float -- C<.inf>, C<.Inf>, C<.INF>, the same
+three with a leading C<+> or C<->, C<.nan>, C<.NaN>, C<.NAN> -- is that float
+here too, carrying the document's own token as its text. A B<quoted> C<".inf">
+is the string it has always been; the difference is decided by asking
+L<YAML::PP> how the document wrote the scalar, never by matching the leaf's
+text. See L<File::SOPS::Format::YAML/A plain infinity comes back as the float
+go-yaml reads>.
+
+B<This applies to a plaintext file as well as to an encrypted one>, which is
+what changed last: until then the repair ran only for a document that carried a
+C<sops:> section, so this library's own L</decrypt_file> wrote
+C<v_unencrypted: .inf> and its own L</encrypt_file> refused to read that file
+back, and L</edit> could not save a document it had just opened. sops makes one
+parse and this now makes one too.
+
+What it means per slot, measured against sops 3.13.3 for all twelve spellings:
+
+=over 4
+
+=item * In an B<unencrypted> slot the leaf is written as the token the document
+had, and the MAC digest covers C<+Inf> / C<-Inf> / C<NaN>. C<sops -d> reads it,
+and for the three spellings C<sops -e> itself writes the wire bytes are
+identical to sops's.
+
+=item * In an B<encrypted> slot the leaf is B<refused>, naming the key path:
+the wire form there is C<type:float> with the plaintext C<+Inf>, and
+L<File::SOPS::Encrypted/encrypt_value> cannot see which format it is writing
+for -- YAML would carry it, JSON cannot (C<sops -e> exit 4,
+C<Error marshaling to json>). Before this such a leaf was written as a
+C<type:str> holding C<.inf>, where C<sops -e> on the same plaintext writes a
+C<type:float>: a working file that had silently stopped being a number. This is
+a refusal where sops succeeds, and it is deliberate -- see karr #122, which is
+where the encrypted slot gets the format it needs.
+
+=item * In B<JSON> nothing changes at either end. C<.inf> is not JSON, so the
+token cannot reach a JSON document to begin with.
+
+=back
+
+See karr #123 and
+L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-plain-scalar-is-resolved-the-same-way-on-every-parse.md>.
+
 =cut
 
 sub decrypt {
@@ -1030,11 +1076,10 @@ tree writes: C<type:str>, which is what sops writes for the same leaf, where
 the numeric half used to hit the non-finite refusal in
 L<File::SOPS::Encrypted/assert_representable>. Untouched: the twelve spellings
 go-yaml really does resolve to a non-finite float (C<.inf>, C<.nan> and their
-case variants, which L<YAML::XS> hands back as plain strings with no numeric
-half -- an B<encrypted> one of those decrypts to a real C<Inf> here as it
-always did, while an B<unencrypted> one still fails verification, which is a
-separate defect and open as karr #105), and JSON, where sops refuses the
-document itself. See
+case variants -- an B<encrypted> one of those decrypts to a real C<Inf> here as
+it always did, and an B<unencrypted> one is the separate repair described under
+L</A plain YAML infinity is the float go-yaml reads>), and JSON, where sops
+refuses the document itself. See
 L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float>,
 karr #102 and
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
@@ -1771,6 +1816,30 @@ not affect the MAC.
 
 C<ignore_mac> is passed through to L</decrypt>; editing a file you could not
 verify re-signs whatever it contained, so prefer to fail.
+
+=head3 What the round trip through the editor keeps, and what it does not
+
+The document the editor sees is B<plaintext>, so anything a value knew that its
+plaintext spelling does not say is gone by the time it comes back. What comes
+back is parsed exactly as any other YAML file would be -- there is no second,
+gentler parse for text this method wrote itself.
+
+That is enough for a B<plain YAML infinity>, because the plaintext really does
+say it: C<.inf> written plain is a float to go-yaml and to L</decrypt_file>'s
+output alike, so a document sops wrote with a bare C<.inf> in an unencrypted
+slot survives an edit and comes back with the wire byte-identical. Before
+0.003 it did not -- editing any other key in such a file died with the leaf
+refused, B<and the edit was destroyed with it>, because the temporary file is
+already gone by then. See L</A plain YAML infinity is the float go-yaml reads>
+and karr #123.
+
+It is B<not> enough for a non-finite float in an B<encrypted> slot, and that
+one is still wrong: such a leaf decrypts to a real Perl infinity, whose only
+plaintext spelling from this emitter is a bare C<Inf> / C<-Inf> / C<NaN> --
+tokens go-yaml reads as B<strings>. The editor is shown C<Inf>, the string
+C<Inf> comes back, and the leaf is re-encrypted as a C<type:str>. C<sops edit>
+keeps it a C<type:float>, measured. The file is written and nothing is said, so
+this is the one place C<edit> can still lose a value quietly. Open as karr #134.
 
 A C<data_key =E<gt> $bytes> argument would close the gap -- pass the
 existing data key through and this method stops re-keying -- but it puts

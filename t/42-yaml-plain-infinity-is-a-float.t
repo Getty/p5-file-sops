@@ -180,17 +180,28 @@ YAML
 };
 
 ###############################################################################
-# 3. THE GATE. A plaintext document has no MAC for a foreign reader to disagree
-#    with, and ADR 0013's guard owns the encrypt-path refusal with a better
-#    message. The walk does not run there -- which is also what keeps ADR 0023's
-#    pinned disjointness (t/39 section 2) true for the input it measures.
+# 3. THE GATE IS GONE. This subtest USED to claim the opposite -- that a
+#    plaintext document is not repaired -- on the argument that it has no MAC
+#    for a foreign reader to disagree with and that ADR 0013's guard owns the
+#    encrypt-path refusal with a better message.
+#
+#    ADR 0031 removed the premise: an unencrypted YAML slot holding one of these
+#    tokens IS written now. The gate then meant this library's own decrypt_file
+#    wrote `v_unencrypted: .inf` and its own encrypt_file refused to read that
+#    file back, and `edit` could not save a document it had just opened.
+#    karr #123 / ADR 0034 removed the gate: one document, one answer, whether
+#    it carries a sops: section or not. sops makes one parse and so does this.
+#    See t/49-plain-infinity-survives-the-plaintext-round-trip.t.
 ###############################################################################
 
-subtest 'a plaintext document is not repaired' => sub {
+subtest 'a plaintext document is repaired the same way a wire document is' => sub {
     for my $token (sort keys %GO_RESOLVES) {
-        my $leaf = plain_leaf($token);
-        is(leaf_type($leaf), 'str', "[$token] still a str without a sops section");
-        is(leaf_bytes($leaf), $token, "[$token] still digested as the token");
+        my $plain = plain_leaf($token);
+        my $wire  = wire_leaf($token);
+        is(leaf_type($plain), 'float', "[$token] a float without a sops section too");
+        is(leaf_bytes($plain), leaf_bytes($wire),
+            "[$token] digested exactly as the wire document's leaf is");
+        is("$plain", $token, "[$token] carrying the document's own token");
     }
 };
 

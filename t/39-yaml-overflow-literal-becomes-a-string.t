@@ -130,21 +130,29 @@ subtest 'a bare Inf / NaN spelling is the same leaf' => sub {
 };
 
 ###############################################################################
-# 2. WHAT MUST NOT MOVE, IN A PLAINTEXT PARSE. The predicate reads SVf_NOK, and
-#    every token Go resolves to a non-finite float arrives here POK-ONLY --
-#    that disjointness is the whole safety of ADR 0023's walk, so it is pinned
-#    rather than assumed. ADR 0026 (karr #105) narrows this on the OTHER side:
-#    the same twelve tokens DO move -- they come back a float -- once the
-#    document carries a sops: section, which yaml_leaf() here never gives it.
-#    See t/42-yaml-plain-infinity-is-a-float.t sections 1 and 7 for that half.
+# 2. THE DISJOINTNESS, WHICH IS WHAT MAKES ADR 0023'S WALK SAFE. Its predicate
+#    reads SVf_NOK, and every token Go resolves to a non-finite float arrives
+#    from YAML::XS POK-ONLY, so it cannot fire that predicate. The two walks
+#    run over the same tree in one order and must not fight.
+#
+#    This subtest USED to claim the twelve tokens come back a `str` from a
+#    plaintext parse, which pinned ADR 0026's `sops:` gate rather than the
+#    disjointness -- and karr #123 / ADR 0034 removed that gate, because this
+#    library's own decrypt_file wrote a plaintext its own encrypt_file then
+#    refused. The claim being made here now is the one that was always meant:
+#    ADR 0026's repair reaches these leaves and ADR 0023's does NOT undo it, in
+#    a plaintext exactly as in a wire document. If the two ever did fight, the
+#    leaf would come back restrung to its own token and this would say so.
+#    See t/49-plain-infinity-survives-the-plaintext-round-trip.t.
 ###############################################################################
 
-subtest 'the twelve tokens Go reads as a float are untouched' => sub {
+subtest 'the twelve tokens Go reads as a float are ADR 0026 leaves, not these' => sub {
     for my $source (@GO_RESOLVES) {
         my $leaf = yaml_leaf($source);
-        is(leaf_type($leaf), 'str', "[$source] still a str here");
-        is(leaf_bytes($leaf), $source,
-            "[$source] still digested as the token -- karr #105, unchanged");
+        is(leaf_type($leaf), 'float', "[$source] a float, repaired by ADR 0026");
+        isnt(leaf_bytes($leaf), $source,
+            "[$source] NOT restrung to its own token by this walk");
+        is("$leaf", $source, "[$source] while it still carries the token as text");
     }
 };
 

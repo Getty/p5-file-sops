@@ -1,6 +1,39 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BUG FIX and BEHAVIOUR CHANGE: `edit` can now save a YAML document that
+    holds a bare `.inf`, `-.inf` or `.nan` in an unencrypted slot, and so can
+    `encrypt_file` and `encrypt_in_place`. Before this, opening such a
+    document - one `sops -e` writes by default from a plaintext `.inf` -
+    changing a completely unrelated key and saving died with the untouched
+    leaf refused, AND DESTROYED THE EDIT: the temporary file the editor wrote
+    to is already gone by the time the re-encryption runs, so the only copy of
+    what was typed is whatever the editor still has in its buffer. `sops edit`
+    on the same three documents is exit 0 with the wire unchanged, measured
+    against sops 3.13.3. The cause was one gate: since 0.003 a YAML scalar the
+    document wrote PLAIN, whose token go-yaml resolves to a non-finite float,
+    comes back as that float carrying the document's own token - but only for
+    a document that carried a `sops:` section. `edit` hands the editor a
+    plaintext, so the leaf came back as the string `.inf` and the emitter's
+    foreign-resolution guard correctly refused to write it. The same gate meant
+    this library's own `decrypt_file` wrote `v_unencrypted: .inf` and its own
+    `encrypt_file` then refused to read that file back. sops makes one parse
+    and now so does this: the repair runs on every document, plaintext
+    included. Measured, twelve spellings x two slots on plaintext input: the
+    twelve unencrypted rows go from 0 written to 12 written with `sops -d`
+    exit 0, and for the three spellings `sops -e` itself writes the wire is
+    byte-identical to sops's. A QUOTED `".inf"` is still the string it always
+    was, and so are the near misses (`.INf`, `Inf`, `.infinity`), `config.info`
+    and `1e400` - the repair asks YAML::PP how the document WROTE the scalar
+    and never matches the leaf's text. JSON is untouched in both directions.
+    The deliberate cost: a bare token under a key that gets ENCRYPTED is now
+    refused, naming the key path, where it used to be written as a `type:str`
+    holding `.inf` - a working file whose value had silently stopped being a
+    number, since `sops -e` writes a `type:float` there. That refusal goes
+    away with karr #122. Still open and now documented on `edit`: an ENCRYPTED
+    non-finite float is silently retyped to a string by an edit, because its
+    only plaintext spelling from this emitter is a bare `Inf`, which go-yaml
+    reads as a string (karr #134). See docs/adr/0034 and karr #123.
   - BEHAVIOUR CHANGE and BUG FIX: a YAML document carrying a sops comment as
     a list element is now refused, naming the element, where it used to be
     read as an ordinary value. sops attaches a comment to the node that
