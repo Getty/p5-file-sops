@@ -1,6 +1,35 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - New: File::SOPS::Metadata::Flat, the flat metadata encoding the ENV and
+    INI formats carry the sops section in -- sops_age__list_0__map_enc under a
+    sops_ prefix in ENV, the same keys bare inside an [sops] section in INI.
+    That is a second metadata wire format beside the nested mapping to_hash
+    produces, not a formatting detail, and it is ONE module rather than two so
+    that the two handlers cannot drift apart: the whole difference between
+    them is the prefix attribute. Nothing calls it yet -- the ENV (karr #36)
+    and INI (karr #37) handlers still do not exist, and this is the shared
+    half both were blocked on (karr #75).
+    Measured against sops 3.13.3 rather than assumed, with two recipients so
+    that __list_1__ is an observation and not a guess: a map key appends
+    __map_K and a list index appends __list_N, composing to any depth
+    (key_groups__list_0__map_age__list_0__map_enc is five levels); indices
+    must run from 0 without gaps, since sops refuses a gap with "Error while
+    unflattening: Incomplete list"; the output order is a structural walk, so
+    __list_10__ follows __list_9__ and is NOT a byte sort of the finished
+    keys; and an empty list has no representation at all -- writing one anyway
+    makes sops refuse the file ('kms[0]' expected a map or struct, got
+    "string"), so they are dropped, and from_hash puts them back.
+    A newline is written as backslash-n and NOTHING else is escaped -- not a
+    tab, not a CR, and not a backslash -- which makes the escape lossy in one
+    direction. We reproduce that rather than correcting it, because a lossless
+    escape writes bytes sops misreads. See docs/adr/0022, which also records
+    why the escape belongs to this layer and not to the format handlers: ENV
+    applies the same transform to data values and INI does not.
+    NOT decided here, and left documented as a hazard rather than closed: the
+    flat formats are untyped, so unflatten hands back the STRING "false" for
+    mac_only_encrypted, which is TRUE in Perl and would select the wrong
+    digest. Typing them is karr #77 and it spans the wire and API lanes.
   - Diagnostics only, no document moves: the refusal for an integer above
     int64 now offers BOTH answers a caller has, where it offered one. It
     closed with "Pass it as a string to store it exactly", which was the whole
