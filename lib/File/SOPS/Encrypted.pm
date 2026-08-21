@@ -1225,6 +1225,54 @@ B<hand-written> literal that is not its double's canonical decimal does move
 Character strings are UTF-8 encoded on the way out, by the same unconditional
 rule L</encrypt_value> documents.
 
+=head3 In an untyped store these bytes are also what the emitter writes
+
+For YAML and JSON the emitter and the digest legitimately write different text:
+C<Format::YAML> writes a bare C<true> where this method returns C<True>, and
+that is correct, because go-yaml parses C<true> back into a boolean and Go
+re-derives C<True> from it.
+
+B<The flat formats have no such reader.> ENV and INI carry no type syntax, so
+sops hands the digest the literal text of the line -- and for an
+B<unencrypted> leaf, where there is no C<type:> label either, the document
+verifies only if the text written B<is> the text this method returns.
+docs/adr/0035 therefore decides that the ENV and INI emitters (karr #36,
+karr #37) write exactly what this method returns, and refuse nothing for its
+type.
+
+That is not a divergence dressed up as one. Measured against sops 3.13.3, one
+document per row, both formats, both slots: B<the C<sops_mac> plaintext is
+SHA-512 of this method's output on every row of the ladder> -- C<True>, C<1>,
+C<-0>, C<100000000000000000000>, the empty string for a null. sops's own
+emitter then writes a B<display> form into the unencrypted slot for three of
+them and cannot read the file back:
+
+    value       sops wrote      digest covers   sops -d
+    true        true            True            MAC mismatch, exit 51
+    null        <nil>           (empty)         exit 51 -- and exit 25 in an
+                                                encrypted slot, where the
+                                                placeholder reaches the file raw
+    1.0         1.0             1               exit 51
+    1e20        1E+20           100000000000000000000   exit 51
+    -0.0        -0.0            -0              exit 51
+    42          42              42              exit 0
+    1.5         1.5             1.5             exit 0
+
+Writing this method's output instead leaves the digest exactly where it is and
+repairs the one line that disagreed with it: each of those texts is a line sops
+itself writes for the corresponding string, and a document carrying it reads
+back at exit 0. The cost is that an unencrypted flat-format value loses its
+type on the way back -- a boolean returns as the string C<True>, an integer as
+C<"42"> -- which is what sops's own untyped reader does to every value in that
+slot. See karr #124 and karr #125, and
+L<docs/adr/0035|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0035-an-untyped-stores-unencrypted-leaf-is-written-as-the-bytes-the-digest-covers.md>.
+
+The B<type label> needs no format rule at all: an ENV or INI parser hands the
+walk plain string SVs, so L</detect_type> answers C<str> for the whole document
+by itself, which is what makes C<sops -e> on a plaintext C<.env> write
+C<type:str> for C<NUM=5>. A typed source keeps its types in a flat document in
+both implementations alike.
+
 The return is a B<plain string> -- a scalar carrying its text and not the
 number that text spells. This matters to a caller who feeds the result back in:
 L</detect_type> reads the SV and not the characters (ADR 0002), so a return

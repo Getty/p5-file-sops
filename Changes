@@ -1649,6 +1649,34 @@ Revision history for File-SOPS
     already refused by the foreign-resolution guard), and `!!float 1` is
     type:float there and type:int here with the same plaintext, so the file
     still verifies. See docs/adr/0032 and karr #118.
+  - DECISION, no behaviour change: the per-format type policy the ENV and INI
+    handlers were waiting on is settled and written down as docs/adr/0035.
+    Nothing a caller can invoke changes - there is still no ENV or INI handler
+    (karr #36, #37) - but two POD sections now carry the rule instead of an
+    open question. The ticket's premise turned out to be half wrong: `type:str`
+    on everything is what an ENV or INI SOURCE produces, because its reader
+    returns strings, and that falls out of docs/adr/0002 with no format rule at
+    all; a typed source keeps `type:int`, `type:float`, `type:bool` and
+    `type:time` in a dotenv or ini document in both implementations alike, and
+    `sops -d` reads every one back at exit 0. What is really broken is the
+    UNENCRYPTED slot, which carries no label, so the untyped reader hands the
+    digest the literal text of the line. Measured over the whole ladder, both
+    formats, both slots: the `sops_mac` plaintext is SHA-512 of
+    File::SOPS::Encrypted->value_to_bytes on EVERY row - while sops's own
+    emitter writes a display form for three classes and then cannot read the
+    file it just wrote (`true` against a digest over `True`, karr #124; `<nil>`
+    against a digest over the empty string, karr #125, exit 25 in an encrypted
+    slot; and `1.0` / `1E+20` / `-0.0` against digests over `1` /
+    `100000000000000000000` / `-0`, which was in no ticket). The decision is
+    that our emitters write value_to_bytes verbatim there: the digest does not
+    move, each line is one sops itself writes for the same text, and every one
+    reads back at exit 0. docs/adr/0002 is EXTENDED, not changed - no rung of
+    the type ladder moves and no wire byte moves for any caller. The metadata
+    half of the same ticket is decided too: sops decodes its section weakly in
+    EVERY format (a quoted `mac_only_encrypted: "false"` is the boolean false
+    in nested YAML as well), so the coercion belongs in
+    File::SOPS::Metadata->from_hash and not in Metadata::Flat->unflatten, which
+    stays faithful to the untyped encoding. See docs/adr/0035 and karr #77.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

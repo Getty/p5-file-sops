@@ -495,10 +495,23 @@ Perl's C<'false'> is B<true>, so handing this method's output straight to
 L<File::SOPS::Metadata/from_hash> turns a document sops reads into one this
 library computes the wrong digest for.
 
-Typing the flat formats' values is karr #77's decision and it is not this
-class's to make -- see docs/adr/0022 and the ticket. Until it lands, a format
-handler wiring this up has to map C<true>/C<false> to
-L<JSON::MaybeXS>'s booleans itself, and say so.
+B<karr #77 has now decided it, and the decision is that this method keeps
+doing exactly what it does.> docs/adr/0035 measured where the coercion belongs
+and the answer is not here: sops decodes its metadata section B<weakly in every
+format>, not only in the flat ones. In a B<nested YAML> C<sops:> section a
+quoted C<mac_only_encrypted: "false"> is the boolean false and a quoted
+C<"true"> is true -- C<strconv.ParseBool>'s accepted set exactly
+(C<1 t T TRUE true True> / C<0 f F FALSE false False>, plus the empty string as
+false), with C<yes>, C<no>, C<on> and C<off> B<refused> at exit 1; and
+C<shamir_threshold: "2"> is the integer 2 while C<"false"> there is refused.
+
+So the coercion belongs in L<File::SOPS::Metadata/from_hash>, the one place
+every format's parsed section arrives -- typed or not -- and B<not> in this
+method, which is the structural inverse of L</flatten> and has no schema.
+Putting it here would leave the same quoted spelling in a B<YAML> document
+still reading as Perl-true, which is the identical bug in the format that has a
+handler today. Until that lands in C<from_hash>, a caller wiring this up has to
+map the string itself, and say so.
 
 =head1 SEE ALSO
 
@@ -509,6 +522,9 @@ L<JSON::MaybeXS>'s booleans itself, and say so.
 =item * docs/adr/0022 - why the escape is reproduced lossy rather than fixed
 
 =item * docs/adr/0030 - why an ENV DATA value the escape cannot carry is refused
+
+=item * docs/adr/0035 - what an untyped store writes for a typed leaf, and why
+the metadata typing above belongs in C<from_hash> rather than here
 
 =back
 
