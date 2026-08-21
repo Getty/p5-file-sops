@@ -1,0 +1,136 @@
+---
+class: standard
+completed: 2026-08-21T06:37:47Z
+created: 2026-08-20T00:23:39Z
+id: 77
+priority: medium
+started: 2026-08-21T06:07:09Z
+status: done
+tags:
+- wire
+- format
+- roadmap
+- env
+- ini
+title: 'Per-format type policy: the env store writes type:str for everything, ours
+  comes from the scalar'
+updated: 2026-08-21T06:37:47Z
+---
+
+Aufgesplittet aus karr #36 (36d) am 2026-08-20 auf Maintainer-Entscheidung.
+
+Im env-Store von sops ist JEDER Wert type:str, auch NUM=5 -- der Store parst alles als String. Dasselbe gilt fuer INI (#37).
+
+Unser Typ kommt aus dem Skalar (docs/adr/0002, die IOK/NOK-Flags). encrypt(data => {n => 5}, format => "env") wuerde deshalb heute type:int schreiben -- ein Dokument, das der env-Store selbst nie erzeugen wuerde.
+
+Gebraucht wird eine Per-Format-Typpolitik: das Format bestimmt mit, welche Typen ueberhaupt auf die Leitung duerfen. Das beruehrt die Wire-Lane, weil detect_type und die Typleiter heute formatblind sind.
+
+Beruehrt ADR 0002 unmittelbar -- dort steht, dass der Typ aus dem SV kommt. Eine Format-Ausnahme davon gehoert dort begruendet, nicht nebenbei eingebaut.
+
+Lane: wire, Entscheidung gemeinsam mit api (was passiert mit einem int, den der Aufrufer uebergibt -- refusen oder still zu str machen? refusen passt zur Hausregel, still konvertieren zur Referenzimplementierung).
+ERWEITERT 2026-08-21 aus karr #75 heraus: die Typfrage betrifft nicht nur Datenwerte, sondern auch die METADATEN, und dort ist ein Fall MAC-relevant.
+
+Das flache Metadatenformat ist genauso untypisiert wie der Rest. File::SOPS::Metadata::Flat->unflatten gibt deshalb jeden Wert als STRING zurueck -- auch mac_only_encrypted.
+
+Gemessen an sops 3.13.3:
+  sops_mac_only_encrypted=false  auf einem Dokument, dessen MAC alle Werte
+                                 deckt -> sops -d exit 0
+  sops_mac_only_encrypted=true   auf demselben Dokument -> MAC mismatch,
+                                 exit 51
+
+Die Option WAEHLT also den Digest. Perls "false" ist WAHR, also wuerde
+Metadata->from_hash auf unflatten-Ausgabe mac_only_encrypted einschalten und
+fuer ein Dokument, das sops liest, den falschen Digest berechnen.
+
+Genauso: shamir_threshold kommt als String "2" zurueck, version als "3.13.3".
+
+t/38-flat-metadata.t nagelt fest, DASS der String ein String bleibt -- damit
+das Schliessen dieser Luecke eine bewusste Aenderung ist und keine stille.
+Wer #77 entscheidet, entscheidet auch das hier: die Zuordnung true/false ->
+JSON->true/false gehoert entweder in from_hash (api) oder in die
+Format-Handler, aber nicht zweimal.
+
+Siehe docs/adr/0022, Abschnitt "Every leaf comes back a string".
+ERGAENZT 2026-08-21 aus karr #109 heraus, DATENSEITE gemessen (sops 3.13.3):
+
+Der env-Store schreibt einen UNVERSCHLUESSELTEN Boolean lowercase und hasht
+ihn titlecase, und liest seine eigene Datei dann nicht zurueck:
+
+  v_unencrypted: true  ->  v_unencrypted=true
+  sops_mac deckt        28A91492CBD2575E... = SHA-512("True")
+  sops -d               MAC mismatch, exit 51
+
+Dasselbe fuer null: geschrieben <nil>, gehasht SHA-512(""), exit 51 -- und im
+verschluesselten Slot exit 25, weil ein nil gar nicht erst verschluesselt wird.
+
+Beide sind eigene Tickets (#124, #125) und beide warten auf die Typpolitik
+hier: was UNSER env-Emitter fuer einen Boolean bzw. ein undef schreiben soll,
+ist genau die Frage dieses Tickets -- nur jetzt mit einem Exitcode dran.
+Die Regel, unter die beide fallen, steht in ADR 0008 und ist fuer ENV in
+ADR 0030 formuliert.
+ABGEARBEITET 2026-08-21 (Lane wire, Claim wire-77). Ergebnis: docs/adr/0035,
+t/50-flat-store-type-policy.t, POD an Encrypted::value_to_bytes und an
+Flat::unflatten, Changes-Eintrag. KEIN Verhalten geaendert -- es gibt weder
+einen ENV- noch einen INI-Handler, und die Typleiter bleibt, wie sie ist.
+
+DIE PRAEMISSE DES TICKETS WAR ZUR HAELFTE FALSCH, gemessen an sops 3.13.3:
+"im env-Store ist alles type:str" ist der EINGABE-Store, nicht der
+Ausgabe-Store. sops -e auf eine Klartext-.env (und .ini) schreibt type:str
+fuer alles, weil sein READER Strings geliefert hat. Derselbe Baum aus einer
+YAML-Quelle mit --output-type dotenv|ini traegt type:int, type:float,
+type:bool und type:time, und sops -d liest jeden davon mit exit 0 zurueck.
+encrypt(data => {n => 5}, format => "env") wuerde also GENAU das schreiben,
+was sops fuer denselben Baum schreibt. Unser ENV/INI-Parser reproduziert das
+Gegenstueck umsonst: er reicht Perl-String-SVs weiter, detect_type sagt str.
+ES GIBT KEINE PER-FORMAT-TYPPOLITIK ZU SCHREIBEN. ADR 0002 wird ERGAENZT,
+nicht geaendert -- keine Sprosse bewegt sich, kein Wire-Byte bewegt sich.
+
+KAPUTT IST DER UNVERSCHLUESSELTE SLOT, und zwar weil er gar kein Typlabel
+hat: der untypisierte Reader gibt dem Digest den Literaltext der Zeile. In
+JEDER Zeile der Leiter, beide Formate, beide Slots, deckt der sops_mac-
+Klartext exakt Encrypted->value_to_bytes des Wertes -- ausnahmslos. sops
+schreibt dort aber in drei Klassen eine ANZEIGEFORM:
+  bool   true  geschrieben / True  gehasht  -> exit 51   (#124)
+  null   <nil> geschrieben / ""    gehasht  -> exit 51, im verschluesselten
+                                               Slot exit 25              (#125)
+  float  1.0 / 1E+20 / -0.0 geschrieben,
+         1 / 100000000000000000000 / -0 gehasht -> exit 51   (NEU, jetzt #137)
+int, str und time sind in beiden Slots sauber (der Typ geht beim Lesen
+verloren -- 42 kommt als "42" zurueck -- aber das macht sops selbst mit
+exit 0, es ist die Untypisiertheit des Formats).
+ENV und INI verhalten sich Zeile fuer Zeile IDENTISCH. Die Abweichung, die
+ADR 0022/0030 beim Escape gefunden haben, gibt es bei den Typen nicht.
+
+ENTSCHEIDUNG (ADR 0035): ein unverschluesseltes Leaf wird in ENV und INI als
+exakt Encrypted->value_to_bytes geschrieben -- die Bytes, die der Digest
+ohnehin deckt -- und NICHTS wird wegen seines Typs refused. Der Digest bewegt
+sich nicht; jede dieser Zeilen ist eine, die sops selbst fuer den
+entsprechenden String schreibt, und jede liest sops mit exit 0 (gemessen,
+7 Typen x 2 Formate, plus je ein Dokument mit allen gleichzeitig).
+ADR 0030s Unterscheider ist derselbe geblieben und faellt hier anders aus:
+dort gab es GAR KEINE Schreibweise fuer den Wert, hier gibt es genau eine,
+und es ist die, die sops eigener MAC schon unterstellt.
+
+METADATENHAELFTE (aus #75): entschieden und ABGEGEBEN als karr #138 an die
+api-Lane. Gemessen: sops dekodiert seine Sektion in JEDEM Format schwach
+(ein gequotetes mac_only_encrypted: "false" ist auch in verschachteltem YAML
+die boolesche Falschheit, strconv.ParseBools Menge, yes/no/on/off exit 1).
+Also gehoert die Coercion in Metadata->from_hash und NICHT in
+Flat->unflatten, das faithful bleibt. t/38 bleibt unangetastet richtig.
+
+NEBENBEFUND, eigenes Ticket: karr #136 -- eine type:bytes-Zelle bringt
+sops -d in JEDEM Format zum Absturz (exit 2, Go-panic). Betrifft ADR 0003s
+Escape-Luke.
+
+BEWEIS: prove -lr t/ mit SOPS_BIN=/tmp/sops -> 51 Dateien, 1124 Tests, PASS.
+t/04-interop.t LIEF (nicht geskippt): 32/32 PASS gegen sops 3.13.3.
+t/50 allein: 8 Subtests, 268 Assertions, PASS; ohne Binary 3 Unit-Subtests
+plus 5 Skips. Netz zuerst zu Fall gebracht, zweimal: value_to_bytes auf
+lowercase-Boolean mutiert -> Unit-Haelfte rot; eine Leiterzeile auf
+"round-trips" gedreht -> beide Interop-Leitern rot.
+
+Offen bleibt fuer #36/#37 nur, was ihnen ohnehin gehoert: Baumform,
+Keys, type:comment (#76), order-preserving parse (#74), und INI-spezifisch
+Werte ausserhalb einer Sektion, doppelte Sektionen, Quoting, Padding.
+2026-08-21 06:33 ADR 0035 + t/50 + POD an value_to_bytes und unflatten + Changes. Kein Verhalten geaendert (kein ENV/INI-Handler). ADR 0002 ergaenzt, nicht geaendert. Metadatenhaelfte abgegeben als #138 (api). Neue Tickets: #136 (type:bytes panic), #137 (ENV/INI float display form). prove -lr t/ mit Binary: 51 Dateien 1124 Tests PASS; t/04-interop.t LIEF, 32/32.
+ABGENOMMEN 2026-08-21. Commit 4aa9ace, ADR 0035. Kein Code geaendert -- detect_type und value_to_bytes brauchten keinen, und das IST der Befund. Beide Praemissen des Tickets waren falsch: 'alles ist type:str im env-Store' beschreibt nur den EINGABE-Store (sops -e auf einen Klartext-.env typisiert alles str, weil sein LESER Strings lieferte); derselbe Baum aus YAML als dotenv geschrieben behaelt type:int/float/bool/time und liest bei exit 0 zurueck. Und INI unterscheidet sich hier NICHT von ENV -- es unterscheidet sich beim Escape (ADR 0022/0030), woher die Annahme vermutlich stammt. Die Messung, die entscheidet: in JEDER Zeile deckt sops_mac exakt value_to_bytes, mit dem MAC-Klartext ausgelesen statt abgeleitet. Nur der EMITTER variiert -- und wo er von value_to_bytes abweicht, lehnt sops -d seine eigene Datei mit exit 51 ab. Die Regel schreibt sich damit selbst, und es wird NICHTS refused: das ist das Gegenteil von ADR 0030 vier Stunden vorher, mit demselben Unterscheider -- dort hatte der Wert ueberhaupt keine Schreibweise in ENV, hier hat jede Kandidatenzeile eine, die sops selbst schreibt.
