@@ -1,0 +1,69 @@
+---
+class: standard
+completed: 2026-08-21T09:31:11Z
+created: 2026-08-21T08:24:41Z
+id: 144
+priority: high
+started: 2026-08-21T09:02:23Z
+status: done
+tags:
+- mac
+- aad
+- metadata
+- interop
+- wire
+title: sops re-formats lastmodified before using it as the MAC's AAD, we use the literal
+  text
+updated: 2026-08-21T09:31:11Z
+---
+
+Found while measuring karr #138 (docs/adr/0042), not fixed there: lastmodified is the AAD of the metadata MAC, and sops does NOT use the documents literal text for it. It decodes the field into a Go time.Time and re-formats it as RFC3339 (Z), so a document spelling the same instant differently still verifies THERE and fails HERE.
+
+MEASURED, sops 3.13.3, on a document sops itself wrote (only the lastmodified line edited):
+
+  lastmodified: "2026-08-21T08:03:09Z"      sops -d exit 0   File::SOPS ok
+  lastmodified: "2026-08-21T08:03:09+00:00" sops -d exit 0   File::SOPS DIES
+        "Cannot decrypt MAC - refusing to return unverified data"
+  lastmodified: 2026-08-21T08:03:09Z        sops -d exit 1   File::SOPS accepts
+        (unquoted: go-yaml v3 resolves it as !!timestamp -> a time.Time where
+         mapstructure wants a string, "decoding failed")
+  lastmodified: "2026-08-21t08:03:09z"      sops -d exit 1   (parse error)
+  lastmodified: "2026-08-21 08:03:09Z"      sops -d exit 1   (parse error)
+  lastmodified: 2 / ""                      sops -d exit 1   (parse error)
+
+So there are TWO divergences in opposite directions:
+  1. A valid RFC3339 spelling that is not the canonical Z form: sops reads the file, we refuse it. Any offset form, and presumably a fractional-second one.
+  2. An UNQUOTED timestamp: sops refuses the document, we accept it.
+
+Both are AAD bytes, so this is the wire lane and not the api lane - Metadata.pm holds the attribute, but what bytes reach the AAD is Encrypted/the MAC path. Needs its own measurement of the full RFC3339 spelling set before anything is written.
+
+Lane: wire.
+MEASURED AND FIXED, direction 1. docs/adr/0044.
+
+THE AAD PROOF, direct rather than inferred: documents whose lastmodified TEXT is one thing and whose mac was encrypted under a CHOSEN AAD, handed to sops -d.
+
+  text "...09:05:08+00:00"  mac under "...09:05:08Z"       exit 0
+  text "...09:05:08+00:00"  mac under the literal text     exit 51
+  text "...09:05:08.123Z"   mac under "...09:05:08Z"       exit 0
+  text "...09:05:08.123Z"   mac under the literal text     exit 51
+  text "...11:05:08+02:00"  mac under the UTC form         exit 51
+  text "...11:05:08+02:00"  mac under "...11:05:08+02:00"  exit 0
+
+So the AAD is time.Parse(RFC3339,s).Format(RFC3339) and the ticket's premise is confirmed - with one correction the ticket did not have: a NON-ZERO offset is KEPT, not normalised to UTC. Only a ZERO offset becomes Z.
+
+45 spellings measured. The round trip is purely lexical: fraction dropped (any length, comma as well as period), hour zero-padded (Go's 15 takes one digit or two where its 01/02/04/05 do not), zone re-derived from the TOTAL offset (+00:60 -> +01:00, +24:60 -> +25:00) and written Z whenever that total is zero. Offset hour 0..24 and minute 0..60 are in range; 25 and 61 are refused. No calendar arithmetic is involved.
+
+FIXED in File::SOPS::Metadata->from_hash (ADR 0042's position, and the only one reachable without touching the two AAD call sites in SOPS.pm). 14 of 26 self-consistent spellings that sops -d reads at exit 0 used to die here with "Cannot decrypt MAC"; 0 do now. A spelling Go cannot parse is passed through unchanged rather than refused - karr #145's reasoning, one field over.
+
+NOTHING MOVES for a document either implementation writes: nine-document corpus (4 by sops -e incl. --mac-only-encrypted and --unencrypted-suffix, 1 by --encrypted-suffix, 4 by File::SOPS->encrypt incl. json and mac_only_encrypted), AAD + decrypted MAC plaintext + decrypted values byte-identical before and after in all nine.
+
+WRITE PATH CHECKED: File::SOPS::encrypt is the only producer, policy_args does not carry lastmodified, update_lastmodified is strftime('%Y-%m-%dT%H:%M:%SZ', gmtime). We have never written a spelling this moves.
+
+DIRECTION 2 (unquoted timestamp) IS NOT FIXED HERE and is karr #159: from_hash sees the same Perl string for a bare and a quoted scalar (ADR 0038 measured that), so it cannot be implemented in Metadata.pm. Permissive, recorded, pinned in the new test.
+
+t/58-lastmodified-is-re-formatted-before-it-is-the-aad.t: 126 assertions in 8 subtests. Net verified - reverted to the pre-change from_hash and it fails 38 leaf assertions (17 of 28 from_hash rows, 17 of 28 round-trip rows, 4 of 4 negative controls).
+
+prove -lr t/ with SOPS_BIN=/tmp/sops: 60 files, 1256/1256 PASS.
+SOPS_BIN=/tmp/sops prove -lv t/04-interop.t: 32/32, EXECUTED against sops 3.13.3.
+2026-08-21 09:26 Direction 1 fixed and measured (docs/adr/0044, t/58). Direction 2 split out as karr #159 for the format lane. Files touched: lib/File/SOPS/Metadata.pm, t/58-lastmodified-is-re-formatted-before-it-is-the-aad.t, docs/adr/0044-*.md, Changes. Not committed - no git in this run.
+ABGENOMMEN 2026-08-21. Commit b103f87, ADR 0044. Die Abnahme gilt der KORREKTUR an der eigenen Ticketpraemisse: ein Nicht-Null-Offset wird von sops BEHALTEN und nicht nach UTC normalisiert -- nur ein Null-Offset wird zu Z. Ein Fix nach dem Wortlaut dieses Tickets haette jedes Dokument mit echtem Offset kaputtgemacht. Und dem direkten AAD-Beweis: Dokumente gebaut, deren lastmodified-TEXT das eine und deren mac unter einem GEWAEHLTEN AAD verschluesselt ist, dann sops gefragt -- das beweist, welche Bytes gedient haben, statt es aus dem Exit-Code zu schliessen. 45 Schreibweisen gemessen, darunter drei, die kein Ticket genannt hatte: Bruchteilsekunden werden verworfen, ein Offset wird aus seiner SUMME neu abgeleitet (+00:60 wird +01:00), und eine einstellige Stunde wird aufgefuellt, waehrend ein einstelliger Monat abgelehnt wird.
