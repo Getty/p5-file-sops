@@ -1,0 +1,215 @@
+---
+class: standard
+completed: 2026-08-21T11:04:58Z
+created: 2026-08-09T00:52:57Z
+depends_on:
+- 36
+- 74
+- 75
+- 77
+- 76
+id: 37
+priority: low
+started: 2026-08-21T09:54:18Z
+status: done
+tags:
+- roadmap
+- format
+title: 'INI format handler: shares ENV''s metadata flattening, adds sections'
+updated: 2026-08-21T11:04:58Z
+---
+
+CLAUDE.md has promised `format => ini` since 0.001 and there is no File::SOPS::Format::INI. Split out of karr #4.
+
+Measured against sops 3.13.3 (`sops -e t.ini`):
+
+    [db]
+    host = ENC[AES256_GCM,data:...,type:str]
+    port = ENC[...,type:str]
+
+    [api]
+    key = ENC[...,type:str]
+
+    [sops]
+    age__list_0__map_enc       = -----BEGIN AGE ENCRYPTED FILE-----\nYWdl...\n
+    age__list_0__map_recipient = age1...
+    lastmodified               = 2026-08-09T00:51:42Z
+    mac                        = ENC[...]
+    unencrypted_suffix         = _unencrypted
+    version                    = 3.13.3
+
+Overlaps karr #36 (ENV) in the expensive parts and differs in the cheap ones:
+
+- SAME metadata flattening scheme (`age__list_0__map_enc`), here inside a
+  `[sops]` SECTION rather than under a `sops_` key prefix. Whatever #36 builds
+  for that should be shared, and building it twice is how the two drift.
+- SAME MAC problem: _parse_in_document_order is YAML::PP-only, so document key
+  order is unrecoverable for this format and verification silently falls back to
+  sorted order. See docs/adr/0001.
+- SAME untyped-value problem: everything is type:str, ours comes from the scalar
+  (docs/adr/0002).
+- DIFFERENT tree shape: exactly two levels (section -> key), so a nested document
+  cannot be expressed and encrypt() has to refuse one rather than flatten it.
+  Values outside any section, duplicate section names and the `key = value`
+  alignment padding all need a decision each.
+- Comments were not measured here; check before implementing, since ENV encrypts
+  them as type:comment leaves.
+
+Depends on karr #36 for the shared flattening layer, or the other way round --
+whichever is picked up first should build it to be shared.
+PLAN (Orchestrator, 2026-08-16) -- haengt an #36. Der eigene Anteil ist klein, die geteilten Teile sind es nicht.
+
+Teilt mit #36 die drei teuren Teile: 36a (order-preserving parse), 36b
+(Metadata-Flattening), 36d (Typpolitik). 36c (type:comment) braucht es erst,
+wenn gemessen ist, ob sops INI-Kommentare ueberhaupt verschluesselt -- der Body
+sagt ausdruecklich, dass das NICHT gemessen wurde. Das ist der erste Schritt
+hier, und er kostet fuenf Minuten mit einem sops-Binary (#69).
+
+Eigener Anteil, erst danach:
+  - Zwei-Ebenen-Baum (Sektion -> Key). encrypt() muss ein verschachteltes
+    Dokument ABLEHNEN, nicht flach klopfen.
+  - Werte ausserhalb jeder Sektion: Entscheidung noetig.
+  - Doppelte Sektionsnamen: Entscheidung noetig.
+  - Das Alignment-Padding in "key = value": gemessen uebernehmen oder bewusst
+    verwerfen. Der MAC haengt nicht daran, die Diff-Lesbarkeit schon.
+
+Board: depends_on 36 ist eingetragen.
+
+Gleiche Empfehlung wie bei #36 -- nicht als ein Ticket vergeben.
+ABHAENGIGKEITEN PRAEZISIERT 2026-08-20, nachdem #36 aufgesplittet wurde. #37 haengt nicht mehr pauschal an #36, sondern an den drei Vorarbeiten, die es tatsaechlich teilt: #74 (order-preserving parse -- dasselbe MAC-Problem), #75 (Metadata-Flattening -- dasselbe Schema, nur in einer [sops]-Sektion statt unter sops_-Praefix) und #77 (Per-Format-Typpolitik -- auch hier ist alles type:str). NICHT aufgenommen: #76 (type:comment), weil Kommentare fuer INI laut Body nie gemessen wurden -- das gehoert vor der Implementierung geprueft, und wenn INI sie ebenfalls als type:comment-Leaves verschluesselt, kommt #76 dazu. Die INI-eigenen Fragen bleiben in diesem Ticket: die exakt zweistufige Baumform (Sektion -> Key, ein verschachteltes Dokument muss refused statt geflacht werden), Werte ausserhalb jeder Sektion, doppelte Sektionsnamen und das Alignment-Padding bei 'key = value'.
+KOMMENTARE GEMESSEN 2026-08-21 gegen sops 3.13.3 (/tmp/sops). Der Koerper sagte "Comments were not measured here; check before implementing" und der PLAN-Absatz machte #76 davon abhaengig. Jetzt gemessen.
+
+ANTWORT: JA. sops verschluesselt INI-Kommentare als type:comment-Leaves. #37
+BRAUCHT #76 als Abhaengigkeit.
+
+Eingabe:
+
+    ; leading semicolon comment at top of file
+    # leading hash comment at top of file
+    [db]
+    ; comment above a key
+    host = localhost
+    port = 5432 ; trailing after value
+    # hash comment inside a section
+
+    [api]
+    key = secret
+
+sops -e, exit 0:
+
+    ; ENC[AES256_GCM,data:2AcYVF5Etq5iWi6f8SInOSRoJd6mAgEx8Lnq...,type:comment]
+    [db]
+    ; ENC[AES256_GCM,data:c8tba6arJJBHpWGTgu5CnsKd9g==,...,type:comment]
+    host = ENC[AES256_GCM,...,type:str]
+    ; ENC[AES256_GCM,data:0bSLAwIeXE0xYr/Xpfg8H1suEog=,...,type:comment]
+    port = ENC[AES256_GCM,data:OlBv5A==,...,type:str]
+
+    ; ENC[AES256_GCM,data:ojjfGQIR5So+6QJrKAIDyZbmOSUAolezu4vUXzA=,...,type:comment]
+    [api]
+    key = ENC[AES256_GCM,...,type:str]
+
+    [sops]
+    ...
+
+Vier Einzelheiten, die die Umsetzung betreffen:
+
+1. BEIDE Kommentarstile werden zu einem Leaf; die AUSGABE normalisiert immer auf
+   ";". Ein "#"-Kommentar kommt als ";"-Kommentar zurueck, wenn er allein steht.
+2. AUFEINANDERFOLGENDE KOMMENTARZEILEN WERDEN ZU EINEM LEAF mit mehrzeiligem
+   Klartext. Die beiden Kopfzeilen der Datei sind EIN "; ENC[...]"-Leaf, und
+   sops -d gibt beide Zeilen inklusive des originalen "#" zurueck. Ein
+   Kommentar-Leaf ist also nicht notwendig eine Zeile.
+3. Ein nachgestellter Kommentar ("port = 5432 ; trailing after value") wird zu
+   einem EIGENEN Leaf, das beim Entschluesseln UEBER dem Wert landet, nicht
+   dahinter. Der Round-Trip ist nicht positionstreu.
+4. LEERZEILEN bleiben erhalten und sind keine Leaves.
+
+sops -d des verschluesselten Dokuments: exit 0, alle Kommentare zurueck.
+
+KOMMENTARE SIND NICHT IM MAC -- gemessen, gleiche Methode wie bei YAML/ENV:
+  erstes type:comment-Leaf aus der Datei geloescht, sops -d  -> exit 0
+  Kontrolle, echtes "key = ENC[...]" geloescht,   sops -d  -> exit 51
+    MAC mismatch. File has 3041B78FF8A7D20ED62DE146B41CF46DE9DB7D1AEFF785B8CFD...
+                  computed 6D15A8BD32366737462D6FBE7C5902B9430180E1DD9660AE0C1...
+Ein INI-Kommentar-Leaf gehoert also aus dem Digest heraus, nicht hinein.
+
+Nebenbei bestaetigt: "port = 5432" wird type:str -- die Beobachtung im Koerper
+zur Typpolitik (#77) stimmt.
+
+BOARD: depends_on 76 sollte ergaenzt werden. Ich habe es nicht selbst eingetragen
+-- die Messaufgabe durfte keine Statusaenderungen vornehmen. Die Begruendung, mit
+der #76 am 2026-08-20 aus den Abhaengigkeiten von #37 herausgenommen wurde
+("weil Kommentare fuer INI laut Body nie gemessen wurden"), ist damit aufgeloest:
+sie sind gemessen, und die Bedingung "wenn INI sie ebenfalls als
+type:comment-Leaves verschluesselt, kommt #76 dazu" ist erfuellt.
+
+Messskripte und Dateien:
+/tmp/claude-1000/-home-getty-dev-p5-file-sops/d4aee62c-59a4-4293-a4f8-a2a46316a947/scratchpad/m76/
+RANDBEDINGUNG aus karr #108 (2026-08-21, docs/adr/0024): dasselbe wie an #36 vermerkt -- die Ablehnung, die Format::YAML seit #108 ausspricht, ist fuer INI keine gangbare Antwort, weil Kommentare dort der Normalfall sind. INI braucht die Erhaltung (karr #76, Weg b) von Anfang an. INI-spezifisch obendrein: mehrere aufeinanderfolgende Kommentarzeilen werden von sops zu EINEM Leaf mit mehrzeiligem Klartext zusammengefasst, und beide Kommentarstile (; und #) werden auf ; normalisiert.
+WIRE-ENTSCHEIDUNGEN AUS karr #77 (2026-08-21, docs/adr/0035), die dieses
+Ticket nicht mehr selbst treffen muss:
+
+1. DAS TYPLABEL BRAUCHT KEINE FORMAT-REGEL. Punkt 4 des Koerpers ("der Store
+   ist untypisiert, also braucht es eine Per-Format-Typpolitik") ist so nicht
+   richtig: type:str auf allem ist der EINGABE-Store. Gemessen an sops 3.13.3
+   traegt derselbe Baum aus einer YAML-Quelle mit --output-type dotenv|ini
+   type:int, type:float, type:bool und type:time, und sops -d liest alle mit
+   exit 0. Unser Parser reicht Perl-String-SVs weiter, detect_type sagt str --
+   ADR 0002 erledigt das ohne eine Zeile Format-Code.
+
+2. EIN UNVERSCHLUESSELTES LEAF WIRD ALS Encrypted->value_to_bytes GESCHRIEBEN.
+   Der unverschluesselte Slot hat kein Typlabel, also gibt der untypisierte
+   Reader dem Digest den Literaltext der Zeile -- und der sops_mac deckt in
+   JEDER Zeile der Leiter, beide Formate, beide Slots, exakt value_to_bytes.
+   sops schreibt dort in drei Klassen eine Anzeigeform und liest die eigene
+   Datei dann nicht: bool (#124), null (#125) und ein integraler oder
+   exponentieller float (#137, war in keinem Ticket). Die Regel schreibt
+   True/False, den leeren String, 1 / 100000000000000000000 / -0. Der Digest
+   bewegt sich dabei NICHT, und jede dieser Zeilen ist eine, die sops selbst
+   schreibt und mit exit 0 liest.
+   REFUSED WIRD NICHTS wegen seines Typs -- anders als bei ADR 0030, wo es
+   ueberhaupt keine Schreibweise fuer den Wert gab.
+
+3. ENV UND INI SIND HIER IDENTISCH, Zeile fuer Zeile gemessen. Die Abweichung
+   beim Escape (ADR 0022/0030) hat bei den Typen kein Gegenstueck.
+
+4. DIE METADATEN-TYPISIERUNG IST NICHT EURE. Gemessen: sops dekodiert seine
+   Sektion in jedem Format schwach, also gehoert die Coercion in
+   Metadata->from_hash (karr #138, api-Lane), nicht in die Handler und nicht
+   in Flat->unflatten.
+
+Gepinnt in t/50-flat-store-type-policy.t (8 Subtests, 268 Assertions,
+interop-gated).
+VORAUSSETZUNG GELIEFERT 2026-08-21 durch karr #76 / docs/adr/0041 -- siehe die Ergaenzung an karr #36, sie gilt hier wortgleich. #76 ist damit als Abhaengigkeit erledigt.
+
+Fuer INI gilt zusaetzlich, was der Koerper schon notiert: mehrere
+aufeinanderfolgende Kommentarzeilen werden zu EINEM Leaf mit mehrzeiligem
+Klartext, und die Ausgabe normalisiert beide Kommentarstile auf ";". Beides
+ist Sache des INI-Handlers; das Datenmodell traegt einen mehrzeiligen
+Kommentartext ohne Weiteres (File::SOPS::Comment haelt den Text, wie er ist,
+und value_to_bytes schreibt ihn verbatim).
+WAS #37 VON #36 ERBT (2026-08-21, docs/adr/0044, ENV-Handler ist fertig):
+
+GEERBT, nichts davon nochmal entscheiden:
+  * Metadata::Flat mit prefix => '' fuer die [sops]-Sektion (ADR 0022) -- dieselbe Klasse, ein Attribut anders.
+  * Die Typregel (ADR 0035): das Typlabel kommt aus dem Skalar (ADR 0002, keine Formatregel), ein UNVERSCHLUESSELTES Leaf wird als exakt value_to_bytes geschrieben. Zeile fuer Zeile identisch gemessen fuer ENV und INI, inkl. der drei sops-Defektklassen #124/#125/#137.
+  * parse_in_document_order nach ADR 0036 -- Format::ENV zeigt die Form: EIN Zeilenscanner, den parse UND parse_in_document_order benutzen, damit die beiden Shapes nicht auseinanderlaufen koennen, plus ein tied Hash (karr #158: die Klasse gehoert dann in eine eigene Datei, weil INI sie mitbenutzt).
+  * Der Kommentar-Leaf (ADR 0041) und seine Digest-Ausnahme, die SOPS.pm besorgt.
+  * Die Form der Klasse: parse / parse_in_document_order / serialize / emit / detect / detect_content / format_name / file_extensions.
+
+NICHT GEERBT, INI muss es selbst messen:
+  * KEIN Escape-Guard. ADR 0030 hat direkt nachgemessen: INI escapet seine Metadaten und NICHT seine Datenwerte (Mehrzeiler gehen in go-inis Triple-Quote-Form). Die ADR-0030-Guard gehoert also nicht in den INI-Emitter.
+  * DER KOMMENTAR-SCHLUESSEL IST NEU ZU MESSEN. Fuer ENV ist er der LEERE Schluessel, weil ein env-Kommentar gemessen unter AAD ':' authentifiziert, also unter Pfad ['']. INI ist zwei Ebenen tief, ein Kommentar sitzt in einer SEKTION -- der Pfad ist damit vermutlich ['section',''] und die AAD 'section::'. VERMUTUNG, nicht gemessen. Erst messen (ein Kommentar-Leaf gegen Kandidaten-AADs entschluesseln), dann den Baum bauen.
+  * Die Zeilengrammatik, Quoting, Sektionen, doppelte Sektionen, Werte ausserhalb jeder Sektion (landen in DEFAULT), und das Alignment-Padding (kosmetisch, ADR 0022).
+
+SORTIERTE SCHLUESSEL sind auch fuer INI Pflicht, aus demselben Grund: die Encrypt-Seite des MAC hasht 'sort keys', also muss der Emitter sortieren, sonst faellt jedes selbst geschriebene Dokument durch den eigenen Digest.
+
+ABGENOMMEN 2026-08-21. Commit 610ec6c, ADR 0047. Der INI-Handler existiert; zusammen mit #36 sind damit alle vier Formate da, die CLAUDE.md je versprochen hat.
+
+DIE ABNAHME GILT VOR ALLEM DEM, WAS DER WIRE-REVIEW GEFUNDEN HAT, und dass die Format-Lane ihn selbst angefordert hat, statt die AAD-Aenderung durchgehen zu lassen. Der Review hat sich zweifach bezahlt gemacht:
+
+Erstens fand er einen VIERTEN Walk, der die Regel nicht bekommen hatte -- _encrypted_leaves_the_rule_excludes, den Guard aus karr #150. Mit unencrypted_regex ^$, der naheliegenden Schreibweise fuer 'Kommentare nicht verschluesseln', schrieb die Bibliothek ein Dokument und LEHNTE ES DANACH SELBST AB. Die Regel ist jetzt EIN Sub, das alle Walks fragen.
+
+Zweitens war die Begruendung im ADR sachlich falsch herum: ein echter Leerschluessel traegt sehr wohl eine Pfadkomponente bei, sops authentifiziert so eine Liste unter db:: -- fuer diese eine Form entfernt die Aenderung uns also von sops, statt uns anzunaehern. Das ist ein bewusster Trade und kein Alignment, und ADR sowie Changes sagen das jetzt. Was ihn traegt, ist messbar: sops KANN keine Sequenz aus nichts als Kommentaren schreiben, weil ein Kommentar-Leaf nur existiert, wo ein Knoten folgt.
+
+Und der Beweis der Aenderung, in der Gegenrichtung: eine von sops geschriebene INI-Datei mit Kommentaren SCHEITERT unter dem alten Walk und liest unter dem neuen.
