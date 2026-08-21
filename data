@@ -1,0 +1,55 @@
+---
+class: standard
+completed: 2026-08-21T05:47:31Z
+created: 2026-08-21T04:41:37Z
+id: 118
+priority: medium
+started: 2026-08-21T05:14:19Z
+status: done
+tags:
+- yaml
+- parser
+- interop
+- format
+title: File::SOPS refuses a plaintext YAML carrying an explicit type tag that sops
+  encrypts fine
+updated: 2026-08-21T05:47:31Z
+---
+
+Gefunden beim Abarbeiten von karr #116 (!!merge-Tag), beim Nachmessen, welche Tags YAML::XS ueberhaupt annimmt. NICHT von #116 eingefuehrt -- vorbestehend, und von #116 bewusst NICHT mitbehandelt (siehe docs/adr/0028, Abschnitt "Limits").
+
+YAML::XS nimmt auf einem Skalar genau drei Tags an -- !!str, !!int, !!float -- und stirbt auf jedem anderen. $YAML::XS::LoadBlessed aendert daran nichts (gemessen, beide Stellungen).
+
+sops 3.13.3 nimmt sie dagegen alle an und loest sie beim Schreiben auf, das Tag verschwindet:
+
+  Klartext-Blatt                            was `sops -e` schreibt
+  !!binary aGVsbG8=                         hello
+  !!timestamp 2001-12-14t21:59:43.10-05:00  2001-12-14T21:59:43.1-05:00
+  !!bool true                               true
+  !!null ~                                  null
+  !!str 5                                   "5"
+
+File::SOPS->encrypt_file auf demselben Klartext (gemessen, HEAD mit #116):
+
+  !!binary     => YAML::XS Error: bad tag found for scalar: tag:yaml.org,2002:binary
+  !!timestamp  => YAML::XS Error: bad tag found for scalar: tag:yaml.org,2002:timestamp
+  !!bool       => YAML::XS Error: bad tag found for scalar: tag:yaml.org,2002:bool
+  !!null ~     => OK
+
+Also drei Klartext-Dokumente, die sops verschluesselt und File::SOPS nicht oeffnet. Reiner ENCRYPT-Pfad: die LESESEITE ist nicht betroffen, weil sops keines dieser Tags in ein verschluesseltes Dokument schreibt -- !!merge ist das einzige, und das ist #116.
+
+Warum das NICHT einfach die #116-Loesung mit mehr Tags ist: bei !!merge traegt das Tag nichts, `<<` ist ein gewoehnlicher Schluessel und das Entfernen aendert den Baum nicht. Jedes Tag hier traegt einen TYP, und der Typ kommt in dieser Distribution vom Skalar (ADR 0002). !!binary ist ausserdem der einzige Fall, in dem sops-Go den Wert wirklich DEKODIERT (aGVsbG8= -> hello), das ist eine Wertaenderung und keine Tag-Entfernung. Braucht eine eigene Messung pro Tag: was steht danach im MAC, und welchen type-Label schreibt sops.
+
+Format-Lane. Beruehrt Encrypted->detect_type mit, also vor einer Aenderung mit der Wire-Lane klaeren.
+2026-08-21 05:41 Umgesetzt. lib/File/SOPS/Format/YAML.pm, t/47-yaml-scalar-type-tags.t (neu), docs/adr/0032 (neu), Changes, plus eine Zeile in t/44 deren Claim #118 ausdruecklich ersetzt.
+
+MESSUNG (sops 3.13.3, MAC aus dem mac:-Feld entschluesselt und leafweise reproduziert): nur !!bool traegt nichts -- `!!bool true` und ein bares `true` erzeugen byte-identische Dokumente, type:bool, Klartext True, gleicher Digest. !!binary DEKODIERT (aGVsbG8= -> hello, type:str), !!timestamp normalisiert nach RFC3339 unter type:time (2026-08-21 -> 2026-08-21T00:00:00Z), !!bool True/TRUE ist bool dort und str hier, !!null Null ist null dort (gar nicht gehasht) und String hier, !!value/!!set/!!omap/!!seq/!!map unterdruecken Gos eigenen Resolver.
+
+ENTSCHEIDUNG: !!bool auf plain true/false wird vor dem Parsen entfernt, mit derselben zaehlerabgeglichenen Wiederholung wie ADR 0028. Alles andere wird abgelehnt, mit Nennung von Tag, Key-Pfad und dem, wozu sops das Tag aufloest -- nie mit dem Skalartext selbst, der ist Klartext. !!str/!!int/!!float/!!merge bleiben unberuehrt.
+
+STILLE DIVERGENZ (Schritt 2): ja, eine gefunden, und sie ist NICHT tag-bedingt -- 0755 ist bei sops die Zahl 493 und hier 755, bei gleichem type:int, getaggt wie untagged. Gefaehrliche Haelfte schon durch den Foreign-Resolution-Guard zu. Karten #127, #128, #130, #131.
+
+MAC: nichts bewegt sich. Die Wiederholung laeuft nur nach einem bereits gescheiterten Parse, kein AAD-Pfad, kein Digest-Byte, kein emittiertes Byte aendert sich. !!binary an die Wire-Lane uebergeben (#130).
+
+PROOF: prove -lr t/ mit sops auf PATH -> 49 Dateien, 1100/1100 PASS. t/04-interop.t LIEF, 32/32, sops 3.13.3. t/47 gegen die unveraenderte Bibliothek: 8 von 15 Subtests fallen, 15/15 mit ihr.
+ABGENOMMEN 2026-08-21. Commit fd265be, ADR 0032. Die Abnahme gilt der Entscheidung, PRO TAG zu antworten statt pro Mechanismus: !!merge trug nichts, jedes Tag hier traegt einen TYP, und der Typ kommt in dieser Distribution vom Skalar (ADR 0002). Nur !!bool auf plain true/false wird entfernt, und zwar BEWIESEN aequivalent -- die gespeicherten MACs der getaggten und der baren Form entschluesseln zu identischen 128 Hexzeichen. Alles andere wird benannt abgelehnt, weil bei gleichen Digest-Bytes der TYP abweicht und ein stilles Retypen schlimmer ist als ein hartes Scheitern. Nebenbefund, der wichtiger ist als das Ticket: !!int 0755 ist auf BEIDEN Seiten type:int mit 493 dort und 755 hier -- gleiches Label, andere Zahl, schaerfer als karr #29. Als #127 erfasst; die gefaehrliche Haelfte schliesst der Foreign-Resolution-Guard bereits.
