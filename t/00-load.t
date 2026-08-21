@@ -19,5 +19,10 @@ use_ok('File::SOPS::Metadata');
 use_ok('File::SOPS::Backend::Age');
 use_ok('File::SOPS::Format::YAML');
 use_ok('File::SOPS::Format::JSON');
+# Both are loaded by File::SOPS above, so these are no-ops that cannot fail --
+# they are here so that a handler dropped from that list is still noticed
+# (karr #155, which was filed when Format::ENV was missing from this file).
+use_ok('File::SOPS::Format::ENV');
+use_ok('File::SOPS::Format::INI');
 
 done_testing;

@@ -1,6 +1,41 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - NEW FORMAT: the INI handler CLAUDE.md has promised since 0.001.
+    `format => 'ini'` and any `.ini` file now go through `encrypt`, `decrypt`,
+    `encrypt_file`, `decrypt_file`, `encrypt_in_place`, `edit`, `extract` and
+    `rotate`, comments and all, in both directions against sops 3.13.3. The
+    tree is exactly two levels deep -- section, then key -- and a value written
+    outside any section is in the section `DEFAULT`, as it is for sops. The
+    grammar is Go's ini library's and is reproduced rather than approximated,
+    because an unencrypted value reaches the file as its own text: `:` is a
+    delimiter beside `=`, an unquoted `#` or `;` starts an inline comment, a
+    trailing backslash continues the line, and backticks, `"""` and a
+    surrounding pair of quotes all mean something. No new dependency: a CPAN
+    ini parser reads a different dialect and would hand the digest a different
+    plaintext for the same file.
+    A section's COMMENTS live under that section's empty key, as a list of
+    File::SOPS::Comment objects, because that is the path sops authenticates
+    them under -- measured, `db:` and never `db::`. Four values are REFUSED
+    rather than written (`""`, `'quoted'`, `"quoted"`, `"""x"""`): sops
+    writes those at exit 0 and then cannot read its own file, MAC mismatch,
+    exit 51. So are a nested document (sops writes a dump of the Go value), a
+    duplicate section, a duplicate key and a section named `sops`.
+    See docs/adr/0047 and karr #37.
+  - BEHAVIOUR CHANGE, narrow: a mapping key `''` holding a list of nothing but
+    sops comments, below the top level, is now encrypted and decrypted under
+    its PARENT's path rather than under `parent::`. A comment is an item of a
+    branch and contributes no path component -- measured, in every store -- and
+    that is what makes the INI handler above possible. For this one shape it is
+    a deliberate trade rather than an alignment: an ordinary empty key DOES
+    contribute a component, so sops would authenticate such a list under
+    `parent::`. It is safe because sops cannot write a sequence of nothing but
+    comments -- a comment leaf exists only because a node follows it, measured
+    over leading, trailing, consecutive and lone comments -- and because a list
+    holding a comment AND anything else keeps `parent::` unchanged. No parser
+    here produces the shape, no dotenv, YAML or JSON byte moves, and a corpus of
+    85 AAD-and-digest blocks is byte-identical apart from that shape and the
+    INI documents that did not exist before. See docs/adr/0047.
   - BEHAVIOUR CHANGE and SECURITY FIX: `rotate` and `edit` no longer write a
     document's secrets to disk in PLAINTEXT when its encryption rule does not
     cover the values that are actually encrypted. Decryption here is driven by
@@ -19,6 +54,9 @@ Revision history for File-SOPS
     exit 51, MAC mismatch), because it decrypts rule-first and hashes the
     ENC[...] string itself. The opposite disagreement -- a bare value the rule
     selects, which is quietly ENCRYPTED rather than exposed -- is unchanged and
+    still divergent (sops: exit 25). `encrypt_file` and `encrypt_in_place`
+    were never affected: both refuse an already-encrypted input. See
+    docs/adr/0046, karr #150, and karr #160/#161 for the two halves left open.
   - BEHAVIOUR CHANGE and SECURITY FIX: `unencrypted_regex` and `encrypted_regex`
     are now matched in Go RE2's dialect rather than Perl's, so a rule selects
     the same keys here as it does at sops. RE2's \w, \W, \d, \D, \s, \S, \b,
@@ -50,9 +88,6 @@ Revision history for File-SOPS
     document carrying such a rule can still be read. Two divergences remain
     and are documented: Perl's full case folding (`(?i)^ss$` and a key
     U+00DF), and `$` before a trailing newline. See docs/adr/0048, karr #161.
-    still divergent (sops: exit 25). `encrypt_file` and `encrypt_in_place`
-    were never affected: both refuse an already-encrypted input. See
-    docs/adr/0046, karr #150, and karr #160/#161 for the two halves left open.
   - BUG FIX and BEHAVIOUR CHANGE: the metadata MAC's AAD is now the timestamp
     Go re-formats, not the text the document holds. `lastmodified` is a Go
     string only where mapstructure decodes it; everything in sops after that

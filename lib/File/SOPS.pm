@@ -41,6 +41,7 @@ use File::SOPS::Backend::Age;
 use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use File::SOPS::Format::ENV;
+use File::SOPS::Format::INI;
 use namespace::clean;
 
 our $VERSION = '0.003';
@@ -624,6 +625,7 @@ my %FORMATS = (
     # a caller who knows it from `--input-type dotenv` should not have to
     # translate. format_name stays 'env'.
     dotenv => 'File::SOPS::Format::ENV',
+    ini    => 'File::SOPS::Format::INI',
 );
 
 # Everything that describes HOW a document gets encrypted, as opposed to what
@@ -689,7 +691,7 @@ sub encrypt {
     my $encrypted = File::SOPS->encrypt(
         data               => \%data,
         recipients         => \@age_public_keys,
-        format             => 'yaml',  # or 'json' / 'env', defaults to 'yaml'
+        format             => 'yaml',  # json / env / ini, defaults to 'yaml'
         mac_only_encrypted => 0,       # optional
 
         # optional, at most ONE of these four
@@ -722,15 +724,24 @@ replaced by the metadata -- and since the digest had already covered it, the
 resulting document failed its own MAC on the next read. sops refuses such a
 file too, with exit code 203, and its advice applies here: rename the entry.
 
-Supported formats: C<yaml>, C<yml>, C<json>, C<env>. C<dotenv> is accepted as
-an alias for C<env>, which is the name sops itself uses for the format.
+Supported formats: C<yaml>, C<yml>, C<json>, C<env>, C<ini>. C<dotenv> is
+accepted as an alias for C<env>, which is the name sops itself uses for the
+format.
 
-The C<env> format is flat and untyped, and both properties are visible to a
-caller: a nested value is refused (sops refuses the same tree), and an
-B<unencrypted> leaf comes back from the round trip as the text it was written
-as -- C<42> as C<"42">, a boolean as C<"True">, an C<undef> as C<''>. An
-encrypted leaf keeps its type, because the C<type:> label carries it. A comment
-lives under the empty key, as a list. See L<File::SOPS::Format::ENV>.
+The C<env> and C<ini> formats are B<untyped>, and that is visible to a caller:
+an B<unencrypted> leaf comes back from the round trip as the text it was
+written as -- C<42> as C<"42">, a boolean as C<"True">, an C<undef> as C<''>.
+An encrypted leaf keeps its type, because the C<type:> label carries it.
+
+C<env> is B<flat>: a nested value is refused, as sops refuses it, and a
+comment lives under the document's empty key as a list. See
+L<File::SOPS::Format::ENV>.
+
+C<ini> is exactly B<two levels deep> -- section, then key. A value written
+outside any section is in the section C<DEFAULT>, as it is for sops; a deeper
+tree is refused (sops writes a dump of the Go value instead); and a section's
+comments live under B<that section's> empty key, as a list, because that is the
+path sops authenticates them under. See L<File::SOPS::Format::INI>.
 
 A C<File::SOPS::Comment> in C<data> is written as a sops comment
 (C<type:comment>) and is left out of the MAC, which is what sops does with one.
@@ -2962,9 +2973,22 @@ sub _assert_rule_covers_encrypted_leaves {
 # leaf the rule selects -- writes no secret out (it encrypts a value that was
 # readable), and sops answers it differently too, exit 25 rather than 51.
 #
-# The walk is _encrypt_tree's, with its two rules: an ARRAY contributes no path
-# component, and the decision is taken at the leaf against the WHOLE path. Keys
-# are sorted so that the path the refusal names is the same one on every run.
+# The walk is _encrypt_tree's, with its three rules: an ARRAY contributes no
+# path component, a comment bucket contributes none either (docs/adr/0047), and
+# the decision is taken at the leaf against the WHOLE path. Keys are sorted so
+# that the path the refusal names is the same one on every run.
+#
+# All three have to be _encrypt_tree's, not merely similar to them. This walk
+# asks the encryption rule about a path that _encrypt_tree is about to encrypt
+# under, so a component it adds and _encrypt_tree does not is a disagreement
+# between the file this library writes and the file it will accept back:
+# measured with `unencrypted_regex => '^$'` on an ini document, encrypt put the
+# section's comment under `db:` and encrypted it -- which is what sops 3.13.3
+# does with the same rule -- and rotate then refused that file, because this
+# walk had asked the rule about `db::` instead.
+#
+# $stored is the document's own tree, so a comment in it wears its wire shape;
+# that, and nothing about key material, is what the last argument selects.
 sub _encrypted_leaves_the_rule_excludes {
     no warnings 'recursion';
     my ($node, $metadata, $path, $depth) = @_;
@@ -2975,10 +2999,12 @@ sub _encrypted_leaves_the_rule_excludes {
     if (ref $node eq 'HASH') {
         return map {
             my $k = $_;
-            push @$path, $k;
+            my $bucket
+                = _adds_no_path_component($k, $path, $node->{$k}, 'on the wire');
+            push @$path, $k unless $bucket;
             my @found = _encrypted_leaves_the_rule_excludes(
                 $node->{$k}, $metadata, $path, $depth);
-            pop @$path;
+            pop @$path unless $bucket;
             @found;
         } sort keys %$node;
     }
@@ -3298,6 +3324,79 @@ sub _encryption_options {
         grep { exists $args->{$_} } @ENCRYPTION_OPTIONS;
 }
 
+###############################################################################
+# THE COMMENT BUCKET, and it is a PATH rule rather than a name (docs/adr/0047)
+#
+# sops walks a branch with the branch's own path, and a comment is an ITEM of
+# that branch whose key is Go's Comment struct -- so it contributes NO path
+# component where an ordinary key does. Measured against sops 3.13.3: a comment
+# inside an ini section `[db]` authenticates under `db:`, never `db::`, and
+# `db::` is what a genuine empty key nested in a mapping authenticates under.
+#
+# The two are the same thing only where the branch is the document ROOT: there
+# Go's join produces `:`, which _path_to_aad spells `['']`, and that is why
+# File::SOPS::Format::ENV can keep a dotenv document's comments under a real,
+# empty KEY. Format::INI's branches are sections and cannot.
+#
+# So: a `''` key whose value is a sequence of COMMENTS adds no path component
+# when the path is already non-empty. Deliberately narrow --
+#
+#   * `@$path` non-empty, so the dotenv bucket at the root keeps the `''`
+#     component it needs and nothing about that format moves;
+#   * the value must be a non-empty ARRAY of comments, so `{ map => { '' =>
+#     'v' } }` keeps `map::`, which is the AAD sops gives it, measured.
+#
+# The one shape whose AAD moves is a mapping key `''` holding a list of nothing
+# but comments, below the top level. It is a shape sops cannot write, and THAT
+# -- not agreement -- is what makes the rule safe. Measured on 3.13.3: where a
+# genuine empty key holds a list carrying a comment AND a value, sops
+# authenticates the comment under `db::`, so the rule must not fire there, and
+# the all-comments test is exactly what keeps it from firing. A list of nothing
+# but comments never comes back out of sops, because a comment leaf exists only
+# where a node follows it in the same sequence -- measured over head, trailing,
+# consecutive and lone comments: every sequence sops wrote held at least one
+# non-comment element, and a comment with no node to attach to was hoisted to
+# the parent branch or dropped. A document that trips this rule was therefore
+# built by a caller by hand, and there we diverge from sops deliberately: the
+# two readings of `''` are the same bytes on the wire, so nothing at this layer
+# can tell them apart.
+###############################################################################
+our $COMMENT_BUCKET_KEY = '';
+
+# $on_the_wire says which shape a comment wears in THIS tree, and it is the
+# same discriminator _is_comment_leaf takes -- never key material, nothing is
+# decrypted by it. In the document's own tree a comment is an
+# ENC[...,type:comment] string; in a plaintext tree it is a
+# File::SOPS::Comment. The decrypt side spells it with the data key because it
+# has one; the walks that read $stored pass a bare truth because they have
+# none and need none.
+#
+# Passing nothing on the ENCRYPT side is what stops a caller's plain string
+# that merely SPELLS a comment leaf from moving the path its neighbours are
+# encrypted under.
+sub _is_comment_bucket {
+    my ($value, $on_the_wire) = @_;
+
+    return 0 unless ref $value eq 'ARRAY' && @$value;
+    _is_comment_leaf($_, $on_the_wire) or return 0 for @$value;
+    return 1;
+}
+
+# THE predicate, asked by every walk that builds a path -- _encrypt_tree,
+# _decrypt_tree and _encrypted_leaves_the_rule_excludes. One sub rather than
+# the same three lines three times: the rule decides which AAD a value is
+# encrypted under and which path the encryption rules are asked about, and a
+# walk that answers it differently from _encrypt_tree produces a document this
+# library writes and then refuses (measured, with unencrypted_regex `^$`:
+# rotate declined a file encrypt had just written).
+sub _adds_no_path_component {
+    my ($key, $path, $value, $on_the_wire) = @_;
+
+    return $key eq $COMMENT_BUCKET_KEY
+        && @$path
+        && _is_comment_bucket($value, $on_the_wire);
+}
+
 sub _encrypt_tree {
     no warnings 'recursion';
     my ($node, $key, $metadata, $path, $depth) = @_;
@@ -3317,7 +3416,10 @@ sub _encrypt_tree {
             # path matches. Measured against sops 3.13.3 with
             # --encrypted-suffix _enc: everything under a `top_enc:` block is
             # encrypted, and a `nested_enc:` under a plain parent is too.
-            push @$path, $k;
+            # docs/adr/0047: the comment bucket is the branch itself, so it
+            # adds no path component. See $COMMENT_BUCKET_KEY above.
+            my $bucket = _adds_no_path_component($k, $path, $node->{$k});
+            push @$path, $k unless $bucket;
             # A comment is a SEQUENCE entry or nothing. sops attaches a comment
             # to the node that follows it, so above a mapping key it stays a
             # comment LINE and no store writes one into a mapping value slot.
@@ -3338,7 +3440,7 @@ sub _encrypt_tree {
                 if File::SOPS::Encrypted->is_comment($node->{$k});
             $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, $path,
                 $depth);
-            pop @$path;
+            pop @$path unless $bucket;
         }
         return \%result;
     }
@@ -3406,7 +3508,11 @@ sub _decrypt_tree {
     if (ref $node eq 'HASH') {
         my %result;
         for my $k (keys %$node) {
-            push @$path, $k;
+            # docs/adr/0047, the read-side twin of the rule in _encrypt_tree.
+            # $key IS the data key here, so a bucket of ENC[...,type:comment]
+            # strings is recognised as one.
+            my $bucket = _adds_no_path_component($k, $path, $node->{$k}, $key);
+            push @$path, $k unless $bucket;
             # The read-side twin of _encrypt_tree's guard, and the whole of what
             # is left of docs/adr/0024's refusal. A comment leaf in a SEQUENCE
             # is read and kept (that is the only shape any sops store writes);
@@ -3428,7 +3534,7 @@ sub _decrypt_tree {
                    eq 'comment';
             $result{$k} = _decrypt_tree($node->{$k}, $key, $metadata, $path,
                 $depth);
-            pop @$path;
+            pop @$path unless $bucket;
         }
         return \%result;
     }
@@ -3959,6 +4065,12 @@ sub _detect_format {
     # answerable at all -- a plaintext .env and a plaintext .properties file
     # are the same bytes.
     return 'env' if File::SOPS::Format::ENV->detect_content($content);
+    # Asked AFTER env for the same reason env is asked after JSON: an ini
+    # document is recognised by a `[sops]` section, and a dotenv document is
+    # recognised by a `sops_` key, so neither can answer for the other -- but
+    # any `key: value` line scans as an ini pair, so this is the widest
+    # grammar of the three and goes last.
+    return 'ini' if File::SOPS::Format::INI->detect_content($content);
     return 'yaml';
 }
 
@@ -3968,6 +4080,7 @@ sub _detect_format_from_filename {
     return 'json' if $filename =~ /\.json$/i;
     return 'yaml' if $filename =~ /\.ya?ml$/i;
     return 'env'  if $filename =~ /\.env$/i;
+    return 'ini'  if $filename =~ /\.ini$/i;
     return 'yaml';
 }
 
@@ -3977,6 +4090,9 @@ sub _detect_format_from_filename {
 
 =item * L<File::SOPS::Format::ENV> - the dotenv format handler, its flat
 metadata section and its comment leaves
+
+=item * L<File::SOPS::Format::INI> - the INI format handler, its two-level tree
+and the section a comment belongs to
 
 =item * L<File::SOPS::Encrypted> - Encrypted value parsing and generation
 
