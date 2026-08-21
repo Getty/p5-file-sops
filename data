@@ -1,0 +1,30 @@
+---
+class: standard
+completed: 2026-08-21T06:47:28Z
+created: 2026-08-20T00:23:06Z
+id: 74
+priority: medium
+started: 2026-08-21T06:22:33Z
+status: done
+tags:
+- format
+- mac
+- roadmap
+- env
+- ini
+title: 'Order-preserving parse per format: _parse_in_document_order is YAML::PP-only'
+updated: 2026-08-21T06:47:28Z
+---
+
+Aufgesplittet aus karr #36 (36a) am 2026-08-20 auf Maintainer-Entscheidung. Voraussetzung fuer #36 UND #37, und das einzige Teilstueck, das die MAC-Verifikation betrifft.
+
+File::SOPS::_parse_in_document_order stellt die Schluesselreihenfolge eines Dokuments mit YAML::PP wieder her. YAML::PP kann eine env- oder ini-Datei gar nicht lesen. Fuer diese Formate faellt die Verifikation deshalb still auf sortierte Reihenfolge zurueck -- und eine env-Datei, die sops geschrieben hat, steht in DOKUMENTREIHENFOLGE. Jede Datei, deren Schluessel nicht ohnehin schon sortiert sind, scheitert damit an der Verifikation.
+
+Das ist keine Nacharbeit zum Parser, sondern eine Vorbedingung: ohne diesen Schritt kann kein ENV- und kein INI-Handler einen von sops geschriebenen MAC pruefen.
+
+Betrifft docs/adr/0001 (Emitter und MAC sind ein Mechanismus) -- die Aenderung gehoert dort begruendet.
+
+Eigenstaendiger Wert auch ohne ENV/INI: der Mechanismus ist heute an ein Format gebunden, das er nicht sein muesste.
+
+Lane: format, mit Uebergabe an wire sobald sich bewegt, was der Digest deckt -- was hier per Definition der Fall ist.
+ABGENOMMEN 2026-08-21. Commit 5ed2dc0, ADR 0036. Die Abnahme gilt vor allem dem BEWEIS: 63 verschluesselte Dokumente, 21 davon von sops 3.13.3 geschrieben, alle vor und nach dem Umbau in Dokumentreihenfolge wiederhergestellt, keines auf die sortierte Schiene gefallen, NULL bewegte Digests -- und 17 der 63 sind ordnungssensitiv, haetten eine kaputte Wiederherstellung also sichtbar gemacht. Die Vor-Aenderungs-Bibliothek wurde im Scratch rekonstruiert und reproduzierte die Baseline byte-genau, bevor sie als Referenz diente. Weil sich nichts bewegt hat, blieb die Arbeit in der Format-Lane -- das ist #74s eigene Uebergaberegel, per Messung angewandt statt per Behauptung. Ebenso wichtig: eine Format-Klasse ohne die Methode CROAKT, sie faellt nicht zurueck. Stilles Zurueckfallen ist genau der env/ini-Defekt, dessentwegen dieses Ticket existiert.
