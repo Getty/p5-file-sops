@@ -1,0 +1,31 @@
+---
+class: standard
+created: 2026-08-21T06:48:06Z
+id: 139
+priority: low
+status: backlog
+tags:
+- json
+- parser
+- unicode
+- mac
+title: A surrogate-pair escape in a JSON key splits the two decoders
+updated: 2026-08-21T06:48:06Z
+---
+
+Gemessen von der Format-Lane beim Abarbeiten von karr #74 (ADR 0036), sops 3.13.3. Vorbestehend, von #74 nur sichtbar gemacht.
+
+Ein Schluessel, der als Surrogatpaar escaped ist -- "\ud83d\ude00" -- wird von den beiden Decodern unterschiedlich gelesen:
+
+  Cpanel::JSON::XS  kombiniert zu U+1F600
+  YAML::PP          behaelt zwei einzelne Surrogate
+
+Der order-preserving Reparse aus ADR 0036 nimmt die REIHENFOLGE aus dem YAML::PP-Baum und die WERTE aus dem Cpanel-Baum. Bei so einem Schluessel finden sich die beiden nicht wieder.
+
+WARUM ES TROTZDEM low IST, und das ist gemessen: keiner der beiden Emitter schreibt diese Form -- beide legen Nicht-ASCII als UTF-8 auf die Leitung. Und wenn der Fall doch erreicht wird, ist das Ergebnis ein LAUTES 'present in the document but not in the parsed tree' mit Pfadangabe. Also eine falsche Ablehnung, nie ein falsches Durchgehen. Das ist die Richtung, in die ein Fehler in diesem Mechanismus fallen soll (siehe die Fail-safe-Eigenschaft in ADR 0001 und 0036).
+
+Erreichbar nur ueber ein handgeschriebenes oder von einem dritten Werkzeug erzeugtes JSON-Dokument.
+
+Zu klaeren, bevor jemand das anfasst: was macht sops selbst mit so einem Schluessel -- Gos encoding/json kombiniert Surrogatpaare, also steht zu vermuten, dass die Cpanel-Lesart die referenztreue ist und YAML::PP die abweichende. Das ist NICHT gemessen. Wer das Ticket nimmt, misst es zuerst.
+
+Format-Lane.
