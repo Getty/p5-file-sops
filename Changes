@@ -1415,6 +1415,38 @@ Revision history for File-SOPS
     making the write itself fail under RLIMIT_FSIZE 0 and looking at
     what is left, which is the only way to tell the fix from the bug:
     both leave a file behind.
+  - BUG FIX: a document that contains itself is now refused, naming the path
+    at which the cycle closes, where it used to HANG the process. YAML::XS
+    resolves a recursive anchor (`root: &a` / `  b: *a`) into a real Perl
+    cycle and hands it over, so all eight public entry points walked it
+    forever and never came back: encrypt, encrypt_file and encrypt_in_place
+    in the MAC's leaf collection, decrypt, decrypt_file, extract, rotate and
+    edit in the decrypt walk. Not a croak a caller could catch and not a
+    truncated result - no return at all, and a memory climb with it, which
+    for a document that arrived from somewhere the caller does not control
+    is resource exhaustion by a file. A caller who hands `encrypt` a
+    self-referential Perl structure of their own reached the same hang by a
+    different road and is refused by the same guard, with a message that
+    names both origins. Refusing is what the reference implementation does:
+    measured against sops 3.13.3, the same document is rejected in both
+    directions - `Error unmarshalling file: yaml: anchor 'a' value contains
+    itself` (exit 2) from sops -e, and `yaml: anchor 'a' value contains
+    itself` (exit 1) from sops -d - and the refusal comes AHEAD of the key,
+    since that document with no usable age identity still reports the cycle
+    rather than a failure to get the data key, so this one does too.
+    Terminating the walks with a visited set instead was rejected as the
+    worse answer: it would have written a file with the alias expanded once
+    and a MAC over a tree that is not the one the caller gave, quietly.
+    AN ANCHOR THAT IS MERELY REUSED IS UNAFFECTED and was never the problem
+    - sharing a subtree is ordinary YAML, sops accepts it and expands it to
+    independent ENC values, and so does this; only a container that is its
+    own ancestor is refused, so a diamond of 2**40 paths still passes, in
+    0.3ms. Nothing is written on the way out either: encrypt_in_place leaves
+    the original untouched and encrypt_file creates no output. Still open as
+    karr #112, and deliberately not fixed here: an ACYCLIC document that
+    shares aliases exponentially hangs the same walks, which sops refuses
+    separately with `yaml: document contains excessive aliasing`. See
+    docs/adr/0025 and karr #110.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

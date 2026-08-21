@@ -8,7 +8,7 @@ use Fcntl qw(O_CREAT O_EXCL O_WRONLY);
 use File::Basename qw(basename);
 use File::Spec;
 use File::Temp ();
-use Scalar::Util qw(blessed);
+use Scalar::Util qw(blessed refaddr);
 use Text::ParseWords qw(shellwords);
 use Digest::SHA qw(sha512);
 # Nothing below calls encode_json, decode_json or JSON(), and namespace::clean
@@ -629,6 +629,11 @@ sub encrypt {
     croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
     croak _sops_key_reserved('data') if exists $data->{sops};
 
+    # Before anything is generated or wrapped: a tree that contains itself has
+    # no document to write, and every walk below this point would recurse until
+    # the process died.
+    _assert_acyclic($data, [], {}, {});
+
     # Generate random 256-bit data key. The one CSPRNG in this distribution
     # lives next to the per-value nonce that shares its failure mode; see the
     # comment on File::SOPS::Encrypted::_random_bytes for why a short return
@@ -766,6 +771,53 @@ Dies if C<metadata> carries a rule this distribution cannot apply
 values by their comment -- neither parser here keeps comments, so every value
 would be classified wrongly).
 
+=head3 A structure that contains itself is refused
+
+B<New in 0.003.> C<data> must be a finite tree. A value that contains itself --
+a hash or array reachable from inside its own value -- is refused, naming the
+path at which the cycle closes:
+
+    my $h = { a => 1 };
+    $h->{self} = $h;
+    File::SOPS->encrypt(data => $h, recipients => \@r);
+    # dies: self: this value contains itself, so the document has no finite
+    #       set of values to encrypt or to hash. ...
+
+B<This used to hang.> Not die, not return a truncated document: the process did
+not come back, and no C<eval> could catch it. There are two roads to it and both
+are now refused at the same guard. The one above is a caller's own structure.
+The other is a document: L<YAML::XS> resolves a B<recursive anchor> into a real
+Perl cycle and hands it over, so
+
+    root: &a
+      b: *a
+
+hung L</encrypt_file> and L</encrypt_in_place> as well, and its encrypted
+counterpart hung L</decrypt>, L</decrypt_file>, L</extract>, L</rotate> and
+L</edit>. All eight now die instead.
+
+Refusing is what the reference implementation does. Measured against sops
+3.13.3, the document above is rejected in both directions --
+C<Error unmarshalling file: yaml: anchor 'a' value contains itself> (exit 2)
+from C<sops -e>, and C<yaml: anchor 'a' value contains itself> (exit 1) from
+C<sops -d>. There is also nothing else this could honestly do: such a document
+has no finite set of values, so it has no digest and no serialization, and
+terminating the walk early would have written a file whose contents and whose
+MAC describe a tree that is not the one it was given.
+
+B<An anchor that is merely reused is not affected> and never was. Sharing a
+subtree is ordinary YAML, sops accepts it and expands it -- C<base: &b> with
+C<other: *b> encrypts to two independent C<ENC[...]> values -- and so does this.
+Only a container that is its own ancestor is refused.
+
+Still B<not> guarded, and open as karr #112: a document that is acyclic but
+shares aliases exponentially expands into a tree with C<2**N> leaves and hangs
+the same walks. sops refuses that one too, separately
+(C<yaml: document contains excessive aliasing>).
+
+See karr #110 and
+L<docs/adr/0025|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0025-a-document-that-contains-itself-is-refused-not-walked.md>.
+
 =cut
 
 sub decrypt {
@@ -783,6 +835,13 @@ sub decrypt {
 
     # Parse the encrypted content
     my ($data, $metadata) = $format_class->parse($encrypted);
+
+    # Asked here, ahead of both the metadata check and the data key, because
+    # that is the order sops answers in: its unmarshalling error precedes
+    # everything, and a cyclic document with no usable identity reports the
+    # cycle rather than the missing key.
+    _assert_acyclic($data, [], {}, {});
+
     croak "No SOPS metadata found" unless $metadata;
 
     # Decrypt data key using age backend
@@ -896,6 +955,23 @@ document itself. See
 L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float>,
 karr #102 and
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
+
+=head3 A document that contains itself is refused
+
+B<New in 0.003.> A document carrying a B<recursive YAML anchor> -- one whose
+value is nested inside itself -- is refused here, before the data key is
+unwrapped, rather than hanging the process as it did until now. The check and
+the reasoning are the same in both directions and are described under
+L</A structure that contains itself is refused>.
+
+The refusal deliberately comes B<ahead> of the key: a cyclic document reports
+the cycle even when none of the C<identities> could have opened it. That is the
+order sops answers in, measured -- C<sops -d> on such a file with no age
+identity available reports C<yaml: anchor 'a' value contains itself>, not a
+failure to get the data key.
+
+C<ignore_mac> does not get past this. It suppresses verification, not the
+document's shape.
 
 =cut
 
@@ -2524,6 +2600,76 @@ sub _assert_rekeyable {
         . "silently dropped and the recipients behind them would lose access. "
         . "\u$words{verb} this file with the sops CLI, or, if losing them is "
         . "what you want, say so explicitly with decrypt followed by encrypt.";
+}
+
+# A container that is its own ancestor has no finite set of values, so there is
+# nothing to encrypt, nothing to hash and no document to write. Nothing
+# upstream of here stops one: the two YAML parsers this library uses disagree
+# about it, YAML::XS building the cycle and handing it over while YAML::PP
+# refuses the alias outright. So Format::YAML->parse returns a live Perl cycle,
+# and every walk below it -- _sorted_leaves, _encrypt_tree, _decrypt_tree,
+# _document_leaves -- recursed until the process was killed. A hang tells the
+# caller nothing, cannot be caught, and where the document came from outside is
+# resource exhaustion by a file. See karr #110 and docs/adr/0025.
+#
+# Refusing is what the reference implementation does, in BOTH directions.
+# Measured against sops 3.13.3 on `root: &a` / `  b: *a`:
+#
+#   sops -e -> Error unmarshalling file: yaml: anchor 'a' value contains itself
+#              (exit 2)
+#   sops -d -> yaml: anchor 'a' value contains itself   (exit 1)
+#
+# and the -d refusal comes out AHEAD of the key error -- the same document with
+# no age identity available still reports the cycle, not "Failed to get the
+# data key" -- which is why the decrypt side asks this before unwrapping the
+# data key rather than after.
+#
+# Terminating is not on its own an answer, which is why there is no visited set
+# in the walks instead. A walk that skipped the second visit would emit a
+# document with the alias expanded once and a digest taken over a tree that is
+# not the one the file describes: a wrong answer, quietly, which is the defect
+# class this layer keeps producing.
+#
+# The check is an ANCESTOR set, not a visited set, and that difference is the
+# whole guard. A plain visited set would also refuse a shared but ACYCLIC
+# subtree -- what an ordinary, non-recursive anchor builds -- and sops accepts
+# those and expands them: measured, `base: &b` / `  p: 1` / `other: *b`
+# encrypts to two independent ENC values and decrypts back to both. $active
+# holds the current path and is unwound on the way back up; $clean holds the
+# nodes already proven acyclic, so a diamond is walked once rather than once
+# per path through it.
+sub _assert_acyclic {
+    my ($node, $path, $active, $clean) = @_;
+
+    return 1 unless ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
+    my $addr = refaddr($node);
+    return 1 if $clean->{$addr};
+
+    croak _at_path($path, "this value contains itself, so the document has no "
+        . "finite set of values to encrypt or to hash. A YAML anchor nested "
+        . "inside its own value produces one, and so does a Perl structure "
+        . "passed to encrypt that refers back to itself. sops refuses the same "
+        . "document: \"yaml: anchor 'a' value contains itself\". An anchor that "
+        . "is merely reused is fine and is not this.")
+        if $active->{$addr};
+
+    $active->{$addr} = 1;
+
+    if (ref $node eq 'HASH') {
+        _assert_acyclic($node->{$_}, [@$path, $_], $active, $clean)
+            for sort keys %$node;
+    }
+    else {
+        # An array contributes no path component anywhere else in this library
+        # and does not gain one here just because this path is a diagnostic.
+        _assert_acyclic($_, $path, $active, $clean) for @$node;
+    }
+
+    delete $active->{$addr};
+    $clean->{$addr} = 1;
+
+    return 1;
 }
 
 sub _encryption_options {
