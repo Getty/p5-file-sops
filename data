@@ -1,0 +1,24 @@
+---
+class: standard
+completed: 2026-08-21T11:22:43Z
+created: 2026-08-21T08:38:00Z
+id: 149
+priority: low
+started: 2026-08-21T11:05:53Z
+status: done
+tags:
+- test
+title: t/40-comment-leaf-refused.t no longer refuses most of what it pins
+updated: 2026-08-21T11:22:43Z
+---
+
+Nach docs/adr/0041 (karr #76) pinnt t/40-comment-leaf-refused.t ueberwiegend das Gegenteil seines Dateinamens: ein Kommentar-Leaf in Sequenzposition wird ERHALTEN, nicht abgelehnt. Abgelehnt bleibt nur noch die Mapping-Value-Position und das Schreiben eines Kommentars als Klartext -- zwei von acht Subtests.
+
+Die Subtests selbst sind umgedreht und die Kopfzeile der Datei sagt jetzt, was
+sie pinnt. Was bleibt, ist der Name.
+
+VORSCHLAG: umbenennen nach t/40-comment-leaf-preserved.t (oder -kept). Nicht
+in karr #76 gemacht, weil dessen Dateigrenze das Umbenennen nicht vorsah und
+git in der Sitzung nicht benutzt werden durfte.
+
+Kein Verhalten betroffen, reine Lesbarkeit.
