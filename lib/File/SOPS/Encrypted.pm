@@ -275,31 +275,15 @@ sub encrypt_value {
     my $type     = $args{type}     // $class->detect_type($value);
 
     $value //= '';
-    $class->assert_representable($value);
 
-    # An ENCRYPTED slot carries `type:float` and the plaintext +Inf / -Inf /
-    # NaN, and no token at all -- the scalar's string half is not on the wire,
-    # so the gate assert_representable just applied says nothing about this
-    # document. Refused here, in both formats, because this method cannot tell
-    # them apart and only one of them works: measured against sops 3.13.3,
-    # twelve tokens plus three bare NVs in an encrypted slot, YAML `sops -d`
-    # exit 0 in every row and JSON exit 4 in every row (`Error marshaling to
-    # json: Error encoding value` -- Go cannot marshal a non-finite float64).
-    # Widening this needs the document format, which reaches neither this
-    # method nor assert_representable; filed as karr #122.
-    if (!ref($value) && _sv_kind($value) eq 'float') {
-        my $form = _non_finite_bytes($value);
-        croak "value is a non-finite float ($form) and an encrypted slot has "
-            . "no form for it that both implementations read: the wire would "
-            . "carry type:float and the plaintext $form, which sops decrypts "
-            . "and then cannot write out again in JSON (measured, `Error "
-            . "marshaling to json: unsupported value`, exit 4). A YAML "
-            . "document can carry such a value UNENCRYPTED, as the plain token "
-            . "go-yaml resolves to it; encrypted, store it as a string "
-            . "(type:str) instead, which is written verbatim and round-trips "
-            . "exactly through both."
-            if defined $form;
-    }
+    # THE SLOT, from the one place that cannot be wrong about it: this method
+    # exists to put a value in an encrypted slot, so every value it is handed
+    # is in one. That is what lets assert_representable stop asking about a
+    # non-finite float here -- an encrypted slot's wire form for one is
+    # type:float plus the plaintext Go's strconv.FormatFloat writes, which is
+    # what sops itself puts in BOTH formats, so the scalar's string half plays
+    # no part and there is nothing left to refuse. See docs/adr/0040.
+    $class->assert_representable($value, encrypted => 1);
 
     my $plaintext = $class->value_to_bytes($value, $type);
 
@@ -372,16 +356,19 @@ SOPS implementation does (see L</value_to_bytes>).
 Dies if the value is one no SOPS document can carry -- today, an integer wider
 than Go's C<int64>. See L</assert_representable>.
 
-Dies as well for a B<non-finite float> (C<NaN>, C<+Inf>, C<-Inf>), including the
-one shape L</assert_representable> now lets through: an encrypted slot carries
-C<type:float> and the plaintext C<+Inf>, and no token, so the string half that
-makes such a scalar writable in an B<unencrypted> YAML slot says nothing about
-this document. Measured against sops 3.13.3, encrypted slot, twelve tokens and
-three bare values: YAML is C<sops -d> exit 0 in every row and JSON is exit 4 in
-every row (C<Error marshaling to json: Error encoding value> -- Go cannot
-marshal a non-finite C<float64>). This method cannot tell the two formats
-apart, so it refuses both, which is the behaviour every release has had; karr
-#122 is where the YAML half is open.
+A B<non-finite float> (C<NaN>, C<+Inf>, C<-Inf>) B<is written>, in both
+formats, as C<type:float> and the plaintext L</value_to_bytes> derives from the
+number. That is what C<sops -e> stores for a plain C<.inf>, C<-.inf> or C<.nan>
+-- measured against sops 3.13.3, six documents, C<--output-type yaml> and
+C<--output-type json> alike, exit 0 with C<type:float> on the wire in both.
+Every release before this one refused it here. See L</assert_representable>,
+karr #122 and
+L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
+
+This method passes C<encrypted =E<gt> 1> to L</assert_representable>, which it
+may because it B<is> the encrypted slot. The one non-finite shape still refused
+is a scalar that states a string half contradicting its number, which an
+encrypted slot would drop without a trace.
 
 Dies if the value's plaintext is B<empty> (which includes C<undef>). GCM
 ciphertext is the length of its plaintext, so the result would be an
@@ -873,7 +860,7 @@ sub _carries_go_non_finite_token {
 }
 
 sub assert_representable {
-    my ($class, $value) = @_;
+    my ($class, $value, %args) = @_;
     return 1 unless defined $value;
 
     # karr #67: an unblessed reference in an encrypted slot would be
@@ -927,8 +914,40 @@ sub assert_representable {
     # Reading is unaffected -- a type:float plaintext of +Inf or NaN is accepted
     # by _deserialize_value today (karr #59's request, and Go writes it) and
     # stays accepted: assert_representable is encrypt-side only.
+    #
+    # NARROWED AGAIN for karr #122 / docs/adr/0040, and this time by SLOT. All
+    # of the above is about a leaf the DOCUMENT carries as a token, which is
+    # the unencrypted slot and nothing else. An encrypted slot carries
+    # type:float and the plaintext value_to_bytes writes, in both formats, and
+    # measured against sops 3.13.3 that is exactly what `sops -e` puts there --
+    # `--output-type json` included, exit 0. So the emitters' inability to
+    # spell the number says nothing about that slot, and the leaf is written.
+    # The caller supplies the slot; the two that do are encrypt_value, which is
+    # the encrypted slot by construction, and File::SOPS::_compute_mac's leaf
+    # sweep, which asks the encryption rules.
+    #
+    # What stays refused in an encrypted slot is a scalar that STATES a string
+    # half contradicting its number -- dualvar(+Inf, 'banana'), and the JSON
+    # literal of 400 zeros whose text is its digits (docs/adr/0020). The wire
+    # is derived from the number, so that text would be dropped without a
+    # trace, and choosing between a scalar's two halves is the guess
+    # docs/adr/0012 refuses to make.
     if (_sv_kind($value) eq 'float') {
         my $form = _non_finite_bytes($value);
+
+        croak "value is a non-finite float ($form) that also states a string "
+            . "half of its own, and an encrypted slot carries only one of "
+            . "them: the wire holds type:float and the plaintext $form, "
+            . "derived from the NUMBER, so the text beside it would be "
+            . "dropped without a trace. Which half you meant is yours to say "
+            . "and this library does not guess -- the same answer an integer "
+            . "whose two halves disagree gets. Pass the number on its own to "
+            . "store it as a float, which is what sops writes for the same "
+            . "value; or pass the text as a string (type:str), which is "
+            . "written verbatim and round-trips exactly through both."
+            if $args{encrypted} && defined $form && _has_public_pv($value)
+            && !_carries_go_non_finite_token($value, $form);
+
         croak "value is a non-finite float ($form) and no SOPS document can "
             . "carry it: the JSON emitter writes it as null, the YAML emitter "
             . "writes a bare Inf / -Inf / NaN, which Go's yaml.v3 resolves as "
@@ -943,7 +962,8 @@ sub assert_representable {
             . "is a Scalar::Util::dualvar and is what parsing a sops-written "
             . "document hands back here. Then it is written and read as a "
             . "float by both."
-            if defined $form && !_carries_go_non_finite_token($value, $form);
+            if !$args{encrypted} && defined $form
+            && !_carries_go_non_finite_token($value, $form);
     }
 
     return 1 unless _sv_kind($value) eq 'int';
@@ -1003,10 +1023,22 @@ sub assert_representable {
 =method assert_representable
 
     File::SOPS::Encrypted->assert_representable($value);
+    File::SOPS::Encrypted->assert_representable($value, encrypted => 1);
 
 Class method. Dies if C<$value> is something no SOPS document can carry, and
 returns true otherwise. Called for every leaf L<File::SOPS/encrypt> is about to
 write -- encrypted or not -- before anything is emitted.
+
+C<encrypted> says which slot the leaf is going into, and defaults to false,
+which is the stricter answer. It changes exactly one of the checks below, the
+non-finite float: an encrypted slot's wire form for one is C<type:float> and
+the plaintext L</value_to_bytes> writes, which is what C<sops -e> stores in
+B<both> formats, so the emitters' inability to spell the number says nothing
+about that slot. The two callers inside this distribution supply it from what
+they structurally know -- L</encrypt_value> is the encrypted slot, and
+L<File::SOPS>'s MAC sweep asks
+L<File::SOPS::Metadata/should_encrypt_path>. See
+L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 There are three such values today:
 
@@ -1059,9 +1091,18 @@ to sops, and a C<dualvar(+Inf, 'banana')> would put a document on disk that
 fails its own MAC. This check is a B<gate>: whether the document being
 written can really carry the token is answered where the format is known, by
 the foreign-resolution guard C<docs/adr/0013> installs in the YAML handler.
-A JSON document has no such spelling in either slot (measured, C<sops -d>
-exit 51 unencrypted and exit 4 encrypted) and is refused, as is B<every>
-non-finite float in an encrypted slot -- see L</encrypt_value> and karr #122.
+A JSON document has no such spelling in an unencrypted slot (measured,
+C<sops -d> exit 51) and is refused there.
+
+B<Everything in this item is about the UNENCRYPTED slot>, which is the only
+one whose leaf reaches the document as a token. With C<encrypted =E<gt> 1>
+the value is written instead: the wire carries C<type:float> and the
+plaintext C<+Inf> / C<-Inf> / C<NaN>, in both formats, which is what
+C<sops -e> writes for the same value (karr #122, C<docs/adr/0040>). The one
+exception is a scalar that B<states> a string half its number contradicts --
+C<dualvar(+Inf, 'banana')>, or the JSON literal of 400 zeros whose text is
+its digits -- because the encrypted slot is derived from the number and that
+text would be dropped without a trace.
 
 Store the value as a B<string> instead where none of that applies -- that is
 C<type:str>, written verbatim, and the same number (or its deliberate

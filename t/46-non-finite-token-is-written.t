@@ -34,11 +34,13 @@ use Crypt::Age;
 #   * section 2 is the contradiction -- dualvar(+Inf, '-.inf') and friends.
 #     Both halves have to agree, the same rule ADR 0012 gives an integer.
 #   * section 3 is the bare NV, refused exactly as before.
-#   * section 5 is JSON, which has no spelling for a non-finite float in
-#     EITHER slot (measured, sops -d exit 51 unencrypted and exit 4
-#     encrypted). assert_representable is format-blind, so keeping JSON out is
+#   * section 5 is JSON, which has no spelling for a non-finite float in an
+#     UNENCRYPTED slot (measured, sops -d exit 51).
+#     assert_representable is format-blind, so keeping JSON out is
 #     a separate mechanism, and karr #62 is what happens when it is forgotten.
-#   * section 4 is the encrypted slot, refused in both formats (karr #122).
+#   * section 4 is the encrypted slot, which since karr #122 / docs/adr/0040
+#     carries the value in both formats -- as type:float and the plaintext
+#     derived from the number, with no token on the wire at all.
 #
 # Sections 1 to 7 need no binary. Section 8 is the compatibility claim and is
 # skipped without one.
@@ -174,59 +176,87 @@ subtest 'a bare non-finite float is still refused' => sub {
     ok(defined refuses($printed), 'and so is one that was only stringified');
 };
 
-subtest 'a bare non-finite float is refused in every slot and format' => sub {
+# The slot half of this claim moved with karr #122 / docs/adr/0040: an
+# ENCRYPTED slot carries a bare non-finite float as type:float and the
+# plaintext +Inf, which is what `sops -e` writes in both formats. The
+# UNENCRYPTED slot -- the one this whole file is about, and the only one whose
+# leaf reaches the document as a token -- is unchanged in both formats.
+subtest 'a bare non-finite float is refused in the unencrypted slot, both formats'
+    => sub {
     my ($public) = Crypt::Age->generate_keypair();
     for my $format (qw( yaml json )) {
-        for my $slot (qw( v_unencrypted v )) {
-            my $ok = eval {
-                File::SOPS->encrypt(
-                    data       => { keep => 'x', $slot => $INF },
-                    recipients => [$public],
-                    format     => $format,
-                );
-                1;
-            };
-            ok(!$ok, "[$format/$slot] encrypt refuses a bare +Inf");
-            like($@, qr/non-finite float/, "[$format/$slot] from the guard");
-        }
+        my $ok = eval {
+            File::SOPS->encrypt(
+                data       => { keep => 'x', v_unencrypted => $INF },
+                recipients => [$public],
+                format     => $format,
+            );
+            1;
+        };
+        ok(!$ok, "[$format] encrypt refuses a bare +Inf, unencrypted");
+        like($@, qr/non-finite float/, "[$format] from the guard");
+
+        my $document = eval {
+            File::SOPS->encrypt(
+                data       => { keep => 'x', v => $INF },
+                recipients => [$public],
+                format     => $format,
+            );
+        };
+        ok($document, "[$format] and writes it in an encrypted slot") or diag($@);
+        like($document // '', qr/type:float/,
+            "[$format] as type:float (karr #122)");
     }
 };
 
 ###############################################################################
-# 4. THE ENCRYPTED SLOT IS NOT PART OF THIS. It carries type:float and the
-#    plaintext +Inf, and no token at all -- so the gate says nothing about it,
-#    and the two formats disagree (YAML sops -d exit 0, JSON exit 4) where
-#    encrypt_value cannot tell them apart. karr #122.
+# 4. THE ENCRYPTED SLOT IS NOT PART OF THIS -- it carries type:float and the
+#    plaintext +Inf, and no token at all, so the gate this file is about says
+#    nothing about it either way.
+#
+#    It USED to be refused here, on the premise that the two formats disagree
+#    about it (YAML sops -d exit 0, JSON exit 4). karr #122 / docs/adr/0040
+#    re-measured that: `sops -e --output-type json` writes such a document
+#    itself, at exit 0, and both wire formats read back at exit 0 under
+#    --output-type yaml. The disagreement is between OUTPUT formats. So the
+#    leaf is written, in both, and what this section pins now is that the
+#    TOKEN plays no part in it -- the same bytes reach the wire whether the
+#    scalar carries one or not.
 ###############################################################################
 
-subtest 'an encrypted slot still refuses every non-finite float' => sub {
+subtest 'an encrypted slot writes every non-finite float, token or not' => sub {
     my ($public) = Crypt::Age->generate_keypair();
     for my $format (qw( yaml json )) {
         for my $token ('.inf', '-.inf', '.nan') {
-            my $ok = eval {
+            my $document = eval {
                 File::SOPS->encrypt(
                     data       => { keep => 'x', v => token_leaf($token) },
                     recipients => [$public],
                     format     => $format,
                 );
-                1;
             };
-            ok(!$ok, "[$format/$token] encrypt refuses it in an encrypted slot");
-            like($@, qr/encrypted slot/,
-                "[$format/$token] and says it is about the slot");
+            ok($document, "[$format/$token] encrypt writes it") or do {
+                diag($@); next };
+            like($document, qr/type:float/,
+                "[$format/$token] as type:float");
         }
     }
 };
 
-subtest 'encrypt_value refuses it directly, format-blind' => sub {
+subtest 'encrypt_value writes it directly, and the token is not on the wire'
+    => sub {
     my $key = "\0" x 32;
+    my %expected = ('.inf' => '+Inf', '-.inf' => '-Inf', '.nan' => 'NaN');
+
     for my $token ('.inf', '-.inf', '.nan') {
-        my $ok = eval {
+        my $enc = eval {
             File::SOPS::Encrypted->encrypt_value(
                 value => token_leaf($token), key => $key, aad => 'v:');
-            1;
         };
-        ok(!$ok, "[$token] encrypt_value refuses it");
+        ok($enc, "[$token] encrypt_value writes it") or do { diag($@); next };
+        is($enc->type, 'float', "[$token] as type:float");
+        is($enc->decrypt_bytes(key => $key, aad => 'v:'), $expected{$token},
+            "[$token] with the plaintext derived from the NUMBER");
     }
 };
 

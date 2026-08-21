@@ -25,6 +25,34 @@ Revision history for File-SOPS
     for 15 of the 22. See docs/adr/0039 and karr #135, which stays open on the
     emitter that could quote a scalar (karr #99) and the parse that would tell
     the two sources apart (karr #127).
+  - BUG FIX and BEHAVIOUR CHANGE: a non-finite float (`.inf`, `-.inf`, `.nan`)
+    in an ENCRYPTED slot is now written, in YAML and in JSON alike, as the
+    `type:float` and the plaintext `+Inf` / `-Inf` / `NaN` that `sops -e`
+    itself stores for the same value. Every release before this one refused it,
+    so `rotate`, `edit`, `decrypt_file` -> `encrypt_file` and `decrypt` ->
+    `encrypt` all croaked on a document sops writes by default and reads at
+    exit 0 - twelve of twelve measured rows. The refusal's stated reason was
+    that the two formats disagree about such a document; re-measured against
+    sops 3.13.3, they do not. `sops -e --output-type json` writes a JSON wire
+    document carrying `type:float` at exit 0, and BOTH wire formats read back
+    at exit 0 under `--output-type yaml` and at exit 4 under `--output-type
+    json`. The disagreement is between OUTPUT formats, which is not a property
+    of the document being written, and Go's JSON marshaller refuses at the dump
+    - after decrypting and after verifying the MAC. THE UNENCRYPTED SLOT DOES
+    NOT MOVE: a bare non-finite float is still refused there, in both formats,
+    and so is a scalar whose stated string half contradicts its number
+    (`dualvar(+Inf, 'banana')`, or a JSON literal of 400 zeros whose text is
+    its digits), in EITHER slot - an encrypted slot is derived from the number
+    and would drop that text without a trace. `File::SOPS::Encrypted`'s
+    `assert_representable` takes a new `encrypted` argument for this, which
+    defaults to the stricter answer, so a caller calling it directly sees no
+    change. This closes the round trip ADR 0037 left one rung short: `edit` of
+    a YAML document with such a leaf now SAVES, where it corrupted before that
+    change and refused after it. It also closes karr #114 - all twelve
+    `%GO_CONSTANT` spellings in an encrypted slot of a plaintext now encrypt to
+    the same `type:float` sops gives them, where this library wrote a
+    `type:str`, 12 of 12 identical to sops's own document. See docs/adr/0040
+    and karr #122.
   - BUG FIX and BEHAVIOUR CHANGE: a non-finite float in an ENCRYPTED slot no
     longer loses its float-ness, silently, on a plaintext round trip. `sops -e`
     stores a `.inf` as a `type:float` whose plaintext is `+Inf`; decrypting

@@ -268,27 +268,44 @@ subtest 'the sops section is split off before the walk runs' => sub {
 };
 
 ###############################################################################
-# 4. THE GUARD FROM karr #59 IS UNTOUCHED. This change removes an artefact of
-#    the parser; it does not loosen a rule about values. A caller who hands
-#    encrypt() a real non-finite float still gets the refusal.
+# 4. THE GUARD FROM karr #59 IS UNTOUCHED WHERE IT IS ABOUT THIS WALK. This
+#    change removes an artefact of the parser; it does not loosen a rule about
+#    values, and a caller who hands encrypt() a real non-finite float still
+#    gets the refusal in the slot that walk writes into -- the UNENCRYPTED one.
+#
+#    karr #122 / docs/adr/0040 narrowed the guard by SLOT: an encrypted slot
+#    carries type:float and the plaintext +Inf, which is what `sops -e` writes
+#    in both formats, so the same value is written there. That is the other
+#    half of the pair, and it is asserted here rather than dropped, because
+#    what this section is really pinning is that the two answers are about the
+#    SLOT and not about this walk.
 ###############################################################################
 
-subtest 'a real non-finite float is still refused' => sub {
+subtest 'a real non-finite float is refused in the slot this walk writes' => sub {
     my $inf = 9**9**9;
     my @values = ( [ '+Inf', $inf ], [ '-Inf', -$inf ], [ 'NaN', $inf - $inf ] );
 
     for my $case (@values) {
         my ($name, $value) = @$case;
-        for my $key (qw( v v_unencrypted )) {
-            my $out = eval { File::SOPS->encrypt(
-                data       => { $key => $value, keep => 'x' },
-                recipients => [$public],
-                format     => 'yaml',
-            ) };
-            ok(!defined $out, "[$name in $key] refused");
-            like($@, qr/\Qvalue is a non-finite float\E/,
-                "[$name in $key] with the karr #59 message");
-        }
+
+        my $unencrypted = eval { File::SOPS->encrypt(
+            data       => { v_unencrypted => $value, keep => 'x' },
+            recipients => [$public],
+            format     => 'yaml',
+        ) };
+        ok(!defined $unencrypted, "[$name in v_unencrypted] refused");
+        like($@, qr/\Qvalue is a non-finite float\E/,
+            "[$name in v_unencrypted] with the karr #59 message");
+
+        my $encrypted = eval { File::SOPS->encrypt(
+            data       => { v => $value, keep => 'x' },
+            recipients => [$public],
+            format     => 'yaml',
+        ) };
+        ok(defined $encrypted, "[$name in v] written, as sops writes it")
+            or diag($@);
+        like($encrypted // '', qr/^v: ENC\[[^\n]*type:float\]$/m,
+            "[$name in v] as type:float (karr #122)");
     }
 };
 

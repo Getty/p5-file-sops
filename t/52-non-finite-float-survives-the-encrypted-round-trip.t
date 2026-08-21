@@ -43,7 +43,10 @@ use Crypt::Age;
 # NOT move: a non-finite float that carries a string half of its own keeps it,
 # whatever it says, so `dualvar(+Inf, 'banana')` is not overwritten on the
 # strength of the number beside it, and nothing a caller can build becomes
-# writable to a MAC-covered document that was not writable before.
+# writable to an UNENCRYPTED slot that was not writable before. (The encrypted
+# slot did move, one ticket later: karr #122 / docs/adr/0040, which is a
+# decision about that slot's bytes and not about this walk, which never sees
+# an encrypted leaf at all.)
 #
 # Sections 1 to 5 need no binary; sections 6 to 9 are the compatibility claim
 # and are skipped without one.
@@ -292,10 +295,10 @@ subtest 'a stated string half is never overwritten' => sub {
 };
 
 ###############################################################################
-# 5. WHAT MUST NOT MOVE, part two: the encrypt path. Nothing a caller can
-#    construct becomes writable to a MAC-covered document that was not writable
-#    before -- assert_representable runs first, from _compute_mac's leaf sweep,
-#    and this change does not touch it.
+# 5. WHAT MUST NOT MOVE, part two: the encrypt path into an UNENCRYPTED slot.
+#    Nothing a caller can construct becomes writable there that was not
+#    writable before -- assert_representable runs first, from _compute_mac's
+#    leaf sweep, and neither this change nor karr #122's touches that answer.
 ###############################################################################
 
 subtest 'the encrypt path answers exactly as it did' => sub {
@@ -333,14 +336,24 @@ subtest 'the encrypt path answers exactly as it did' => sub {
     }
 };
 
-subtest 'and an encrypted slot is still refused, in both formats' => sub {
+# karr #122 / docs/adr/0040: the encrypted slot is no longer refused. It never
+# had a token on its wire in the first place -- it carries type:float and the
+# plaintext derived from the number, which is what `sops -e` writes in both
+# formats -- so nothing this ADR decided applies to it either way. What is
+# asserted here is that this file's own change did not reach into that slot:
+# the leaf goes in as a number and comes back out as one.
+subtest 'and an encrypted slot carries it, in both formats' => sub {
     for my $fmt (qw( yaml json )) {
-        my $err = error_from(sub {
+        my $document = eval {
             File::SOPS->encrypt(data => { secret => $INF },
                 recipients => [$public], format => $fmt);
-        });
-        ok($err, "[$fmt] refused");
-        like($err, qr/\bsecret\b/, "[$fmt] naming the key path");
+        };
+        ok($document, "[$fmt] written") or do { diag($@); next };
+        like($document, qr/type:float/, "[$fmt] as type:float");
+
+        my $back = File::SOPS->decrypt(encrypted => $document,
+            identities => [$secret], format => $fmt);
+        ok($back->{secret} == $INF, "[$fmt] and it reads back as the same double");
     }
 };
 
@@ -395,14 +408,16 @@ SKIP: {
     };
 
 ###############################################################################
-# 7. `edit` NO LONGER RETYPES IT SILENTLY. The round trip does not CLOSE yet --
-#    encrypt_value still refuses a non-finite float in an encrypted slot
-#    (karr #122) -- so what this pins is that the corruption became a refusal
-#    that names the key path and leaves the file alone. `sops edit`'s answer is
-#    measured beside it, because that is the row karr #122 has to reach.
+# 7. `edit` NO LONGER RETYPES IT SILENTLY -- and since karr #122 /
+#    docs/adr/0040 it no longer refuses either. This change wrote the token
+#    into the plaintext, which is the half that made the round trip possible;
+#    karr #122 removed the rung above it, so the leaf now goes back into the
+#    encrypted slot as the float it always was. `sops edit`'s answer is
+#    measured beside it, unchanged: it was the row karr #122 had to reach, and
+#    the next subtest is where the two are compared.
 ###############################################################################
 
-    subtest 'edit refuses instead of retyping, and leaves the wire alone' => sub {
+    subtest 'edit saves, and the untouched leaf is still a type:float' => sub {
         for my $case (@NON_FINITE) {
             my $token = $case->{token};
             my $dir = scratch();
@@ -416,20 +431,21 @@ SKIP: {
                 File::SOPS->edit(file => "$dir/ours.yaml",
                     identities => [$secret]);
             };
-            my $err = $@;
+            ok($rewritten, "[$token] edit saves the change") or do {
+                diag($@); next };
 
-            ok(!defined $rewritten, "[$token] edit refuses the document");
-            like($err, qr/\bsecret\b/, "[$token] naming the key path");
-
-            is(scalar read_file("$dir/ours.yaml"), $enc,
-                "[$token] and the file on disk is untouched");
             like(scalar read_file("$dir/ours.yaml"),
                 qr/^secret: ENC\[.*type:float\]$/m,
                 "[$token] still a type:float, not silently a type:str");
+
+            my $out = `$sops_bin -d --output-type yaml $dir/ours.yaml 2>&1`;
+            is($? >> 8, 0, "[$token] sops -d exit 0") or diag($out);
+            like($out, qr/^secret: \Q$token\E$/m,
+                "[$token] and the leaf is the token sops put there");
         }
     };
 
-    subtest 'sops edit, beside it, is what karr #122 has to reach' => sub {
+    subtest 'sops edit, beside it, gives the same answer' => sub {
         for my $case (@NON_FINITE) {
             my $token = $case->{token};
             my $dir = scratch();

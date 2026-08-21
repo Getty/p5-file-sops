@@ -183,28 +183,36 @@ subtest 'a plaintext this library emitted parses back to what it emitted' => sub
 };
 
 ###############################################################################
-# 3. THE ENCRYPTED SLOT IS REFUSED, AND SAYS SO. The deliberate cost of this
-#    change: a bare token under a key that gets encrypted used to be written as
-#    a type:str holding `.inf`, where `sops -e` writes a type:float. A working
-#    file whose value had silently stopped being a number. It is refused now --
-#    loudly, naming the key path -- until karr #122 gives encrypt_value the
-#    format it needs. Pinned so that fix flips it visibly rather than silently.
+# 3. THE ENCRYPTED SLOT IS WRITTEN AS THE TYPE sops GIVES IT. This used to be
+#    the deliberate cost of this change: a bare token under a key that gets
+#    encrypted was written as a type:str holding `.inf`, where `sops -e` writes
+#    a type:float -- a working file whose value had silently stopped being a
+#    number -- and ADR 0034 turned that into a refusal, pinned here so the fix
+#    would flip it visibly. karr #122 / docs/adr/0040 is that fix: the parse
+#    hands the leaf over as the float it is, and an encrypted slot carries one.
+#    So the two halves of this file's repair now meet, and the row is the third
+#    answer rather than either of the first two.
 ###############################################################################
 
-subtest 'an encrypted slot is refused, naming the key path' => sub {
+subtest 'an encrypted slot is written as the type:float sops gives it' => sub {
     for my $token (sort keys %SOPS_WRITES) {
         my $dir = scratch();
         write_file("$dir/p.yaml", "secret: $token\nkeep_unencrypted: 1\n");
 
-        my $err = error_from(sub {
+        my $ok = eval {
             File::SOPS->encrypt_file(input      => "$dir/p.yaml",
                                      output     => "$dir/e.yaml",
                                      recipients => [$public]);
-        });
-        ok($err, "[$token] refused in an encrypted slot");
-        like($err, qr/\bsecret\b/, "[$token] and the message names the key");
-        like($err, qr/non-finite float/, "[$token] and says what it is");
-        ok(!-e "$dir/e.yaml", "[$token] and no file was written");
+            1;
+        };
+        ok($ok, "[$token] written in an encrypted slot") or do {
+            diag($@); next };
+
+        my $document = scalar read_file("$dir/e.yaml");
+        like($document, qr/^secret: ENC\[.*type:float\]$/m,
+            "[$token] as type:float, which is what sops writes");
+        unlike($document, qr/^secret: ENC\[.*type:str\]$/m,
+            "[$token] and not as the type:str it was before ADR 0034");
     }
 };
 
@@ -457,17 +465,18 @@ SKIP: {
 #    is `+Inf` has no token of its own to carry: the emitter wrote a bare `Inf`,
 #    which go-yaml reads as a STRING, so the leaf came back from the editor
 #    retyped -- silently. This subtest pinned that defect so the fix would flip
-#    it visibly instead of quietly, and karr #134 / docs/adr/0037 is the fix:
-#    the emitter now writes the token, and `edit` REFUSES rather than retyping,
-#    because encrypt_value still will not put a non-finite float in an encrypted
-#    slot (karr #122). `sops edit` is measured beside it, unchanged: it keeps
-#    the leaf a type:float, which is the row karr #122 has to reach.
+#    it visibly instead of quietly. karr #134 / docs/adr/0037 made the emitter
+#    write the token and turned the retyping into a refusal; karr #122 /
+#    docs/adr/0040 removed the last rung, so `edit` now SAVES, and the leaf it
+#    never touched is still a type:float. `sops edit` is measured beside it,
+#    unchanged throughout: that was the row karr #122 had to reach, and this
+#    subtest is where the two answers are compared.
 #
-#    The full corpus for this lives in t/52; what stays here is the row this
-#    file measured, in the direction it now goes.
+#    The full corpus for this lives in t/52 and t/54; what stays here is the
+#    row this file measured, in the direction it now goes.
 ###############################################################################
 
-    subtest 'an ENCRYPTED non-finite float is no longer retyped by edit (karr #134)' => sub {
+    subtest 'an ENCRYPTED non-finite float survives edit (karr #134, karr #122)' => sub {
         my $dir = scratch();
         my ($status, $enc) =
             $encrypt_with_sops->($dir, "secret: .inf\nkeep: x\n");
@@ -482,24 +491,26 @@ SKIP: {
         my $rewritten = eval {
             File::SOPS->edit(file => "$dir/ours.yaml", identities => [$secret]);
         };
-        my $err = $@;
-        ok(!defined $rewritten, 'edit refuses the document instead of rewriting it');
-        like($err, qr/\bsecret\b/, 'naming the key path');
+        ok($rewritten, 'edit saves the change instead of refusing') or diag($@);
 
-        is(scalar read_file("$dir/ours.yaml"), $enc, 'the file is untouched');
         like(scalar read_file("$dir/ours.yaml"),
             qr/^secret: ENC\[.*type:float\]$/m,
-            'and the leaf is still a type:float, not silently a type:str');
+            'and the leaf it never touched is still a type:float');
+        unlike(scalar read_file("$dir/ours.yaml"),
+            qr/^secret: ENC\[.*type:str\]$/m,
+            'not silently a type:str, which is the defect karr #134 named');
 
         my $out = `$sops_bin -d --input-type yaml --output-type yaml $dir/ours.yaml 2>&1`;
         is($? >> 8, 0, 'the file is still perfectly readable') or diag($out);
         like($out, qr/^secret: \.inf$/m, 'and still states the float it held');
+        # sops quotes a bare `y`, which YAML 1.1 would read as a boolean.
+        like($out, qr/^keep: "?y"?$/m, 'with the edit applied');
 
         my $theirs = `$sops_bin edit $dir/theirs.yaml 2>&1`;
         is($? >> 8, 0, 'sops edit on the same document') or diag($theirs);
         like(scalar read_file("$dir/theirs.yaml"),
             qr/^secret: ENC\[.*type:float\]$/m,
-            'keeps it a type:float -- which is what karr #122 has to reach');
+            'keeps it a type:float -- the same answer we now give');
     };
 }
 

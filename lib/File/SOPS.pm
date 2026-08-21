@@ -395,22 +395,31 @@ what Go digests, reads it, and L</decrypt_file> writes it out with the same
 normalisation C<sops -d> writes. Measured against sops 3.13.3 on both sides.
 
 Three things around these windows are still B<refused> rather than written --
-the magnitude above them wherever a real non-finite double reaches the tree,
-one whole format, and one kind of caller -- and a caller meeting a wide number
-should know where all three are.
+the magnitude above them where a real non-finite double reaches an unencrypted
+slot or states its own text, one whole format, and one kind of caller -- and a
+caller meeting a wide number should know where all three are.
 
 A literal that overflows a double -- C<1> followed by 400 zeros -- B<dies> in
 L<File::SOPS::Encrypted/assert_representable>'s non-finite guard wherever it
 reaches the tree as a real non-finite double, on every path that B<writes> the
 value: L</encrypt>, L</encrypt_file>, L</encrypt_in_place>, L</rotate> and
-L</edit>. That is a caller's own C<9**9**9>, and it is any B<JSON> document,
-where L<Cpanel::JSON::XS> returns a bare C<Inf> and the digits are gone before
-anything here sees them. In JSON it is not an extra restriction of ours -- sops
-refuses the same document itself and never reaches a type: C<sops -e> stops at
+L</edit>. That is any B<JSON> document, where L<Cpanel::JSON::XS> returns
+C<+Inf> carrying the literal's own digits as its string half -- and it is that
+B<stated text> the guard refuses, in either slot, because an encrypted slot is
+derived from the number and would drop it without a trace. In JSON it is not an
+extra restriction of ours -- sops refuses the same document itself and never
+reaches a type: C<sops -e> stops at
 C<Error unmarshalling file: [...] strconv.ParseFloat: value out of range>, exit
 2, in an encrypted and an unencrypted slot alike, and C<sops -d> stops with the
 same message, exit 1, on a document hand-edited to carry one. Measured against
 sops 3.13.3.
+
+A caller's own bare C<9**9**9> states nothing, and it is refused in an
+B<unencrypted> slot only. In an B<encrypted> one it is now written, as
+C<type:float> and the plaintext C<+Inf>, which is what C<sops -e> stores for
+the same value in both formats. See
+L<File::SOPS::Encrypted/assert_representable>, karr #122 and
+L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 B<In YAML that literal is not refused any more, because it is not a number
 there.> Since 0.003 L<File::SOPS::Format::YAML/parse> hands back the string
@@ -3250,9 +3259,20 @@ sub _compute_mac {
     # encrypt_value would miss exactly those, and doing it in value_to_bytes
     # would also reject legitimate sops documents on the READ side, where the
     # same walk is used to verify.
+    # THE SLOT goes with the leaf, because one of the questions
+    # assert_representable answers depends on it: an ENCRYPTED slot's wire form
+    # for a non-finite float is type:float and the plaintext Go's
+    # strconv.FormatFloat writes, which is what `sops -e` produces in both
+    # formats, while an UNENCRYPTED one has only the plain YAML token go-yaml
+    # resolves -- and no token at all in JSON. This walk is where that
+    # difference is knowable at all: the encryption rules live in the metadata,
+    # and by the time the emitters run an encrypted leaf is an ENC[...] string.
+    # The same predicate _encrypt_tree encrypts by, asked of the same path.
+    # See docs/adr/0040 and karr #122.
     for my $leaf (@$leaves) {
         my ($path, $value) = @$leaf;
-        eval { File::SOPS::Encrypted->assert_representable($value); 1 }
+        eval { File::SOPS::Encrypted->assert_representable($value,
+                   encrypted => $metadata->should_encrypt_path($path)); 1 }
             or croak _at_path($path, $@);
     }
 
