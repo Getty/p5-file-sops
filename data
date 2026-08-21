@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-08-21T10:43:39Z
+created: 2026-08-21T10:34:12Z
+id: 162
+priority: high
+started: 2026-08-21T10:43:39Z
+status: done
+tags:
+- release
+- cpanfile
+- api
+title: cpanfile says perl 5.010 and Metadata.pm now needs 5.014
+updated: 2026-08-21T10:43:39Z
+---
+
+karr #161 / docs/adr/0048 compiles the two rule regexes with `use re "/a"`, which is the perl 5.14 form of the `re` pragma. cpanfile line 1 still says:
+
+    requires 'perl', '5.010';
+
+On 5.10 lib/File/SOPS/Metadata.pm no longer compiles, so the declared floor is now a false claim rather than a conservative one. Nothing else in lib was found needing more than 5.10, so 5.014 is the honest floor.
+
+cpanfile is outside the api lane's files and outside the file boundary karr #161 was given, which is why this is a ticket and not part of that change. One line:
+
+    requires 'perl', '5.014';
+
+Worth checking the same run whether any dependency already raises it higher.
+ERLEDIGT 2026-08-21 im selben Commit ebfb1e3, weil es dorthin gehoerte: use re '/a' braucht perl 5.014, das cpanfile versprach 5.010. Ein Release ohne diese Zeile haette auf einem perl installiert, auf dem das Modul nicht kompiliert. Verifiziert: /a wurde in 5.014 eingefuehrt.
