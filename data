@@ -1,0 +1,54 @@
+---
+class: standard
+created: 2026-08-21T11:53:03Z
+id: 169
+priority: low
+status: backlog
+tags:
+- yaml
+- format
+- comments
+- interop
+title: A mapping-position comment is dropped silently where a sequence-position one
+  is refused loudly
+updated: 2026-08-21T11:53:03Z
+---
+
+Found while measuring karr #148; filed rather than acted on.
+
+ADR 0041 installed a loud guard: a document whose comment is a SEQUENCE element
+cannot be written as plaintext, so decrypt_file and edit REFUSE it, naming the
+path, rather than dropping the comment on the way through. That is a deliberate
+trade and the POD states it.
+
+A document whose only comment is above a MAPPING key gets neither. YAML::XS
+discards the comment line before parse() sees a tree, so nothing is in the tree
+for the guard to refuse, and the file is written back without it -- silently, at
+exit 0.
+
+MEASURED, sops 3.13.3, one age recipient, two plaintexts encrypted by `sops -e`:
+
+  A: a file-leading comment, a comment above a mapping key, AND a comment above
+     a sequence element
+       sops -d              exit 0, all three comments back
+       decrypt_file here    REFUSED: "list:0: cannot write a sops comment into
+                            this document..."
+
+  B: a file-leading comment and a comment above a mapping key, no sequence
+       sops -d              exit 0, both comments back
+       decrypt_file here    exit 0, plaintext written WITHOUT either comment
+
+So the same loss is loud in one position and silent in the other, and which one
+a caller gets depends on whether the document happens to contain a sequence.
+
+NOT obviously a bug in either direction, which is why this is a ticket and not a
+fix:
+  * Making B loud too would refuse a document sops reads, and would need the
+    read half of karr #148 (YAML::PP's raw token stream) purely to power a
+    refusal.
+  * Making A quiet would undo ADR 0041's decision.
+  * Doing nothing is defensible and is today's state -- but it should be a
+    decision, not an accident of where YAML::XS drops things.
+
+Depends on karr #148 for the read half if the answer turns out to be "make B
+loud". Lane: format, with wire as second reader (ADR 0041's guard is theirs).
