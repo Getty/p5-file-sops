@@ -1,0 +1,97 @@
+---
+class: standard
+completed: 2026-08-21T06:21:41Z
+created: 2026-08-21T05:24:14Z
+id: 123
+priority: medium
+started: 2026-08-21T05:49:30Z
+status: done
+tags:
+- yaml
+- float
+- editor
+- interop
+title: 'edit still cannot save a document with a bare .inf: the plaintext round trip
+  loses the float'
+updated: 2026-08-21T06:21:41Z
+---
+
+Found while measuring karr #113 (sops 3.13.3 at /tmp/sops). NOT fixed by it.
+
+karr #113 made rotate work on a sops-written YAML document holding a bare
+.inf in an unencrypted slot: sops -e -> File::SOPS->rotate -> sops -d is exit
+0 for all three spellings sops writes, wire byte-identical. edit is NOT, and
+it fails for a different reason and in a different place.
+
+MEASURED, editor that changes an unrelated key, before and after karr #113:
+
+  .inf   edit CROAK: v_unencrypted: cannot write this leaf to a SOPS YAML
+         document: its spelling is a YAML 1.2 constant ...
+  -.inf  same
+  .nan   same
+
+That is ADR 0013s foreign-resolution guard, not the non-finite guard -- the
+message is identical with karr #113s narrowing applied and with it bypassed.
+
+MECHANISM: edit decrypts to a PLAINTEXT document, hands it to the editor, and
+reparses what comes back. ADR 0026s repair walk deliberately does not run on a
+plaintext document (it gates on the sops: section), so the leaf comes back as
+the string .inf, and ADR 0013 correctly refuses to write a bare .inf that Go
+would resolve to a float. Both guards are right about what they see; the value
+lost its float-ness in the middle, on OUR OWN plaintext document.
+
+Note edit with a no-op editor returns 0 without re-encrypting, so the failure
+only shows when something actually changed.
+
+The fix is a decision about ADR 0026s gate (its "Rejected alternatives", last
+entry), and it is not the same one that ADR made: there the argument against
+running the walk on plaintext was that a caller-supplied plaintext gets a
+better error from ADR 0013. Here the plaintext is one this library WROTE from
+a document it had already resolved, which is a different case and may deserve
+a different answer -- possibly a marker on the way out rather than a re-guess
+on the way in.
+
+Format lane (Format::YAML), plus whatever edit needs in File::SOPS.
+2026-08-21 06:18 Gate removed, ADR 0034, t/49 added; two pinned claims in t/39 and t/42 replaced. Suite 1116/1116, interop 32/32 executed.
+DONE (api-123). Fixed by REMOVING ADR 0026's gate rather than by threading a
+flag from edit -- docs/adr/0034, new file
+t/49-plain-infinity-survives-the-plaintext-round-trip.t.
+
+WHY THE WIDE ANSWER. The ticket frames this as needing a way to tell edit's
+intermediate plaintext from a foreign one. Measured, that distinction is not
+needed and not wanted: ADR 0026's gate rested on "a worse message for no gain,
+since neither path can write the document", and ADR 0031 (karr #113) made the
+document writable three commits ago. With the gate on, this library's own
+decrypt_file wrote `v_unencrypted: .inf` and its own encrypt_file refused to
+read that file back -- a broken round trip with no editor in it at all. The
+narrow flag was built in a scratch lib/ and measured first; it leaves edit and
+encrypt_file answering oppositely to identical bytes, in BOTH directions.
+
+WHAT A USER LOST. Not just an error: the edit itself. _edit_text scopes the
+plaintext to a File::Temp dir that goes out of scope when it RETURNS, before
+the re-encryption runs -- measured, the editor's file and its directory are
+gone by the time the croak reaches the caller.
+
+REFERENCE. `sops edit` on the same three documents with the same
+non-interactive editor: 3 of 3 exit 0, wire unchanged, sops -d exit 0.
+
+DELIBERATE COST: a bare token under a key that gets ENCRYPTED is now refused
+where it used to be written as a type:str holding `.inf` (sops -e writes a
+type:float there -- a working file whose value had silently stopped being a
+number). Goes away with karr #122.
+
+FILED: karr #134 (edit silently retypes an ENCRYPTED non-finite float to a
+string -- worse than this ticket, because it is silent; needs Encrypted.pm) and
+karr #135 (a string leaf libyaml leaves bare is refused where sops quotes it).
+
+NUMBERS: prove -lr t/ 1100/1100 (49 files) -> 1116/1116 (50 files);
+SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 EXECUTED, before and after.
+Counter-check against unpatched 0da0170 with perl -I: 9 of 16 subtests and 115
+assertions fail, and all 7 that pass are must-not-move sections.
+
+BOUNDARY DEVIATION, reported: two existing pinned claims had to be replaced,
+t/39 section 2 and t/42 section 3. Both pinned the gate itself. Named and
+argued in ADR 0034.
+ABGENOMMEN 2026-08-21. Commit ed827d5, ADR 0034. Die Abnahme gilt zuerst dem Befund, der im Ticket nicht stand: ein Nutzer verlor nicht die Fehlermeldung, sondern DIE BEARBEITUNG. _edit_text scopet den Klartext in ein File::Temp-Verzeichnis, das beim RETURN aus dem Scope faellt -- vor der Neuverschluesselung. Nach dem croak sind Datei und Verzeichnis weg. Wer so ein Dokument oeffnet, einen ganz anderen Schluessel aendert und speichert, verliert alles Getippte, wegen eines Leafs, das er nie angefasst hat.
+
+Und sie gilt der ABLEHNUNG der Option, mit der ich das Ticket beauftragt hatte. Ich hatte ein Flag vorgeschlagen, mit dem edit den Walk ausdruecklich anfordert. Die Lane hat es in einer Scratch-Kopie GEBAUT und gemessen, bevor sie es verworfen hat: es laesst edit und encrypt_file auf identische Bytes in beide Richtungen entgegengesetzt antworten und laesst decrypt_file -> encrypt_file kaputt. Die richtige Antwort war, das Gate ganz zu entfernen -- seine Praemisse ('weder Pfad kann das Dokument schreiben') ist mit ADR 0031 drei Commits vorher weggefallen, und mit Gate schrieb decrypt_file ein Dokument, das encrypt_file nicht mehr lesen konnte. Ein gebauter und vermessener Gegenvorschlag ist genau das, was eine Lane tun soll, wenn der Auftrag die Praemisse mitbringt.
