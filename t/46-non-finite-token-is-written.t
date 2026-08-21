@@ -273,16 +273,31 @@ subtest 'and the reason it has to: the JSON emitter writes it quoted' => sub {
 #    MAC-covered one whose handler has no foreign-resolution guard refuses.
 ###############################################################################
 
-subtest 'canonical_float_tree leaves a plaintext document alone' => sub {
-    my %seen;
+# REPLACED CLAIM (karr #134, docs/adr/0037). This used to be
+# `canonical_float_tree leaves a plaintext document alone` and asserted that the
+# carrier was never called AT ALL over a tree that carried a bare +Inf beside
+# the token-carrying leaf. That second half was the defect: a bare non-finite
+# leaf left the walk unchanged, YAML::XS wrote it as `Inf`, and the plaintext
+# said a string where the document held a number.
+#
+# What the subtest was written to protect is untouched and is what it asserts
+# now: the leaf that CARRIES a token keeps it, and nothing is asked about it.
+# The bare one is the single leaf the carrier is handed -- with the token this
+# emitter is being asked to write.
+subtest 'a plaintext document keeps the token it has, and is given one it lacks'
+    => sub {
+    my @asked;
     my $tree = File::SOPS::Encrypted->canonical_float_tree(
         { v => token_leaf('.inf'), bare => $INF },
-        roundtrips => sub { $seen{roundtrips}++; 0 },
-        carrier    => sub { $seen{carrier}++; $_[0] },
+        roundtrips => sub { push @asked, 'roundtrips'; 0 },
+        carrier    => sub { push @asked, "carrier($_[1])"; dualvar($_[0], $_[1]) },
     );
     is("$tree->{v}", '.inf', 'the token is still the token');
     ok($tree->{v} == $INF, 'and the number is still the number');
-    ok(!$seen{carrier}, 'the carrier was never asked to replace it');
+    is_deeply(\@asked, [ 'carrier(.inf)' ],
+        'the carrier is asked once, about the bare leaf, and for the token');
+    is("$tree->{bare}", '.inf', 'which is what the bare leaf now carries');
+    ok($tree->{bare} == $INF, 'with its number unchanged');
 };
 
 subtest 'a MAC-covered document with no guard refuses it, naming the leaf' => sub {

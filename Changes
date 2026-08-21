@@ -1,6 +1,29 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BUG FIX and BEHAVIOUR CHANGE: a non-finite float in an ENCRYPTED slot no
+    longer loses its float-ness, silently, on a plaintext round trip. `sops -e`
+    stores a `.inf` as a `type:float` whose plaintext is `+Inf`; decrypting
+    that leaf gives a bare Perl infinity, and the YAML emitter wrote one as
+    `Inf` / `-Inf` / `NaN` - tokens go-yaml reads as STRINGS. So `decrypt_file`
+    wrote `secret: Inf` where `sops -d` writes `secret: .inf`, and `edit` of
+    any OTHER key in such a document returned success while rewriting the leaf
+    as a `type:str`: no error, no warning, `sops -d` exit 0 on a file that had
+    stopped saying what it held. `sops edit` on the same document keeps the
+    leaf a `type:float`, measured against sops 3.13.3. The emitter now writes
+    the token `sops -d` itself writes, and `decrypt_file` reproduces sops's
+    own plaintext byte for byte for all three spellings. IN JSON THE SAME LEAF
+    WAS WRITTEN AS `null` - the value destroyed outright, and `edit` replaced
+    the whole `ENC[...]` with a bare, unencrypted `null` - where sops refuses
+    the document (`sops -d --output-type json` and `sops edit` are both exit
+    4). It is now refused here too, naming the key path; the value is still
+    readable with `decrypt` and `extract`. A non-finite float that carries a
+    string half of its OWN keeps it, whatever it says, and nothing a caller
+    can construct becomes writable that was not writable before. `edit` of
+    such a YAML document now REFUSES where it used to corrupt: the leaf
+    reaches re-encryption as the float it always was, and an encrypted slot
+    still cannot hold one (karr #122, which is what closes this round trip).
+    See docs/adr/0037 and karr #134.
   - The order-preserving reparse that gives MAC verification its key order is
     now asked of the FORMAT HANDLER instead of being a YAML::PP call inside
     File::SOPS. Both shipped handlers gained a documented

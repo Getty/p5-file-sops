@@ -453,15 +453,21 @@ SKIP: {
     };
 
 ###############################################################################
-# 8. WHAT THE ROUND TRIP STILL LOSES, PINNED AS A DEFECT. An ENCRYPTED
-#    type:float whose plaintext is `+Inf` has no token to carry: the emitter
-#    writes a bare `Inf`, which go-yaml reads as a STRING, so the leaf comes
-#    back from the editor retyped -- silently. `sops edit` keeps it a
-#    type:float, measured here beside it. This is karr #134, and it is pinned
-#    so the fix flips it visibly instead of quietly.
+# 8. WHAT THE ROUND TRIP USED TO LOSE. An ENCRYPTED type:float whose plaintext
+#    is `+Inf` has no token of its own to carry: the emitter wrote a bare `Inf`,
+#    which go-yaml reads as a STRING, so the leaf came back from the editor
+#    retyped -- silently. This subtest pinned that defect so the fix would flip
+#    it visibly instead of quietly, and karr #134 / docs/adr/0037 is the fix:
+#    the emitter now writes the token, and `edit` REFUSES rather than retyping,
+#    because encrypt_value still will not put a non-finite float in an encrypted
+#    slot (karr #122). `sops edit` is measured beside it, unchanged: it keeps
+#    the leaf a type:float, which is the row karr #122 has to reach.
+#
+#    The full corpus for this lives in t/52; what stays here is the row this
+#    file measured, in the direction it now goes.
 ###############################################################################
 
-    subtest 'an ENCRYPTED non-finite float is still retyped by edit (karr #134)' => sub {
+    subtest 'an ENCRYPTED non-finite float is no longer retyped by edit (karr #134)' => sub {
         my $dir = scratch();
         my ($status, $enc) =
             $encrypt_with_sops->($dir, "secret: .inf\nkeep: x\n");
@@ -476,21 +482,24 @@ SKIP: {
         my $rewritten = eval {
             File::SOPS->edit(file => "$dir/ours.yaml", identities => [$secret]);
         };
-        ok($rewritten, 'edit rewrites the file without a word') or diag($@);
+        my $err = $@;
+        ok(!defined $rewritten, 'edit refuses the document instead of rewriting it');
+        like($err, qr/\bsecret\b/, 'naming the key path');
 
+        is(scalar read_file("$dir/ours.yaml"), $enc, 'the file is untouched');
         like(scalar read_file("$dir/ours.yaml"),
-            qr/^secret: ENC\[.*type:str\]$/m,
-            'and the leaf is a type:str afterwards -- karr #134, still open');
+            qr/^secret: ENC\[.*type:float\]$/m,
+            'and the leaf is still a type:float, not silently a type:str');
 
         my $out = `$sops_bin -d --input-type yaml --output-type yaml $dir/ours.yaml 2>&1`;
-        is($? >> 8, 0, 'the file is perfectly readable') or diag($out);
-        like($out, qr/^secret: Inf$/m, 'and states a string where it held a float');
+        is($? >> 8, 0, 'the file is still perfectly readable') or diag($out);
+        like($out, qr/^secret: \.inf$/m, 'and still states the float it held');
 
         my $theirs = `$sops_bin edit $dir/theirs.yaml 2>&1`;
         is($? >> 8, 0, 'sops edit on the same document') or diag($theirs);
         like(scalar read_file("$dir/theirs.yaml"),
             qr/^secret: ENC\[.*type:float\]$/m,
-            'keeps it a type:float -- which is what karr #134 has to reach');
+            'keeps it a type:float -- which is what karr #122 has to reach');
     };
 }
 

@@ -1343,6 +1343,76 @@ sub _written_leaf {
     return $leaf;
 }
 
+# The one spelling per non-finite value that `sops -e` itself writes, keyed by
+# the bytes value_to_bytes covers for it. The INVERSE of
+# _go_non_finite_token_bytes, narrowed to three of its twelve rows: sops
+# normalises `.Inf`, `+.INF` and the rest away, so these are the only ones a
+# document sops wrote can hold, and the only ones worth manufacturing.
+#
+# Not a third statement of Go's resolveMap. Every token this table produces is
+# handed straight back to _go_non_finite_token_bytes by the check below, so a
+# row here that gate does not accept REFUSES the document rather than writing
+# it -- the same fail-closed pairing docs/adr/0031 set up between that gate and
+# %GO_CONSTANT, one layer in.
+my %GO_NON_FINITE_TOKEN = ('+Inf' => '.inf', '-Inf' => '-.inf', 'NaN' => '.nan');
+
+# A non-finite float whose only form is its NUMBER, in the shape the emitter
+# writing this document can put on the wire -- or a croak, where it has none.
+#
+# karr #134: an encrypted type:float decrypts to a bare Perl infinity, and
+# YAML::XS writes one as `Inf` / `-Inf` / `NaN`, which go-yaml resolves as a
+# STRING. So the plaintext decrypt_file and edit produce says a string where
+# the document held a number, the editor hands that string back, and the leaf
+# is re-encrypted as type:str -- silently, `sops -d` exit 0. Measured against
+# sops 3.13.3, encrypted slot, three spellings: `sops -d` writes `.inf`,
+# `-.inf` and `.nan`, and `sops edit` keeps the leaf a type:float. In JSON the
+# same leaf reached the file as `null`, and edit replaced the whole ENC[...]
+# with a bare unencrypted null -- where `sops -d --output-type json` and
+# `sops edit` both refuse the document, exit 4.
+#
+# ASKED OF THE EMITTER, through the carrier -- the one hook whose job is
+# already "the replacement, format-specific", and the only format signal that
+# exists on this path. docs/adr/0031 read the same distinction off
+# reject_scalar, which a plaintext emit installs in neither format, deliberately
+# (docs/adr/0013). Measured, neither carrier needed changing: the YAML one
+# returns dualvar($double, '.inf'), which YAML::XS writes as the bare token, and
+# the JSON one croaks, because Math::BigFloat cannot reproduce a token it was
+# never given.
+#
+# VERIFIED, not trusted, and with docs/adr/0031's own gate: the answer has to be
+# an unreferenced scalar whose public string half is a token go-yaml resolves to
+# these bytes AND whose number still renders as them. Both halves, so a carrier
+# that returns something else -- or dies -- refuses the document instead of
+# putting a wrong one on disk.
+#
+# NO VALUE IN THE MESSAGE. assert_representable's neighbouring refusal names the
+# form (`+Inf`), because there the scalar came from the caller. This one is
+# reached for a leaf that came out of an ENCRYPTED slot, and which of the three
+# it is, is the plaintext.
+sub _non_finite_token_leaf {
+    my ($node, $text, $carrier, $path) = @_;
+
+    my $leaf = eval { $carrier->($node, $GO_NON_FINITE_TOKEN{$text}) };
+
+    return $leaf
+        if defined $leaf && !ref $leaf
+        && _carries_go_non_finite_token($leaf, $text)
+        && __PACKAGE__->value_to_bytes($leaf) eq $text;
+
+    croak _leaf_location($path) . ": cannot write a non-finite float to this "
+        . "SOPS document: the only form both implementations read back as the "
+        . "same number is a YAML plain scalar Go's yaml.v3 resolves to it "
+        . "(`.inf`, `-.inf`, `.nan`), and the emitter writing this document "
+        . "has none -- JSON has no spelling for one at all, so the leaf would "
+        . "reach the file as `null` or as a quoted string and stop being a "
+        . "number on the next read. sops refuses the same document rather "
+        . "than writing one (measured, `sops -d --output-type json` and "
+        . "`sops edit` are both exit 4). The value is still readable with "
+        . "decrypt or extract; to write it out, write the document as YAML, "
+        . "or store it as a string (type:str), which is written verbatim and "
+        . "round-trips exactly through both implementations";
+}
+
 sub _canonical_floats {
     my ($node, $roundtrips, $carrier, $reject, $reject_scalar, $mac_covered,
         $path) = @_;
@@ -1472,12 +1542,23 @@ sub _canonical_floats {
     # spelling at all (measured, unencrypted slot, all twelve tokens, `sops -d`
     # exit 51).
     #
-    # Everything else keeps the behaviour it has always had. A bare NV, and any
-    # leaf in a document with no MAC, is left exactly as it is -- on the encrypt
-    # path a bare one cannot get here at all, since assert_representable refuses
-    # it, so that is still the plaintext emitters' branch and decrypt_file goes
-    # on reproducing sops's own `.inf` byte for byte (docs/adr/0026).
+    # A leaf with NO string half of its own -- the shape a decrypted type:float
+    # arrives in -- has stated no spelling, so one is asked of the emitter and
+    # it enters that same verdict carrying it. This used to `return $node`, and
+    # the plaintext then said `Inf` where the document held a number
+    # (karr #134, docs/adr/0037). It is the ONLY leaf this manufactures a token
+    # for: one that publishes a string half has stated one, and it is left
+    # alone whatever it says, so `dualvar(+Inf, 'banana')` is not overwritten on
+    # the strength of the number beside it (docs/adr/0012's answer to the same
+    # question for an integer, and docs/adr/0031's `banana` row).
+    #
+    # Nothing a caller can construct becomes writable to a MAC-covered document
+    # that was not writable before: assert_representable runs first, from
+    # _compute_mac's leaf sweep, and its gate is untouched. A bare NV cannot
+    # reach this walk on the encrypt path at all.
     if ($text =~ $NO_AGREED_FORM) {
+        $node = _non_finite_token_leaf($node, $text, $carrier, $path)
+            unless _has_public_pv($node);
         return $node unless _carries_go_non_finite_token($node, $text);
         return _written_leaf($node, $text, $reject_scalar, $path)
             if $reject_scalar;
@@ -1615,11 +1696,11 @@ walk that computes the MAC must never see a carrier: the L<Math::BigFloat> one
 is a blessed reference, which L</detect_type> calls C<str>, so the digest would
 cover its stringification instead of the number.
 
-C<NaN>, C<+Inf> and C<-Inf> are returned B<unchanged> -- never carried. Neither
-callback can help such a leaf: C<roundtrips> reparses with this side's own
-parser, which reads C<.inf> back as a string, so it answers no for a leaf that
-is perfectly writable, and the carrier would then write a bare C<+Inf>, a
-document C<sops -d> reads at exit 0 with the leaf silently retyped to a string.
+C<NaN>, C<+Inf> and C<-Inf> never go through C<roundtrips>. That callback
+reparses with this side's own parser, which reads C<.inf> back as a string, so
+it answers no for a leaf that is perfectly writable, and the carrier would then
+be handed C<+Inf> as the text and write a bare C<+Inf> -- a document C<sops -d>
+reads at exit 0 with the leaf silently retyped to a string.
 
 What the walk does with one depends on whether anything can vouch for it. A
 non-finite leaf whose B<string half> is a plain token go-yaml resolves back to
@@ -1629,12 +1710,24 @@ C<reject_scalar>, whose model of the foreign resolver is the one that decides.
 In a document that carries a MAC and whose handler installed no C<reject_scalar>
 the leaf is B<refused>, naming the key path: that is JSON, where a non-finite
 float has no spelling at all (measured, C<sops -d> exit 51 unencrypted, exit 4
-encrypted). Everything else is left exactly as it is -- a bare C<9**9**9> cannot
-reach the walk on the encrypt path, since L</assert_representable> refuses it
-there, so that remains the plaintext emitters' case and C<decrypt_file> goes on
-reproducing sops's own C<.inf> byte for byte. See
+encrypted). See
 L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>
 (karr #113).
+
+A non-finite leaf with B<no string half of its own> -- the shape a decrypted
+C<type:float> arrives in, and a bare C<9**9**9> -- has stated no spelling, so
+one is asked of C<carrier>: it is called with C<.inf>, C<-.inf> or C<.nan>, and
+the leaf it returns is accepted only if it carries that token as its public
+string half and still renders as the same bytes. The YAML carrier answers with
+a C<dualvar>, which L<YAML::XS> writes as the bare token; the JSON carrier
+croaks, and the leaf is B<refused> naming the key path, as C<sops -d
+--output-type json> and C<sops edit> refuse the same document (exit 4). So
+C<decrypt_file> reproduces sops's own C<.inf> byte for byte for an B<encrypted>
+C<type:float> as well as for an unencrypted slot, where it used to write C<Inf>
+and turn the leaf into a string on the next read. A leaf that does publish a
+string half keeps it, whatever it says. See
+L<docs/adr/0037|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0037-a-non-finite-float-is-written-as-a-token-or-not-at-all.md>
+(karr #134).
 
 Whether the document carries a MAC is read off the tree this walk is handed: a
 handler's C<serialize> puts the metadata under C<sops> before calling its
