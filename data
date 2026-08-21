@@ -1,0 +1,44 @@
+---
+class: standard
+completed: 2026-08-21T03:24:42Z
+created: 2026-08-20T14:49:47Z
+depends_on:
+- 63
+id: 101
+priority: medium
+started: 2026-08-20T15:10:08Z
+status: done
+tags:
+- wire
+- json
+- interop
+- guards
+title: rotate croaks on a sops-written JSON number between int64max and uint64max
+updated: 2026-08-21T03:24:42Z
+---
+
+Found while measuring karr #63 (sops 3.13.3 at /tmp/sops). NOT the same defect as #63 and deliberately kept out of its ADR 0020, because fixing it means reopening the int64 guard.
+
+sops -e NORMALISES a JSON number wider than int64 by writing the float64 back out. For 9223372036854775808 it writes 9223372036854776000 -- which is still above int64max but BELOW uint64max, so Cpanel::JSON::XS decodes it as a Perl UV, detect_type calls it int, and Encrypted::assert_representable refuses it.
+
+Measured, end to end:
+
+  echo {"keep":"x","b_unencrypted":9223372036854775808} | sops -e   -> writes b_unencrypted: 9223372036854776000, exit 0
+  sops -d of that file                                              -> exit 0
+  File::SOPS->rotate of that file                                   -> CROAK, exit 255
+      "value is an integer outside the range the SOPS int type can hold
+       (-9223372036854775808 .. 9223372036854775807, Go)"
+
+So this library refuses a document the reference implementation writes and reads. Same for encrypt of the plaintext, and the whole window [9223372036854775808 .. 18446744073709551615] behaves this way in JSON.
+
+The guard is not simply wrong. Its stated reason holds for an ENCRYPTED slot: type:int with such a plaintext makes sops fail with strconv.Atoi out of range. It over-refuses for an UNENCRYPTED slot, where Go never calls Atoi -- it parses the JSON number into a float64 and digests FormatFloat of it. For 9223372036854776000 that text is the SAME as the digits, so the document would verify. For an arbitrary value in the window it is not, and the guard is right.
+
+That is the shape of the fix and why it is not a one-liner: the answer depends on the slot, exactly as ADR 0008 and ADR 0012 argued for their guards, so it belongs at emit time and not in assert_representable. ADR 0020 changes nothing here.
+
+YAML is different and already handled: go-yaml resolves this window as uint64, sops cannot walk it at all ("Cannot walk value, unknown type: uint64", exit 23) in either slot, and Format::YAML::_go_int already models that and refuses (ADR 0013). So sops cannot write a YAML document in this window -- only a JSON one.
+
+Wire lane. Needs the sops binary to prove.
+MAINTAINER-ENTSCHEIDUNG 2026-08-20: wird gefixt, zusammen mit #63. REIHENFOLGE: NACH #63. Begruendung, nicht Vorsicht: der Fix gehoert laut Ticketbefund an die EMIT-Zeit und ist slot-abhaengig, also in Format/JSON.pm -- genau die Datei, die #63 Lane 1 gerade umschreibt. Zwei Lanes in derselben Datei ueberschreiben einander. Erst wenn #63 vollstaendig gelandet und committet ist, startet der Mess- und ADR-Durchgang fuer #101.
+Vier Lanes plus ein POD-Nachzug gelandet: 71d6710 (integer_fits_int64), 7042582 (der IOK-Zweig, POD, Changes, t/36 angepasst, t/37 neu), 4a4f4dc (parse-POD beide Fenster). ADR 0021 accepted-reif. Die Ticketanalyse war an der entscheidenden Stelle WIDERLEGT: sie sagte, der Guard habe fuer den verschluesselten Slot recht, der Fix muesse slot-abhaengig sein und an die Emit-Zeit. Die Praemisse haelt (type:int -> strconv.Atoi out of range, exit 25, 12 von 12), die Schlussfolgerung nicht -- sops schreibt gar kein type:int, sondern type:float, in BEIDEN Slots, Umschlag exakt bei int64. Also nichts slot-abhaengig, assert_representable unberuehrt, ein Zweig im Parser. Zwei Fallen vor dem Schreiben gemessen: die Gate-Reihenfolge ist Korrektheit (ein numerischer Vergleich setzt public SVf_IOK in place und retypt String-Leaves), und die Konvertierung darf NICHT +0 sein (die Ziffern passen hier noch in einen UV, der Fix waere ein stiller No-Op bei gruener Suite). Mitgenommener Bugfix, im ADR zuerst nicht benannt: ein Dokument, dessen unverschluesselte Zahl nicht die kanonische Dezimale ihres Doubles ist, meldete MAC verification failed und verifiziert jetzt -- sops -d akzeptierte es immer. dzil test 872/872 ueber 41 Dateien, prove -lr t/ 860/860 ueber 38, Interop 32/32 gegen sops 3.13.3 gelaufen und nicht geskippt. Netze gegen den Vorher-Parser gegengeprueft, mit perl -I statt prove -l (das fuegt lib/ still wieder hinzu und liess den ersten Versuch faelschlich gruen). BEHAVIOUR CHANGE, deshalb zum Review. Offen abgespalten: #104 (Rest-Ueber-Verweigerung fuer vom Aufrufer gelieferte UVs, mit gemessenem Formulierungsvorschlag im Ticket).
+KORREKTUR zur Handoff-Notiz: der POD-Nachzug ist 3e5e6b0, nicht 4a4f4dc -- die Nummer war beim Schreiben der Notiz noch nicht vergeben. Ausserdem liegt zwischen 7042582 und 3e5e6b0 der Commit 28acbd3 ('Track .claude/skills after the shared-skill rename'), der NICHT zu diesem Ticket gehoert: er stammt aus einer PARALLELEN Claude-Code-Sitzung, die waehrend dieser Arbeit in dasselbe Repo committet hat.
+ABGENOMMEN vom Maintainer 2026-08-21, gemeinsam mit karr #63. BEHAVIOUR CHANGE bestaetigt: rotate nimmt die JSON-Zahl an, die sops selbst schreibt (Fenster int64max..uint64max). ADR 0021 ist angenommene Praxis. Zwei Nachlaeufe aus dieser Entscheidung, beide erledigt: #104 Teil (a) -- die Refusal-Meldung nennt jetzt beide Antworten, und die Praemisse dieses ADRs, dass nur positive Werte betroffen sind, ist bewiesen statt behauptet (Commit c8eee80) -- und #107, das eine falsche Regel in der Konsequenztabelle dieses ADRs korrigiert hat (Commit 7eb85cb). Offen bleibt #104 Teil (b), der slot-abhaengige Guard, mit eigener ADR-Pflicht.
