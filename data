@@ -1,0 +1,57 @@
+---
+class: standard
+created: 2026-08-21T06:30:33Z
+id: 136
+priority: medium
+status: backlog
+tags:
+- wire
+- interop
+- drift
+title: type:bytes makes sops -d panic in EVERY format, exit 2
+updated: 2026-08-21T06:30:33Z
+---
+
+Gemessen an sops 3.13.3 (/tmp/sops) waehrend karr #77, als Nebenbefund beim Abgehen der vollen Typleiter. In docs/adr/0035 unter "Notes" benannt, dort NICHT entschieden.
+
+Eine Zelle mit type:bytes bringt sops zum Absturz, bevor es irgendetwas
+zurueckgibt:
+
+  sops -d --input-type dotenv   exit 2
+    panic: runtime error: hash of unhashable type []uint8
+    goroutine 1 [running]: type:.hash.github.com/getsops/sops/v3/aes...
+
+  Dasselbe in YAML: exit 2, identischer panic.
+
+Also KEIN ENV/INI-Befund -- der Defekt ist formatunabhaengig und sitzt im
+aes-Paket, offenbar in einem Cache, der ueber dem Klartext keyed ist.
+
+Kontrollen im selben Lauf, gleicher Datenschluessel, gleiche AAD, gleiche
+Nutzlast, nur das Label anders:
+  type:str  mit 4 rohen Bytes    -> exit 0
+  type:str  mit "hello"          -> exit 0
+  type:bytes mit 4 rohen Bytes   -> exit 2 panic
+  type:bytes mit "hello"         -> exit 2 panic
+Der Payload ist egal, nur das Label zaehlt.
+
+KEIN sops-Store erzeugt type:bytes:
+  YAML !!binary "3q2+7w=="   -> type:str, die dekodierten Bytes roh im Wert
+  sops -e --input-type binary -> type:str (Schluessel `data`)
+type:bytes ist damit in 3.13.3 ein Typ, den sops in sein eigenes Modell
+schreiben kann und aus keiner Datei zurueckliest.
+
+WARUM DAS UNS ANGEHT: docs/adr/0003 gibt `type => bytes` als die EINZIGE
+Moeglichkeit, einem unflaggierten Skalar "das sind wirklich Bytes" zu sagen --
+kein Encode rein, kein Decode raus. Ein Dokument, das ein Aufrufer so
+schreibt, ist fuer sops in KEINEM Format zu oeffnen. Das steht heute nirgends
+im POD.
+
+Zu entscheiden (Lane wire, gemeinsam mit api fuer die POD-Zusage):
+  a) POD-Warnung an encrypt_value/value_to_bytes und ADR 0003, dass ein
+     type:bytes-Dokument von sops 3.13.3 nicht gelesen werden kann.
+  b) oder die Escape-Luke ganz refusen -- waere aber eine Verhaltensaenderung
+     an einer dokumentierten Zusage und braucht ein eigenes ADR.
+Die Leseseite (ein fremdes type:bytes entschluesseln) ist davon nicht
+betroffen und soll bleiben.
+
+Messskripte: scratchpad/m77/bytescell2.pl und bytesyaml.pl (Sitzung d4aee62c).
