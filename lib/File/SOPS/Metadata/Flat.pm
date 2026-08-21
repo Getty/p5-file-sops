@@ -203,6 +203,51 @@ newline, and comes back as a newline. That is sops's behaviour and this class
 reproduces it rather than inventing a lossless escape sops would not read --
 see docs/adr/0022.
 
+=head3 The same escape carries ENV B<data> values, and there the loss is fatal
+
+Measured for data values as well as metadata -- sixteen inputs against sops
+3.13.3 -- this method reproduces the ENV store's B<data>-value writer byte for
+byte, which is why the ENV handler (karr #36) reuses it rather than growing a
+second escape. Only backslash-C<n> is affected there too: a lone backslash,
+C<\t>, C<=>, C<#>, quotes and surrounding whitespace all survive untouched.
+B<INI does not escape its data values at all> -- a multi-line one goes into
+go-ini's triple-quote form -- so this concerns ENV only.
+
+The difference that matters is that a data value is in the MAC and a metadata
+value is not, and B<the digest covers the value BEFORE the escape>: measured,
+the C<sops_mac> plaintext of a document holding a real newline is the SHA-512
+of that newline, and of one holding the two characters backslash-C<n> is the
+SHA-512 of backslash-C<n>, while the two files' data lines are B<byte
+identical>. So wherever the escape does not round-trip, the document says one
+thing and its own MAC says another: sops writes such a file with exit 0 and
+then refuses to read it, C<MAC mismatch>, exit 51.
+
+docs/adr/0030 decides that File::SOPS B<refuses> that value when it writes an
+ENV document rather than reproducing it -- the one place this distribution
+diverges from the reference implementation's ENV escape, and it diverges by
+refusing a document sops cannot read either. The rule asks this pair rather
+than testing for a character, so that it cannot drift away from the escape it
+guards:
+
+    my $bytes = File::SOPS::Encrypted->value_to_bytes($leaf);
+    croak ...
+        unless $flat->unescape_value($flat->escape_value($bytes)) eq $bytes;
+
+=head3 A data value's bytes are not this method's job
+
+Note the C<value_to_bytes> in that snippet: B<escape the digest bytes, never
+the leaf>. This method's B<leaf handling> belongs to the C<sops> section -- it
+maps a C<JSON::PP::Boolean> to lowercase C<true>/C<false> because that is what
+C<mac_only_encrypted> is written as there. A B<data> leaf's wire bytes come
+from L<File::SOPS::Encrypted/value_to_bytes>, the single source of truth for
+the value-to-bytes mapping, and its boolean spelling is titlecase
+C<True>/C<False>.
+
+Handing a boolean data leaf straight to this method therefore produces the
+right thing to B<write> and the wrong thing to B<digest>, and those two
+disagreeing is a MAC mismatch with no wrong byte anywhere to point at. Only the
+escape is shared; the typing is not.
+
 =cut
 
 sub unescape_value {
@@ -462,6 +507,8 @@ L<JSON::MaybeXS>'s booleans itself, and say so.
 =item * L<File::SOPS::Metadata> - the section this encodes, and its nested form
 
 =item * docs/adr/0022 - why the escape is reproduced lossy rather than fixed
+
+=item * docs/adr/0030 - why an ENV DATA value the escape cannot carry is refused
 
 =back
 
