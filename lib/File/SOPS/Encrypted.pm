@@ -276,6 +276,31 @@ sub encrypt_value {
 
     $value //= '';
     $class->assert_representable($value);
+
+    # An ENCRYPTED slot carries `type:float` and the plaintext +Inf / -Inf /
+    # NaN, and no token at all -- the scalar's string half is not on the wire,
+    # so the gate assert_representable just applied says nothing about this
+    # document. Refused here, in both formats, because this method cannot tell
+    # them apart and only one of them works: measured against sops 3.13.3,
+    # twelve tokens plus three bare NVs in an encrypted slot, YAML `sops -d`
+    # exit 0 in every row and JSON exit 4 in every row (`Error marshaling to
+    # json: Error encoding value` -- Go cannot marshal a non-finite float64).
+    # Widening this needs the document format, which reaches neither this
+    # method nor assert_representable; filed as karr #122.
+    if (!ref($value) && _sv_kind($value) eq 'float') {
+        my $form = _non_finite_bytes($value);
+        croak "value is a non-finite float ($form) and an encrypted slot has "
+            . "no form for it that both implementations read: the wire would "
+            . "carry type:float and the plaintext $form, which sops decrypts "
+            . "and then cannot write out again in JSON (measured, `Error "
+            . "marshaling to json: unsupported value`, exit 4). A YAML "
+            . "document can carry such a value UNENCRYPTED, as the plain token "
+            . "go-yaml resolves to it; encrypted, store it as a string "
+            . "(type:str) instead, which is written verbatim and round-trips "
+            . "exactly through both."
+            if defined $form;
+    }
+
     my $plaintext = $class->value_to_bytes($value, $type);
 
     # AES-GCM ciphertext is exactly as long as its plaintext, so an empty
@@ -346,6 +371,17 @@ SOPS implementation does (see L</value_to_bytes>).
 
 Dies if the value is one no SOPS document can carry -- today, an integer wider
 than Go's C<int64>. See L</assert_representable>.
+
+Dies as well for a B<non-finite float> (C<NaN>, C<+Inf>, C<-Inf>), including the
+one shape L</assert_representable> now lets through: an encrypted slot carries
+C<type:float> and the plaintext C<+Inf>, and no token, so the string half that
+makes such a scalar writable in an B<unencrypted> YAML slot says nothing about
+this document. Measured against sops 3.13.3, encrypted slot, twelve tokens and
+three bare values: YAML is C<sops -d> exit 0 in every row and JSON is exit 4 in
+every row (C<Error marshaling to json: Error encoding value> -- Go cannot
+marshal a non-finite C<float64>). This method cannot tell the two formats
+apart, so it refuses both, which is the behaviour every release has had; karr
+#122 is where the YAML half is open.
 
 Dies if the value's plaintext is B<empty> (which includes C<undef>). GCM
 ciphertext is the length of its plaintext, so the result would be an
@@ -762,6 +798,80 @@ numifies.
 
 =cut
 
+# Canonical texts no emitter has a wire form for that it derives from the
+# NUMBER alone: Go's strconv.FormatFloat produces them, and Perl's encoders
+# produce something else (`null`, `Inf`) for the same double. Everything below
+# that treats a non-finite float differently keys on this one regex, and it
+# matches the output of value_to_bytes, never a rendering derived beside it.
+#
+# -0 used to be on this list and is not any more: karr #62 measured a YAML
+# spelling that works, and the format that needed one supplies it in its own
+# carrier. See docs/adr/0006.
+my $NO_AGREED_FORM = qr/\A(?:NaN|[+-]Inf)\z/;
+
+# The text value_to_bytes covers for a non-finite float, and undef for every
+# other float. THE one statement of the rule: _float_bytes calls this and
+# returns its answer, so what the digest covers and what the guards below ask
+# about cannot become two comparisons against 9**9**9 that drift apart.
+#
+# It answers in three comparisons rather than through _float_bytes's whole
+# shortest-round-trip loop, and that is measured rather than assumed: with the
+# loop in the way, encrypt_value on a float leaf cost 130ms -> 272ms per 5000
+# calls, a tax on every encrypted float for a guard about three values.
+#
+# The scalar is read numerically, which is what the digest does to it anyway.
+# Nothing here reads or writes its string half.
+my $POSITIVE_INFINITY = 9**9**9;
+
+sub _non_finite_bytes {
+    my ($n) = @_;
+
+    return 'NaN' if $n != $n;                       # only NaN is unequal to itself
+    return $n > 0 ? '+Inf' : '-Inf'
+        if $n == $POSITIVE_INFINITY || $n == -$POSITIVE_INFINITY;
+    return undef;
+}
+
+# The bytes go-yaml derives from a plain scalar it resolves to a non-finite
+# float, for the twelve tokens that are the only spellings it does that for --
+# and undef for everything else, `.INf`, `+.nan` and `.infinity` included.
+#
+# A SECOND STATEMENT of twelve rows of Go's resolveMap, whose single home is
+# %GO_CONSTANT in Format::YAML, and deliberately so: this is a GATE and not a
+# verdict. It decides only whether a leaf is worth deferring to the emitter's
+# own foreign-resolution guard, which answers from `_go_scalar_bytes` -- the one
+# model of resolve.go -- and has the last word on every document that carries a
+# MAC. Both drift directions therefore fail CLOSED: a row here that
+# %GO_CONSTANT lacks is refused by that guard on bytes, and a row %GO_CONSTANT
+# gains that is missing here is refused by this gate. Neither can put a file on
+# disk. See docs/adr/0031.
+sub _go_non_finite_token_bytes {
+    my ($token) = @_;
+    return '+Inf' if $token =~ /\A\+?\.(?:inf|Inf|INF)\z/;
+    return '-Inf' if $token =~ /\A-\.(?:inf|Inf|INF)\z/;
+    return 'NaN'  if $token =~ /\A\.(?:nan|NaN|NAN)\z/;
+    return undef;
+}
+
+# Does this scalar carry, as its OWN public string half, a token a foreign
+# reader resolves back to exactly the double it holds?
+#
+# Both halves have to agree. dualvar(+Inf, '-.inf') is a contradiction -- the
+# document would say one infinity and the digest cover the other -- and it is
+# refused, the same answer docs/adr/0012 gives an integer whose halves disagree,
+# and measured the same way (sops -d exit 51 for every mismatched pairing).
+#
+# The PUBLIC SVf_POK, for the reason _has_public_pv gives: merely printing a
+# float sets the private flag, and a gate that read that one would take a
+# caller's logging for a promise about the wire. Nothing here numifies the
+# string half or stringifies the number (docs/adr/0002, karr #32).
+sub _carries_go_non_finite_token {
+    my ($value, $text) = @_;
+    return 0 unless _has_public_pv($value);
+    my $bytes = _go_non_finite_token_bytes("$value");
+    return defined $bytes && $bytes eq $text ? 1 : 0;
+}
+
 sub assert_representable {
     my ($class, $value) = @_;
     return 1 unless defined $value;
@@ -787,33 +897,53 @@ sub assert_representable {
             . "stringification is the value you mean.";
     }
 
-    # karr #59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on
-    # the wire. value_to_bytes writes +Inf / -Inf / NaN -- the same text
-    # Go's strconv.FormatFloat produces -- but neither emitter can carry it:
-    # Cpanel::JSON::XS writes it as `null` (the document is silently rounded),
-    # JSON::XS writes bare `inf` (invalid JSON, sops refuses with "invalid
-    # character i"), and YAML::XS writes bare `Inf` (self-MAC OK, sops -d exit
-    # 51). All three put a file on disk that no implementation can read back.
-    # Refused here, the same shape as the ref and int64 checks. Reading is
-    # unaffected -- a type:float plaintext of +Inf or NaN is accepted by
-    # _deserialize_value today (karr #59's request, and Go writes it) and stays
-    # accepted: assert_representable is encrypt-side only.
+    # karr #59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on the
+    # wire OF ITS OWN. value_to_bytes writes +Inf / -Inf / NaN -- the same text
+    # Go's strconv.FormatFloat produces -- but the emitters write something
+    # else for the same double: Cpanel::JSON::XS writes `null`, and YAML::XS
+    # writes a bare `Inf` / `-Inf` / `NaN`, which go-yaml resolves as a STRING.
+    # Measured against sops 3.13.3, unencrypted YAML leaf: `Inf` is `sops -d`
+    # exit 51, and `-Inf` / `NaN` are exit 0 with the leaf silently retyped
+    # from a float to a string -- which is worse, not better. Refused here, the
+    # same shape as the ref and int64 checks.
+    #
+    # NARROWED for karr #113 / docs/adr/0031: that premise is about a scalar
+    # whose only form is its number. One that also carries a plain YAML token
+    # go-yaml resolves back to exactly that double -- the shape docs/adr/0026's
+    # parse produces for a document sops wrote -- does have a wire form, and
+    # refusing it left this library reading a document it could not write back
+    # (rotate croaked on a file `sops -d` reads at exit 0). Measured, all twelve
+    # tokens, unencrypted YAML slot: `sops -e` -> File::SOPS->rotate ->
+    # `sops -d` exit 0, the wire byte-identical.
+    #
+    # This is a GATE, not the verdict. Whether the document being written can
+    # really carry the token is a question about one emitter and one foreign
+    # reader, and it is answered where the format is known: by docs/adr/0013's
+    # foreign-resolution guard in Format::YAML, which compares the token that
+    # emitter actually writes against Go's own resolution -- the single copy of
+    # that model. canonical_float_tree hands the leaf over, and refuses it in a
+    # MAC-covered document whose handler installs no such guard.
+    #
+    # Reading is unaffected -- a type:float plaintext of +Inf or NaN is accepted
+    # by _deserialize_value today (karr #59's request, and Go writes it) and
+    # stays accepted: assert_representable is encrypt-side only.
     if (_sv_kind($value) eq 'float') {
-        my $inf = 9**9**9;
-        my $form
-            = $value != $value              ? 'NaN'
-            : $value == $inf                ? '+Inf'
-            : $value == -$inf               ? '-Inf'
-            :                                  undef;
+        my $form = _non_finite_bytes($value);
         croak "value is a non-finite float ($form) and no SOPS document can "
             . "carry it: the JSON emitter writes it as null, the YAML emitter "
-            . "writes bare Inf / NaN, and what one writes the other cannot "
-            . "read back. sops itself writes type:float +Inf / NaN, but only "
-            . "because Go has a strconv.FormatFloat rule that does not survive "
-            . "the round-trip through Perl's encoder. Store the value as a "
-            . "string (type:str), which is written verbatim and round-trips "
-            . "exactly through both implementations."
-            if defined $form;
+            . "writes a bare Inf / -Inf / NaN, which Go's yaml.v3 resolves as "
+            . "a string, and what one writes the other cannot read back. sops "
+            . "itself writes type:float +Inf / NaN, but only because Go has a "
+            . "strconv.FormatFloat rule that does not survive the round-trip "
+            . "through Perl's encoder. Two answers, and which one you want is "
+            . "yours to say: store the value as a string (type:str), which is "
+            . "written verbatim and round-trips exactly through both "
+            . "implementations -- or, in an unencrypted YAML slot, give the "
+            . "scalar the plain token go-yaml reads as this same double, which "
+            . "is a Scalar::Util::dualvar and is what parsing a sops-written "
+            . "document hands back here. Then it is written and read as a "
+            . "float by both."
+            if defined $form && !_carries_go_non_finite_token($value, $form);
     }
 
     return 1 unless _sv_kind($value) eq 'int';
@@ -899,20 +1029,46 @@ covers any subclass: the encrypted-slot rule and the unencrypted-slot guard
 asked the same question in different ways and the encrypted slot is the
 looser one.
 
-=item B<A non-finite float:> C<NaN>, C<+Inf>, C<-Inf>. L</value_to_bytes>
-writes them as C<NaN> / C<+Inf> / C<-Inf> -- the same text Go's
-C<strconv.FormatFloat> produces -- but no emitter can carry it: Cpanel's
+=item B<A non-finite float:> C<NaN>, C<+Inf>, C<-Inf> -- B<unless it carries
+go-yaml's own token for that double>. L</value_to_bytes> writes them as
+C<NaN> / C<+Inf> / C<-Inf> -- the same text Go's C<strconv.FormatFloat>
+produces -- but no emitter derives that text from the B<number>: Cpanel's
 JSON encoder writes C<null> (the document is silently rounded), JSON::XS
 writes bare C<inf> (invalid JSON, sops refuses with C<invalid character i>),
-and YAML::XS writes bare C<Inf> / C<NaN> (self-MAC OK, sops -d exit 51).
-All three put a file on disk nothing can read back. The pre-fix code wrote
-the file anyway, and the caller had no reason to notice -- that is the
-defect karr #59 exists to close. Store the value as a B<string> instead --
-that is C<type:str>, written verbatim, and the same number (or its
-deliberate stringification) is round-tripped exactly through both
-implementations. Reading is unaffected: a C<type:float> plaintext of
-C<+Inf> or C<NaN> is accepted by L</decrypt_value> today, and sops
-itself writes such a value, so the read path has to keep accepting it.
+and YAML::XS writes a bare C<Inf> / C<-Inf> / C<NaN>, which Go's yaml.v3
+resolves as a B<string>. Measured against sops 3.13.3 in an unencrypted YAML
+slot, C<Inf> is C<sops -d> exit 51 and C<-Inf> / C<NaN> are exit 0 with the
+leaf silently retyped from a float to a string -- which is worse, not
+better. The pre-fix code wrote the file anyway, and the caller had no reason
+to notice; that is the defect karr #59 exists to close.
+
+B<Narrowed since 0.003> (karr #113, C<docs/adr/0031>): a scalar that also
+carries, as its own string half, one of the twelve plain tokens go-yaml
+resolves to exactly that double -- C<.inf>, C<+.Inf>, C<-.INF>, C<.nan> and
+their case variants -- B<is> written, in an unencrypted YAML slot. That is
+the shape L<File::SOPS::Format::YAML/parse> produces for a document sops
+wrote (C<docs/adr/0026>), and refusing it left this library reading a
+document it could not write back: C<rotate> croaked on a file C<sops -d>
+reads at exit 0. Measured, all twelve tokens: C<sops -e> E<gt>
+C<File::SOPS-E<gt>rotate> E<gt> C<sops -d> exit 0, the wire byte-identical.
+
+Both halves have to agree. C<dualvar(+Inf, '-.inf')> is a contradiction and
+stays refused, the same answer C<docs/adr/0012> gives an integer whose halves
+disagree, and so does any other spelling -- C<.INf> and C<+.nan> are strings
+to sops, and a C<dualvar(+Inf, 'banana')> would put a document on disk that
+fails its own MAC. This check is a B<gate>: whether the document being
+written can really carry the token is answered where the format is known, by
+the foreign-resolution guard C<docs/adr/0013> installs in the YAML handler.
+A JSON document has no such spelling in either slot (measured, C<sops -d>
+exit 51 unencrypted and exit 4 encrypted) and is refused, as is B<every>
+non-finite float in an encrypted slot -- see L</encrypt_value> and karr #122.
+
+Store the value as a B<string> instead where none of that applies -- that is
+C<type:str>, written verbatim, and the same number (or its deliberate
+stringification) is round-tripped exactly through both implementations.
+Reading is unaffected: a C<type:float> plaintext of C<+Inf> or C<NaN> is
+accepted by L</decrypt_value> today, and sops itself writes such a value, so
+the read path has to keep accepting it.
 
 Since 0.003 a B<parsed document> can reach this guard on its own, where the
 route in used to be Perl code or a YAML C<.inf>: a bare JSON integer literal
@@ -1079,19 +1235,6 @@ says it is.
 
 =cut
 
-# Canonical texts no emitter has an agreed wire form for, left exactly as they
-# are today: JSON has no representation for the non-finite values at all, and
-# YAML::XS writes bare Inf / NaN, which is not what Go reads back.
-#
-# assert_representable refuses all three on the encrypt path (karr #59), so
-# only the PLAINTEXT emitters -- decrypt_file, edit -- can still reach this,
-# and there the pre-#59 behaviour is what those documents already have.
-#
-# -0 used to be on this list and is not any more: karr #62 measured a YAML
-# spelling that works, and the format that needed one supplies it in its own
-# carrier. See docs/adr/0006.
-my $NO_AGREED_FORM = qr/\A(?:NaN|[+-]Inf)\z/;
-
 sub canonical_float_tree {
     my ($class, $tree, %args) = @_;
     my $roundtrips = $args{roundtrips} // croak "roundtrips callback required";
@@ -1099,7 +1242,31 @@ sub canonical_float_tree {
     my $reject     = $args{reject};
     my $scalars    = $args{reject_scalar};
 
-    return _canonical_floats($tree, $roundtrips, $carrier, $reject, $scalars, []);
+    return _canonical_floats($tree, $roundtrips, $carrier, $reject, $scalars,
+                             _document_carries_mac($tree), []);
+}
+
+# Does the document about to be written carry a MAC a foreign reader will
+# recompute from these bytes?
+#
+# Read off the tree, because that is the only place it is available here: a
+# handler's serialize() puts the metadata under `sops` before it calls its
+# emitter, and the plaintext emitters (decrypt_file, edit) hand over the tree
+# without one. The YAML handler additionally says so by installing a
+# reject_scalar (docs/adr/0013), but the JSON handler's emit is the IDENTICAL
+# call on both paths, so for that one this is the only signal there is.
+#
+# The same fact docs/adr/0026's parse-side walk keys on, read from the same
+# place. It cannot answer wrongly in the direction that matters: serialize
+# always adds the key and refuses a tree that already has one, and a
+# multi-document stream is refused one layer up, so the root is always the
+# single document's hash. A caller who invokes a handler's emit() directly on a
+# plaintext tree that happens to carry a top-level `sops` key gets a leaf
+# refused that would have been written -- fail-closed, and the only reachable
+# false answer. See docs/adr/0031.
+sub _document_carries_mac {
+    my ($tree) = @_;
+    return ref $tree eq 'HASH' && exists $tree->{sops} ? 1 : 0;
 }
 
 # WHERE a rejected leaf sits, in the shape File::SOPS::_at_path already uses for
@@ -1129,15 +1296,17 @@ sub _written_leaf {
 }
 
 sub _canonical_floats {
-    my ($node, $roundtrips, $carrier, $reject, $reject_scalar, $path) = @_;
+    my ($node, $roundtrips, $carrier, $reject, $reject_scalar, $mac_covered,
+        $path) = @_;
 
     return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier,
-                                           $reject, $reject_scalar,
+                                           $reject, $reject_scalar, $mac_covered,
                                            [ @$path, $_ ]) }
                  keys %$node }
         if ref $node eq 'HASH';
     return [ map { _canonical_floats($node->[$_], $roundtrips, $carrier,
-                                     $reject, $reject_scalar, [ @$path, $_ ]) }
+                                     $reject, $reject_scalar, $mac_covered,
+                                     [ @$path, $_ ]) }
                  0 .. $#$node ]
         if ref $node eq 'ARRAY';
 
@@ -1237,11 +1406,47 @@ sub _canonical_floats {
     # today. Do not inline a copy of it here.
     my $text = __PACKAGE__->value_to_bytes($node);
 
-    # NaN and the infinities leave the walk unchecked as well as unchanged:
-    # assert_representable refuses all three on the encrypt path, so the only
-    # caller that can reach them here is a plaintext emitter, which passes no
-    # reject_scalar because a plaintext document has no MAC to disagree with.
-    return $node if $text =~ $NO_AGREED_FORM;
+    # NaN and the infinities. The leaf is never REWRITTEN here -- neither the
+    # round-trip test nor the carrier can help it, and karr #113 measured what
+    # happens if they are asked: YAML::XS writes the token and libyaml reads it
+    # back as a STRING, so $roundtrips answers no for a leaf that is perfectly
+    # writable, and the carrier then replaces the document's own `.inf` with a
+    # bare `+Inf` -- `sops -d` exit 0 and the leaf silently retyped to a string,
+    # in both formats. A local reparse cannot answer a question about a foreign
+    # resolver (docs/adr/0013). What changes is only who gets to CHECK it.
+    #
+    # A leaf whose string half is a token go-yaml resolves back to this same
+    # double goes to the handler's foreign-resolution guard, which is the single
+    # copy of Go's resolution model (docs/adr/0013 and 0017) and compares the
+    # token the emitter really writes. A MAC-covered document whose handler
+    # installs no such guard has nothing that can vouch for the leaf, and it is
+    # refused rather than written: that is JSON, where a non-finite float has no
+    # spelling at all (measured, unencrypted slot, all twelve tokens, `sops -d`
+    # exit 51).
+    #
+    # Everything else keeps the behaviour it has always had. A bare NV, and any
+    # leaf in a document with no MAC, is left exactly as it is -- on the encrypt
+    # path a bare one cannot get here at all, since assert_representable refuses
+    # it, so that is still the plaintext emitters' branch and decrypt_file goes
+    # on reproducing sops's own `.inf` byte for byte (docs/adr/0026).
+    if ($text =~ $NO_AGREED_FORM) {
+        return $node unless _carries_go_non_finite_token($node, $text);
+        return _written_leaf($node, $text, $reject_scalar, $path)
+            if $reject_scalar;
+        return $node unless $mac_covered;
+
+        croak _leaf_location($path) . ": cannot write a non-finite float to "
+            . "this SOPS document: the only wire form for one that both "
+            . "implementations read back as the same number is a YAML plain "
+            . "scalar Go's yaml.v3 resolves to it (`.inf`, `-.inf`, `.nan` and "
+            . "their case variants), and the handler writing this document has "
+            . "no such form -- JSON has none, so the document would state a "
+            . "quoted string where its own MAC covers the number, and neither "
+            . "sops nor this module could read the file back (measured, sops "
+            . "-d exit 51). Store the value as a string (type:str), which is "
+            . "written verbatim and round-trips exactly through both "
+            . "implementations, or write the document as YAML";
+    }
 
     # The emitter's own output already comes back as this number: leave the
     # scalar alone, so the document keeps the bytes it has always had.
@@ -1362,10 +1567,32 @@ walk that computes the MAC must never see a carrier: the L<Math::BigFloat> one
 is a blessed reference, which L</detect_type> calls C<str>, so the digest would
 cover its stringification instead of the number.
 
-C<NaN>, C<+Inf> and C<-Inf> are returned unchanged. Those have no wire form
-both implementations agree on, and L</assert_representable> refuses them on the
-encrypt path anyway, so only the plaintext emitters can still reach this walk
-with one.
+C<NaN>, C<+Inf> and C<-Inf> are returned B<unchanged> -- never carried. Neither
+callback can help such a leaf: C<roundtrips> reparses with this side's own
+parser, which reads C<.inf> back as a string, so it answers no for a leaf that
+is perfectly writable, and the carrier would then write a bare C<+Inf>, a
+document C<sops -d> reads at exit 0 with the leaf silently retyped to a string.
+
+What the walk does with one depends on whether anything can vouch for it. A
+non-finite leaf whose B<string half> is a plain token go-yaml resolves back to
+that same double -- C<.inf>, C<-.inf>, C<.nan> and their case variants, the
+shape a sops-written YAML document parses to (C<docs/adr/0026>) -- is passed to
+C<reject_scalar>, whose model of the foreign resolver is the one that decides.
+In a document that carries a MAC and whose handler installed no C<reject_scalar>
+the leaf is B<refused>, naming the key path: that is JSON, where a non-finite
+float has no spelling at all (measured, C<sops -d> exit 51 unencrypted, exit 4
+encrypted). Everything else is left exactly as it is -- a bare C<9**9**9> cannot
+reach the walk on the encrypt path, since L</assert_representable> refuses it
+there, so that remains the plaintext emitters' case and C<decrypt_file> goes on
+reproducing sops's own C<.inf> byte for byte. See
+L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>
+(karr #113).
+
+Whether the document carries a MAC is read off the tree this walk is handed: a
+handler's C<serialize> puts the metadata under C<sops> before calling its
+emitter, and the plaintext emitters hand over the tree without one. The YAML
+handler also says so by installing C<reject_scalar>, but the JSON handler's
+C<emit> is the identical call on both paths.
 
 A negative zero I<is> carried, and it is the one case where the carrier's text
 is not the canonical decimal: C<value_to_bytes> writes C<-0>, which Go's
@@ -1499,9 +1726,10 @@ sub _has_public_pv {
 sub _float_bytes {
     my ($n) = @_;
 
-    my $inf = 9**9**9;
-    return 'NaN' if $n != $n;                       # only NaN is unequal to itself
-    return $n > 0 ? '+Inf' : '-Inf' if $n == $inf || $n == -$inf;
+    # NaN and the infinities, from the one sub that decides what they are --
+    # the same answer assert_representable and the emit walk ask for.
+    my $non_finite = _non_finite_bytes($n);
+    return $non_finite if defined $non_finite;
 
     my $g;
     for my $precision (1 .. 17) {                   # 17 always round-trips a double

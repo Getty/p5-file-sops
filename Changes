@@ -55,6 +55,34 @@ Revision history for File-SOPS
     still expands to independent values as before. Cost: one extra pass over
     the distinct nodes, 3.3% of an encrypt call on a 45,000-node document. See
     docs/adr/0027 and karr #112.
+  - BEHAVIOUR CHANGE and BUG FIX: a YAML document that sops wrote with a bare
+    `.inf`, `-.inf` or `.nan` in an unencrypted slot can now be written BACK.
+    The same release taught the parse to read such a document (see the entry
+    below, docs/adr/0026): it hands back the float go-yaml resolves, carrying
+    the document's own token. Every write path then refused that float, so
+    `rotate` croaked on a file `sops -d` reads at exit 0, and the library ended
+    up with a document class it could read and not write. The non-finite guard
+    is narrowed rather than loosened: a float is written only
+    where its own string half is one of the twelve plain tokens go-yaml
+    resolves to exactly that double, and both halves have to agree -
+    `dualvar(+Inf, '-.inf')` is a contradiction and stays refused, the same
+    answer an integer whose halves disagree gets. Everything the guard was
+    written for is untouched: a caller's own `9**9**9`, a computed overflow, a
+    JSON literal that overflows a double, and any float whose string half is a
+    spelling sops reads as a string (`.INf`, `+.nan`, `banana`). Measured
+    against sops 3.13.3, all twelve tokens in an unencrypted YAML slot: `sops
+    -e` -> `File::SOPS->rotate` -> `sops -d` is exit 0 with the wire
+    byte-identical, where all three spellings sops writes used to croak in the
+    middle. JSON is deliberately NOT carried along - it has no spelling for a
+    non-finite float in either slot (measured, `sops -d` exit 51 unencrypted
+    and exit 4 encrypted), and since the guard is format-blind the refusal for
+    a MAC-covered document now comes from the emit walk, naming the leaf's key
+    path. An ENCRYPTED slot still refuses every non-finite float in both
+    formats, now with a message that says a YAML document can carry it
+    unencrypted (karr #122). `edit` still cannot save such a document: the
+    plaintext round trip through the editor loses the leaf's float-ness, which
+    is a different defect and a different lane (karr #123). See docs/adr/0031
+    and karr #113.
   - BUG FIX: a YAML document whose source used a merge key can now be read.
     sops does not expand `<<`: it unmarshals into a yaml.Node tree, where
     go-yaml resolves no merges, so the key survives and go-yaml's emitter
@@ -1560,6 +1588,7 @@ Revision history for File-SOPS
     0.417s where it took 0.807s. Not fixed yet: the walks in Encrypted.pm and
     Format/YAML.pm still warn, 168 of the original 505 lines, karr #120. See
     docs/adr/0029 and karr #117.
+
   - NEW: a plaintext YAML tagging a scalar `!!bool true` or `!!bool false` is
     now encrypted instead of refused, and the other yaml.org scalar tags are
     refused with a message about the document instead of one about libyaml.
@@ -1587,7 +1616,6 @@ Revision history for File-SOPS
     already refused by the foreign-resolution guard), and `!!float 1` is
     type:float there and type:int here with the same plaintext, so the file
     still verifies. See docs/adr/0032 and karr #118.
-
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

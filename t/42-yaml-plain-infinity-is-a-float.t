@@ -238,19 +238,33 @@ subtest 'the repaired leaf is emitted as the token it came from' => sub {
 };
 
 ###############################################################################
-# 6. THE karr #59 GUARD IS UNTOUCHED. A document this reads still cannot be
-#    written, and a caller's own non-finite float is still refused. Narrowing
-#    the guard is karr #113, and it needs its own measurement.
+# 6. THE karr #59 GUARD, NARROWED. A caller's own non-finite float is still
+#    refused -- that is what the guard was written for and it is untouched.
+#    The leaf this walk produces is not: karr #113 / docs/adr/0031 measured
+#    that a float carrying go-yaml's own token has a wire form after all, and
+#    t/46 is that decision's corpus. Both halves are pinned here because this
+#    file is where the scalar comes from.
 ###############################################################################
 
-subtest 'the non-finite refusal still refuses' => sub {
+subtest 'a caller-supplied non-finite float is still refused' => sub {
     my $inf = 9**9**9;
-    for my $value ($inf, -$inf, $inf - $inf, dualvar($inf, '.inf')) {
+    for my $value ($inf, -$inf, $inf - $inf) {
         my $ok = eval {
             File::SOPS::Encrypted->assert_representable($value); 1
         };
         ok(!$ok, 'assert_representable refuses it');
         like($@, qr/non-finite float/, 'and says why');
+    }
+};
+
+subtest 'the leaf this walk produces is representable' => sub {
+    my $inf = 9**9**9;
+    for my $token (sort keys %GO_RESOLVES) {
+        my $leaf = wire_leaf($token);
+        my $ok   = eval {
+            File::SOPS::Encrypted->assert_representable($leaf); 1
+        };
+        ok($ok, "[$token] assert_representable accepts it") or diag($@);
     }
 };
 
@@ -340,12 +354,14 @@ subtest 'and the quoted twin still verifies, unchanged' => sub {
 };
 
 ###############################################################################
-# 8. WRITING IT BACK. Still refused -- by the non-finite guard now rather than
-#    by a MAC error, and now naming the leaf. Pinned so that the day karr #113
-#    is decided, the change is visible here rather than silent.
+# 8. WRITING IT BACK. This used to be a refusal -- the non-finite guard, naming
+#    the leaf -- and it was pinned so that the day karr #113 was decided the
+#    change would be visible here rather than silent. It has been decided
+#    (docs/adr/0031): the document goes back out with the token it came in
+#    with. The round trip through the binary is t/46's section 8.
 ###############################################################################
 
-subtest 'a document with a bare .inf still cannot be written back' => sub {
+subtest 'a document with a bare .inf can be written back' => sub {
     my $tempdir = tempdir(CLEANUP => 1);
     write_file("$tempdir/bare.yaml", $FIXTURE_BARE);
 
@@ -354,9 +370,11 @@ subtest 'a document with a bare .inf still cannot be written back' => sub {
                            identities => [$FIXTURE_IDENTITY]);
         1;
     };
-    ok(!$ok, 'rotate refuses');
-    like($@, qr/non-finite float/, 'from the karr #59 guard');
-    like($@, qr/v_unencrypted/, 'and it names the leaf');
+    ok($ok, 'rotate writes it') or diag($@);
+    return unless $ok;
+
+    like(read_file("$tempdir/bare.yaml"), qr/^v_unencrypted: \.inf$/m,
+        'and the slot still holds the token sops put there');
 };
 
 ###############################################################################
