@@ -1,0 +1,35 @@
+---
+class: standard
+completed: 2026-08-21T09:12:25Z
+created: 2026-08-21T08:58:43Z
+id: 152
+priority: medium
+started: 2026-08-21T09:02:29Z
+status: done
+tags:
+- docs
+- format
+title: A dangling POD link into Encrypted.pm's old THE COMMENT LEAF section
+updated: 2026-08-21T09:12:25Z
+---
+
+karr #147 moved File::SOPS::Comment out of lib/File/SOPS/Encrypted.pm into
+lib/File/SOPS/Comment.pm, and the POD section "THE COMMENT LEAF" went with it.
+Every link inside Encrypted.pm was repointed to L<File::SOPS::Comment> in the
+same change. One link outside it was not, because Format/YAML.pm was outside
+that ticket's file boundary:
+
+  lib/File/SOPS/Format/YAML.pm:1106
+    into a C<File::SOPS::Comment> (see L<File::SOPS::Encrypted/THE COMMENT LEAF>), keeps it at
+
+The section it names no longer exists, so the link resolves to nothing. Fix is
+one token: L<File::SOPS::Comment>.
+
+NOT caught by the test suite, and that is worth knowing: xt/author/pod-links.t
+(Pod::Checker) resolves INTERNAL section links only -- a link into another
+module's section is never checked. Verified against the built dist after the
+move: t/author-pod-links.t and t/author-pod-syntax.t both pass with this link
+in place.
+
+Lane: format. Doc-only, no behaviour, no wire bytes.
+ABGENOMMEN 2026-08-21. Commit 4fe96b0. Die Abnahme gilt dem SWEEP, nicht dem einen Token: 596 Links ueber alle neun Module, null tot -- und die Null ist belegt statt behauptet. Negativkontrolle (mit wieder eingesetztem altem Link meldet der Checker exakt diese eine Zeile und sonst nichts), Nachweis, dass der Index nicht zu grosszuegig ist (null Links loesen nur ueber einen lockeren =item-Treffer oder den Erstwort-Fallback auf), und die Bestaetigung, dass podchecker auf der bearbeiteten Datei byte-identisch zu HEAD ist. Der eigentliche Befund bleibt: xt/author/pod-links.t KANN einen L<Modul/ABSCHNITT>-Link nicht pruefen, weil Pod::Checker nur interne Abschnittslinks aufloest -- karr #98s Luecke in zweiter Gestalt, und der Release-Audit fand sie in dritter (#126).
