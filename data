@@ -1,0 +1,33 @@
+---
+class: standard
+created: 2026-08-21T05:38:54Z
+id: 130
+priority: low
+status: backlog
+tags:
+- wire
+- yaml
+- interop
+- types
+title: '!!binary: decodieren wie sops, oder weiter ablehnen? -- Wire-Lane-Frage aus
+  karr #118'
+updated: 2026-08-21T05:38:54Z
+---
+
+Uebergabe aus karr #118 (Format-Lane) an die Wire-Lane. In #118 wurde !!binary ausdruecklich ABGELEHNT statt behandelt, mit klarer Meldung (docs/adr/0032). Diese Karte ist die offene Frage dahinter.
+
+sops ist der einzige Fall in dieser Familie, in dem es den WERT aendert: es base64-DEKODIERT den Skalar. Gemessen, sops 3.13.3:
+
+  !!binary aGVsbG8=       -> type:str, Klartext `hello`      (unverschluesselter Slot: hello)
+  !!binary "aGVs\nbG8="   -> type:str, Klartext `hello`      (Whitespace im base64 toleriert)
+  !!binary AAECAw==       -> type:str, Klartext = die Bytes 00 01 02 03
+  !!binary notbase64!!    -> sops verweigert den Klartext
+
+Das Tag-Entfernen waere hier falsch: es gaebe uns `aGVsbG8=` wo sops `hello` hat -- ein anderer Wert, ein anderer Digest. Also entweder dekodieren oder ablehnen; #118 hat abgelehnt, weil Dekodieren eine Wertumwandlung auf dem Wire-Pfad ist.
+
+Was ein Dekodieren zu loesen haette:
+  1. Gos base64-Verhalten exakt treffen (Whitespace-Toleranz, Padding, Fehlerfall).
+  2. type:bytes vs type:str: sops schreibt fuer !!binary type:STR mit den dekodierten Bytes darin, NICHT type:bytes. Diese Distribution kodiert aber jeden Wert unbedingt als UTF-8 (ADR 0003), mit type:bytes als einziger Ausnahme -- ein !!binary mit nicht-UTF-8-Inhalt (AAECAw== oben) hat auf unserer Seite keine Darstellung, die zugleich round-trippt und ein Perl-Zeichenstring bleibt.
+  3. Der UNVERSCHLUESSELTE Zwilling muesste beim Schreiben wieder als !!binary emittiert werden, was YAML::XS nicht kann.
+
+Punkt 2 und 3 sind der Grund, warum #118 es nicht halb gemacht hat. Es kann gut sein, dass "ablehnen" die endgueltige Antwort ist -- dann diese Karte mit der Begruendung schliessen.
