@@ -1,0 +1,84 @@
+---
+class: standard
+completed: 2026-08-21T10:43:33Z
+created: 2026-08-21T09:39:35Z
+depends_on:
+- 150
+id: 161
+priority: high
+started: 2026-08-21T09:54:12Z
+status: done
+tags:
+- api
+- metadata
+- interop
+- rules
+title: should_encrypt_key/path match with Perl regex semantics where sops matches
+  with RE2
+updated: 2026-08-21T10:43:33Z
+---
+
+Found while measuring karr #150. It is what makes that hole reachable through an ordinary .sops.yaml, with no hand-edited metadata anywhere.
+
+unencrypted_regex and encrypted_regex are matched here by Perl and by Go with RE2, and the two disagree on every character class whose meaning depends on Unicode. RE2 is ASCII-only for \w, \d, \s and the POSIX classes; Perl is Unicode-aware for any string carrying the UTF-8 flag -- which is every non-ASCII key our parsers produce.
+
+Measured end to end, sops 3.13.3, one .sops.yaml, sops -e, then File::SOPS->rotate. No hand editing at any point:
+
+  unencrypted_regex    key         sops        we store
+  ^\w+$                cafe'       encrypts    bare
+  ^n\d$                n + U+0663  encrypts    bare
+  ^[[:alpha:]]+$       cafe'       encrypts    bare
+  ^a\sb$               a + NBSP+b  encrypts    bare
+  ^\w+$                U+5BC6      encrypts    bare
+
+Before karr #150 every one of those rotates wrote the secret to disk in plaintext at exit 0. They are refused now, so the SYMPTOM is closed and this is what is left: a rule that classifies a key differently from the implementation that wrote the file. In the other direction (encrypted_regex) the same divergence encrypts a value sops leaves readable, which is not refused today either.
+
+Note the second half of the trap: whether Perl uses Unicode or ASCII semantics for \w depends on the internal UTF-8 flag of the key, so the SAME key decides differently depending on where the string came from -- "caf\x{e9}" written in Perl source is latin-1 and matches ASCII-only, the same key out of YAML::XS carries the flag and matches Unicode-aware. Reading that flag is exactly what ADR 0003 forbids everywhere else in this distribution; here the regex engine reads it for us.
+
+Likely answer to measure: /a (ASCII-only) on the two rule matches, which is RE2 semantics for these classes, plus a look at what else RE2 and Perl disagree on for a pattern sops accepts. _re2_incompatible_construct in SOPS.pm already knows the other half of this problem for creation-rule path_regex.
+
+Owner: lib/File/SOPS/Metadata.pm (should_encrypt_key, should_encrypt_path). Lane: api.
+2026-08-21 10:38 Implemented: docs/adr/0048, lib/File/SOPS/Metadata.pm, t/62-rule-regexes-are-matched-in-re2s-dialect.t, Changes, and one deliberately inverted t/60 subtest. Follow-ups filed as karr #162-#166.
+MEASUREMENT AND DECISION -- docs/adr/0048.
+
+FIRST QUESTION (does it hit our own encrypt path, not just rotate?): YES.
+File::SOPS->encrypt_file(unencrypted_regex => '^\w+$') over a key cafe+U+00E9
+wrote the value READABLE where sops -e with the same flag ENCRYPTS it. No
+rotation, no hand editing, no guard involved. A write defect of its own.
+
+FULL SWEEP: 43 (field, pattern, key) rows through sops -e and encrypt_file.
+29 disagreed -- 22 of them a secret sops encrypts and we left bare (\w \d \s \B
+and all 12 non-ASCII-reachable POSIX classes, plus (?i)ss vs U+00DF), 7 the
+other way (\W \D \S \b [[:^alpha:]], encrypted_regex \w and [:alpha:]).
+\p{...}, . and [^a] agreed already. After the change 42 of 43 agree.
+
+WHAT RE2 DOES NOT KNOW, AND WHAT SOPS DOES WITH IT: sops does NOT refuse. It
+discards the compile error, so the rule silently matches NOTHING -- measured,
+--encrypted-regex '(?=f)foo' writes EVERY value of the document in plaintext at
+exit 0 under a sops section, and --unencrypted-regex '(?=f)foo' encrypts every
+value. The one place sops reports it is a .sops.yaml path_regex ('error parsing
+regexp'), used here as an oracle for 137 patterns.
+
+DECISION: (a)+(b)+(c). /a on both patterns -- RE2's answer for the classes, and
+it takes the UTF-8 flag out of the decision (ADR 0003). /a and NOT /aa: RE2's
+(?i) does fold k->U+212A and s->U+017F, which /aa would break. Refuse a
+construct the two dialects do not share (escape-aware, class-aware,
+whitelist-shaped). Refuse a pattern PERL cannot compile with its reason ((?U)
+is RE2's and not Perl's). The refusal is raised at USE, not at parse, so
+decrypt and extract still read such a document -- verified against one sops
+wrote.
+
+CORPUS: 15_960 rule decisions from this suite's own 11 patterns x 653 keys x 2
+fields. 18 moved, every one a non-ASCII key under ^\w+$, ZERO ASCII keys.
+
+RESIDUALS -> karr #165: full case folding ((?i)^ss$ vs U+00DF), $ before a
+trailing newline, \p{NAME} Go does not have. Handed on: #162 (cpanfile perl
+floor -- use re '/a' needs 5.014), #163 (SOPS.pm rotate POD still says this is
+open), #164 (two RE2 detectors), #166 (refusal reported under a leaf path).
+
+PROOF: t/62 is 367 assertions in 9 subtests, green; against the tree before the
+change it fails 189 assertions in 5 of 9. One t/60 subtest inverted on purpose
+(its premise is gone) and rewritten to pin that rotate now goes through and
+sops -d reads the result. SOPS_BIN=/tmp/sops prove -lr t/ green at 63 files /
+1284 tests; t/04-interop.t EXECUTED against sops 3.13.3, 32/32.
+ABGENOMMEN 2026-08-21. Commit ebfb1e3, ADR 0048. Die Abnahme gilt drei Befunden, die das Ticket nicht hatte. Erstens: die Divergenz trifft den EIGENEN encrypt-Pfad -- encrypt_file mit unencrypted_regex ^\w+$ ueber einen Schluessel 'café' schrieb den Wert LESBAR, wo sops ihn verschluesselt. Kein rotate, keine Handbearbeitung. Das macht daraus einen Schreibfehler und nicht nur karr #150s Erreichbarkeitshaelfte. Zweitens, und das ist ein Fehler in SOPS und nicht hier: RE2 lehnt ein unbekanntes Konstrukt NICHT ab -- es matcht mit verworfenem Compile-Fehler, also schreibt --encrypted-regex '(?=f)foo' JEDEN Wert des Dokuments im Klartext, unter einer sops-Sektion, die die Datei verschluesselt aussehen laesst, exit 0. Deshalb ist unsere Antwort eine Ablehnung und keine Nachahmung. Drittens die Wahl /a statt /aa, gemessen statt geraten: RE2s (?i) IST unicode-bewusst (Go faltet k zu U+212A), was /a erhaelt und /aa brechen wuerde -- eine Zeile repariert, zwei kaputt. Und der Korpus: 15.960 Entscheidungen diffed, 18 bewegt, alle mit nicht-ASCII-Schluessel, NULL ASCII-Schluessel.
