@@ -1,0 +1,29 @@
+---
+class: standard
+completed: 2026-08-21T09:12:31Z
+created: 2026-08-21T08:58:48Z
+id: 153
+priority: low
+started: 2026-08-21T09:02:35Z
+status: done
+tags:
+- test
+title: t/00-load.t does not know File::SOPS::Metadata::Flat
+updated: 2026-08-21T09:12:31Z
+---
+
+t/00-load.t lists the distribution's modules, and File::SOPS::Metadata::Flat is
+not among them -- it has been missing since the module was added. Noticed while
+adding File::SOPS::Comment to that list in karr #147; not taken along, because
+the Metadata lane is working in that module right now.
+
+Note what the position in the file decides. Every use_ok after use_ok('File::SOPS')
+loads a module File::SOPS has already pulled in, so it can no longer fail: the
+load was already proven (or already fatal) one line earlier. That is why the
+Comment entry sits FIRST, with a comment saying so. A Metadata::Flat entry has
+the same property -- File::SOPS::Metadata loads it -- so decide deliberately
+whether the entry is meant as a list item or as a real check of standalone
+loadability, and place it accordingly.
+
+Lane: test.
+ABGENOMMEN 2026-08-21. Commit 4fe96b0. Bemerkenswert: die Praemisse des Tickets hat sich WAEHREND der Arbeit geaendert. Zu Beginn lud nichts unter lib/ Metadata::Flat -- use File::SOPS zog sieben Module, Flat war nicht dabei. Am Ende neun, weil die parallele karr-#36-Lane use File::SOPS::Format::ENV in SOPS.pm eingetragen hat und ENV Flat laedt. Die Lane hat das beim Nachmessen bemerkt und den Kommentar in der Datei auf den gemessenen Mechanismus umgeschrieben, statt die eigene stehengelassene Vermutung zu committen.
