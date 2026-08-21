@@ -1,0 +1,154 @@
+---
+class: standard
+completed: 2026-08-21T03:24:37Z
+created: 2026-08-09T15:31:01Z
+depends_on:
+- 69
+id: 63
+priority: low
+started: 2026-08-20T14:31:49Z
+status: done
+tags:
+- wire
+- json
+- format
+- interop
+title: rotate rewrites a JSON number wider than int64 as a JSON string
+updated: 2026-08-21T03:24:37Z
+---
+
+Found while measuring karr #58 (sops 3.13.3). Not a MAC failure and not data loss in the digits -- silent TYPE drift on a document the real sops wrote.
+
+Every JSON decoder measured (Cpanel::JSON::XS 4.40, JSON::XS 4.04, JSON::PP 4.16) returns a bare PV STRING, not a number, for a JSON integer literal outside the int64 range. YAML::XS returns a float (-NP) for the same digits.
+
+Measured end to end:
+
+  sops -e writes    "big_unencrypted": 100000000000000000000    (a JSON number)
+  File::SOPS decrypt      OK
+  File::SOPS rotate       OK
+  after rotate      "big_unencrypted" : "100000000000000000000"  (a JSON string)
+  sops -d after rotate    exit 0
+
+The MAC survives because the digits are the same either way -- value_to_bytes writes a string verbatim, and Go ToBytes of the parsed value gives the same text -- so nothing complains. But rotating a file has changed its schema, and anything downstream that type-checks the document now sees a string.
+
+assert_representable does not fire because the leaf is a PV, not an IOK scalar, so the int64 guard never looks at it. Whether the right answer is to refuse the document, to preserve the number-ness, or to document the drift is open. Note that preserving number-ness is the same wrapper machinery #58 option (a) needs for floats, so it may come nearly free once that lands.
+PLAN (Orchestrator, 2026-08-16) -- erst Entscheidung, dann Code. Klein, aber nicht mechanisch.
+
+Der Befund steht und ist nicht neu herzuleiten: jeder JSON-Decoder gibt fuer ein
+Integer-Literal jenseits von int64 einen PV-String zurueck, YAML::XS einen NV.
+assert_representable feuert nicht, weil das Leaf ein PV ist und der int64-Check
+nur auf IOK schaut. rotate schreibt es als JSON-String zurueck. Der MAC
+ueberlebt, das Schema driftet.
+
+Drei moegliche Antworten, und das Ticket entscheidet sie nicht:
+
+  (a) Dokumentieren. Billigste, ehrlichste Antwort -- aber "rotate aendert dein
+      Schema" ist eine schlechte Zeile im POD.
+  (b) Number-ness erhalten. Braucht dieselbe Carrier-Maschinerie, die #58 fuer
+      Floats gebaut hat (Math::BigFloat unter allow_bignum, ADR 0006); fuer
+      Integer waere es Math::BigInt. ACHTUNG, das ist der eigentliche Knoten:
+      Format/JSON.pm lehnt einen fremden Math::BigInt heute in
+      _reject_foreign_bignum AB. Der Guard und der Fix wollen dieselbe Klasse
+      an derselben Stelle in entgegengesetzte Richtungen.
+  (c) Das Dokument ablehnen. Falsch, und zwar nachweisbar: sops SCHREIBT es,
+      wir muessen es lesen koennen. Ein Refuse auf der READ-Seite waere eine
+      Regression gegen echte sops-Dokumente.
+
+Empfehlung: (b) -- aber erst, nachdem #58s Carrier-Weg im Code gelesen ist.
+Laesst er sich fuer Integer wiederverwenden, ist es klein; wenn nicht, ist (a)
+richtig. Also eine Messung VOR dem Code: Cpanel::JSON::XS mit allow_bignum und
+einem Math::BigInt jenseits int64 -- schreibt es eine bare number, oder quotet
+es?
+
+Wire-Lane (der Guard gehoert dort), Abstimmung mit Format-Lane wegen
+_reject_foreign_bignum.
+
+Test: sops -e schreibt 100000000000000000000, wir rotieren, sops -d liest, und
+das Literal ist danach immer noch KEIN String. Das braucht das sops-Binary --
+ohne Interop ist dieses Ticket nicht beweisbar, siehe #69.
+MEASURED 2026-08-19 (wire lane), NO CODE. The ticket's hypothesis is
+false: the ADR 0006 carrier machinery does NOT carry this, and every
+off-the-shelf mechanism measured either corrupts the value or retypes
+whole documents. Reporting rather than building something bigger, per
+the brief.
+
+1. Drift reproduced end to end against sops 3.13.3, exactly as filed:
+   sops -e writes a bare 100000000000000000000; our decrypt OK; our
+   rotate rewrites it as the JSON STRING "100000000000000000000";
+   sops -d after rotate exit 0. Silent schema drift, MAC intact.
+
+2. THE CARRIER DOES NOT TOUCH THE LEAF AT ALL. Instrumented
+   canonical_float_tree with all three callbacks on the decoded leaf:
+   roundtrips NOT called, carrier NOT called, reject NOT called.
+   _canonical_floats returns at 'unless _sv_kind($node) eq float' --
+   the leaf is a PV, so the float walk never sees it. #58's machinery
+   is float-only by construction; there is nothing to reuse.
+
+3. THE INFORMATION IS GONE BEFORE WE SEE THE TREE. B::svref_2object on
+   the decoded 100000000000000000000 (a bare JSON NUMBER) and on
+   "100000000000000000000" (a JSON STRING) gives bit-identical SVs:
+   FLAGS 0x4403, B::PV, POK only, both. No post-parse mechanism can
+   distinguish them, so any fix must be at PARSE time. That also rules
+   out every text-based heuristic -- a quoted "5432" must stay quoted.
+
+4. allow_bignum on the DECODER (the only way to get a carrier at parse)
+   retypes everything, not just the big one: 1.5 -> Math::BigFloat,
+   0.30000000000000004 -> Math::BigFloat, 100000000000000000000 ->
+   Math::BigInt. detect_type calls a blessed leaf str, so every float in
+   every document would change type and digest. This is what the comment
+   in Format/JSON.pm already says; re-measured, it holds.
+
+5. THE GUARD AND THE FIX COLLIDE, as the plan predicted:
+   Format::JSON::_reject_referenced_leaf croaks on a Math::BigInt leaf
+   today ('cannot write a leaf blessed into Math::BigInt ...').
+
+6. NEW, and it kills the one mechanism nobody had tried:
+   Cpanel::JSON::XS supports decode($str, my $type) and encode($data,
+   $type) -- a parallel type tree that records which leaves were bare
+   numbers WITHOUT changing what decode returns. It looked like the
+   cheap route. It CORRUPTS this exact value: the type map says
+   JSON_TYPE_INT, and re-encoding writes 18446744073709551615
+   (UINT64_MAX) instead of 100000000000000000000. Silent numeric
+   corruption is strictly worse than the string drift being fixed.
+
+CONCLUSION. Preserving number-ness needs a NEW carrier that is created
+at PARSE time only for bare numeric literals the decoder could not hold,
+is exempted from BOTH emit guards, digests identically to the string it
+replaces, and survives to the caller of decrypt() -- i.e. Format lane
+(parse), wire lane (guards + detect_type/value_to_bytes), API lane (what
+decrypt returns), and an ADR. Not free, and not a variation on #58.
+Recommend deciding that shape before any code. Option (a), documenting
+the drift, is still available and is one POD paragraph.
+GEPARKT 2026-08-19 auf Maintainer-Entscheidung, mit der Messung im Ticket, damit niemand die Sackgassen neu durchlaeuft. 'number-ness erhalten' bleibt die gewuenschte Richtung, ist aber deutlich groesser als das Ticket vermutete -- der Auftrag lautete messen statt annehmen, und die Messung sagt: der #58-Carrier traegt es NICHT. (1) Drift end-to-end reproduziert: sops -e schreibt bare 100000000000000000000, unser rotate schreibt "100000000000000000000", sops -d danach exit 0. (2) canonical_float_tree fasst das Leaf nie an -- mit allen drei Callbacks instrumentiert: roundtrips, carrier und reject werden NICHT gerufen, _canonical_floats kehrt an 'return node unless _sv_kind(node) eq float' um; #58s Mechanik ist konstruktionsbedingt float-only. (3) Die Information ist weg, bevor wir den Baum sehen: B::svref_2object auf die decodierte bare Zahl und auf den decodierten String "100000000000000000000" liefert BIT-IDENTISCHE SVs (FLAGS 0x4403, B::PV, nur POK). Kein Post-Parse-Mechanismus kann sie unterscheiden, jeder Fix ist also parse-time, und Text-Heuristiken sind raus (ein quoted "5432" muss quoted bleiben). (4) allow_bignum auf dem DECODER retypt alles -- 1.5 und 0.30000000000000004 werden Math::BigFloat, detect_type nennt ein blessed Leaf str, also aendert JEDER Float in JEDEM Dokument Typ und Digest. (5) _reject_referenced_leaf croakt heute auf einem Math::BigInt-Leaf: Guard und Fix wollen dieselbe Klasse in entgegengesetzte Richtungen, wie der Plan vorhergesagt hatte. (6) NEU und toetet den einzigen unprobierten Mechanismus: Cpanel::JSON::XS kann decode(str, my type) / encode(data, type), ein paralleler Typbaum ohne Aenderung des Rueckgabewerts -- er KORRUMPIERT genau diesen Wert, die Map sagt JSON_TYPE_INT und das Re-Encoding schreibt 18446744073709551615 (UINT64_MAX) statt 100000000000000000000. Stille numerische Korruption waere schlimmer als die String-Drift. FAZIT: number-ness zu erhalten braucht einen NEUEN parse-time Carrier, ausgenommen von beiden Emit-Guards, digest-identisch zu dem String den er ersetzt, und bis zum decrypt-Aufrufer ueberlebend -- Format-, Wire- und API-Lane plus ADR. Nicht gebaut. Refusen war nie eine Option (sops schreibt und liest das Dokument problemlos). Prioritaet bleibt low.
+MAINTAINER-ENTSCHEIDUNG 2026-08-20: Option (b), number-ness erhalten. (a) Dokumentieren und (c) Refusen sind vom Tisch. Umsetzung beginnt mit der Formentscheidung (ADR), nicht mit Code. Der Parkvermerk vom 19.8. bleibt als Sackgassen-Protokoll gueltig und wird NICHT neu durchlaufen.
+FORM GEFUNDEN 2026-08-20 (wire lane), MESSUNG OHNE CODE, ADR-Entwurf liegt in docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md (Status: proposed). Option (b) geht, und deutlich kleiner als das geparkte Fazit vom 19.8. vermutete: es braucht KEINE neue Traegerklasse und KEINE Ausnahme von den Emit-Guards.
+
+KERN: der Leaf ist kein String und auch kein Integer, sondern ein FLOAT. Das sagt das Binary selbst, und das hatte das Ticket nie gefragt -- es hat nur den unverschluesselten Slot gemessen. sops 3.13.3 schreibt eine JSON-Zahl jenseits int64 im VERSCHLUESSELTEN Slot als type:float: 100000000000000000000 -> type:float, 9223372036854775808 -> type:float (Klartext 9223372036854776000), 123456789012345678901234567890 -> type:float. Es gibt im SOPS-Datenmodell keine grosse Ganzzahl, und sops verliert die Ziffern selbst: sops -e auf 99999999999999999999 schreibt 100000000000000000000 in die Datei.
+
+UND: YAML::XS liefert fuer dieselben Ziffern GENAU die Form, die wir brauchen. Beide Parser kippen bei derselben Groesse (Perls IV/UV-Grenze, nicht Gos int64), aber dahinter gibt YAML::XS NOK+POK zurueck -- den Double mit seiner Quell-Schreibweise als String-Haelfte, also einen dualvar -- und Cpanel::JSON::XS ein nacktes POK. Das ist bereits eine Leaf-Klasse, die die Distribution end to end behandelt (ADR 0011 repariert sie, _float_carrier schreibt sie als bare number). Der Fix ist damit: der JSON-Parser liefert das, was der YAML-Parser schon liefert. Format::YAML bewegt sich nicht.
+
+DREI MESSUNGEN, die die Sackgassen umgehen:
+
+1. ORAKEL: nicht allow_bignum, sondern Cpanels EIGENE Typmap, decode($str, my $type). 2 = JSON_TYPE_INT, 4 = JSON_TYPE_STRING, nested durch Hashes und Arrays. Exakt fuer die einzige gestellte Frage: ein Leaf ist nach dem normalen Decode nur aus zwei Gruenden ein reines PV (JSON-String, oder bare Integer zu breit fuer IV/UV), und die Map trennt sie fehlerfrei. 15 pathologische Literale (400-stellige Zahlen, 1e309, 30 Einsen) auf einen dritten Fall geprueft: es gibt keinen. Quotiertes "100000000000000000000" bleibt 4, "5432"/"007"/"1.50"/"true" bleiben 4. Punkt 6 des Parkvermerks hat den Mechanismus wegen encode($data,$type) verworfen -- die Korruption ist auf der ENCODE-Seite, wir lesen die Map nur. Kosten: +51% bis +53% auf den Decode, gegen +5650% bis +8313% fuer ein zweites allow_bignum-Decode (das baut fuer jeden Float im Dokument ein Math::BigFloat, um eine Frage ueber Strings zu beantworten). Nebenbei: ->allow_bigint waere der richtige Schalter, ist aber ein deprecated No-op (Methodenrumpf = ein Carp::carp).
+
+2. CARRIER: Scalar::Util::dualvar($nv, $ziffern), ein GEWOEHNLICHER Skalar. Gemessen fuer dualvar(1e20,"100000000000000000000"): Flags NOK+POK (identisch zu YAML::XS), detect_type=float, value_to_bytes=100000000000000000000, assert_representable passt (der int64-Guard schaut nur auf kind int), ADR 0012s Integer-Guard feuert NIE (dessen Zweig ist $kind eq int), ADR 0011s Float-Reparatur feuert wie vorgesehen, JSON emit => bare 100000000000000000000, YAML emit => bare 100000000000000000000. _reject_referenced_leaf sieht ihn nie, weil er kein Ref ist. Die vom Ticket vorhergesagte Kollision Guard-gegen-Fix ENTFAELLT: kein Math::BigInt kommt je in den Baum, der einzige lebt als Integer 2 in der weggeworfenen Typmap. Ein echtes Math::BigInt-Leaf croakt weiter in beiden Emittern, unveraendert und zu Recht. Gegen ein nacktes NV entschieden, weil das 1e+20 schreibt statt der Bytes, die sops schreibt.
+
+3. FLOAT-PFAD WIRD NICHT BERUEHRT. Das Orakel wird nur an Leaves gelesen, die im Normalbaum definiert, unreferenziert, SVf_POK und weder SVf_IOK noch SVf_NOK sind. Ein bare Float-Literal decodiert NOK und faellt schon am ersten Test des Gates durch.
+
+BEWEIS (sops 3.13.3 aus /tmp/sops, Prototyp als Monkeypatch im Scratchpad, kein lib/ angefasst):
+- Korpus-Sweep, 42 JSON-Literalformen durch parse+emit, vorher/nachher: 6 Zeilen bewegen sich, ALLE 6 sind diese Leaf-Klasse (zwei davon dieselbe, in Array und Hash verschachtelt). Keine Float-, String-, Bool-, null- oder Container-Zeile.
+- 12 breite Literale (positiv und negativ, [2^64,1e21) und darueber, plus die negative int64-Kante), unverschluesselt: unser encrypt -> sops -d exit 0, jeder Wert als ZAHL zurueck; und sops -e -> unser rotate -> sops -d exit 0, mit JEDEM unverschluesselten Slot BYTEIDENTISCH zu dem, was sops geschrieben hat, 1e+21 eingeschlossen.
+- Der Ticketfall selbst: sops -e schreibt big_unencrypted: 100000000000000000000, unser rotate laesst es bare und unveraendert, sops -d exit 0. Die verschluesselten Slots desselben Dokuments kommen als type:float wieder -- dasselbe Token, das sops fuer dasselbe Literal schreibt.
+- Cross-Format (JSON parsen, YAML schreiben): passiert den ADR-0013/0017-Foreign-Resolution-Guard unberuehrt, sops -d exit 0.
+
+DIGEST-BEWEGUNG, ehrlich: innerhalb des Fensters, das ein sops-geschriebenes Dokument ueberhaupt tragen kann, bewegt sich der Digest NICHT -- der heutige str-Digest ist der Text des Literals, und value_to_bytes des Floats ist derselbe Text, 10 von 10 gemessen. Ausserhalb (handgeschriebene Ziffern, die nicht die kanonische Dezimale ihres Doubles sind, z.B. 99999999999999999999) bewegt er sich auf die gerundete Form -- was sops mit demselben Dokument selbst tut. Ein bereits von File::SOPS geschriebenes Dokument traegt den Wert QUOTIERT, und quotiert bleibt str: kein bestehendes Dokument aendert seine Bedeutung.
+
+EINE VERHALTENSAENDERUNG, die genannt werden muss: ein bare Integer-Literal, das den Double ueberlaeuft (1 mit 400 Nullen), croakt danach am Nicht-endlich-Guard, wo heute ein String geschrieben wird. Das ist die richtige Richtung -- sops verweigert dasselbe JSON-Dokument selbst beim Unmarshal (exit 2, strconv.ParseFloat out of range).
+
+LANES, in dieser Reihenfolge (dieselben Dateien): (1) file-sops-format, NUR Format::JSON::parse -- Typmap-Decode, Parallelwalk, Plain-PV-Gate, dualvar; Orakel am selben $json-Objekt (ADR 0005), Walk auf $data NACH dem sops-Split. (2) file-sops-wire, pruefen statt aendern und im POD sagen, wo dieses Leaf jetzt herkommt. (3) file-sops-api, Rueckgabetyp: decrypt/decrypt_file/extract geben fuer diese Klasse einen dualvar statt eines Strings (ADR-0010-Form), plus POD. (4) file-sops-test-writer, Unit-Datei fuer die 6 bewegten und 36 unbewegten Zeilen plus Interop fuer beide Richtungen.
+
+ZWEI NEUE TICKETS aus derselben Messung, bewusst NICHT in diesen ADR gefaltet: #101 (rotate croakt an einem sops-geschriebenen JSON-Wert zwischen int64max und uint64max -- der int64-Guard verweigert ein Dokument, das sops schreibt und liest) und #102 (ein YAML-Integer-Literal, das den Double ueberlaeuft, wird verweigert, wo sops es schreibt; JSON hat das Problem nicht).
+
+Ausgangszustand bestaetigt: prove -lr t/ 833/833, SOPS_BIN=/tmp/sops prove -lr t/04-interop.t 32/32 (LIEF, nicht geskippt). Arbeitsbaum unveraendert ausser der neuen ADR-Datei. Claim nicht auf "wire" umgesetzt: karr verweigert das, #63 ist von "orchestrator" geclaimt.
+Vier Lanes gelandet: f286764 (Parser), bf336ac (Wire-POD), 52aa468 (API-POD), 66e0c5b (t/36, 15 Subtests), plus ADR 0020 accepted. Option (b) umgesetzt und deutlich kleiner als der Parkvermerk annahm -- kein neuer Carrier, keine Guard-Ausnahme, kein Math::BigInt: der JSON-Parser gibt jetzt das NOK+POK-Leaf zurueck, das YAML::XS fuer dieselben Ziffern immer gab. Orakel ist die Typmap des Decoders (+51%), nicht allow_bignum (+5650%). Beide Testzeilen: prove -lr t/ 848/848 ueber 37 Dateien, SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32, beide gegen sops 3.13.3 und der Interop-Lauf gelaufen, nicht geskippt. Netz gegengeprueft: mit Format/JSON.pm auf f286764^ faellt t/36 ueber sieben Subtests. BEHAVIOUR CHANGE, deshalb zum Review statt direkt auf done. Waehrend der Arbeit gefunden und NICHT eingefaltet: #101 (jetzt in Arbeit), #102, #103.
+ABGENOMMEN vom Maintainer 2026-08-21. BEHAVIOUR CHANGE bestaetigt: eine JSON-Zahl, die Perl nicht halten kann, ist ein FLOAT und kein String. ADR 0020 ist damit angenommene Praxis, nicht mehr Vorschlag. Gemeinsam mit karr #101 abgenommen, wie im Koordinationsticket #70 Phase A vorgesehen -- #101 baut auf diesem Typmodell auf. Nachlauf, der aus dieser Entscheidung entstanden und separat erfasst ist: #103 (als Konsequenz dokumentiert, docs/adr/0020, Commit 20b72b0) und #102 (der Hebel, den ADR 0020 fuer beide Parser vorhersah und der gemessen NUR fuer YAML gilt, Commit 2c9ee58).
