@@ -19,6 +19,37 @@ Revision history for File-SOPS
     exit 51, MAC mismatch), because it decrypts rule-first and hashes the
     ENC[...] string itself. The opposite disagreement -- a bare value the rule
     selects, which is quietly ENCRYPTED rather than exposed -- is unchanged and
+  - BEHAVIOUR CHANGE and SECURITY FIX: `unencrypted_regex` and `encrypted_regex`
+    are now matched in Go RE2's dialect rather than Perl's, so a rule selects
+    the same keys here as it does at sops. RE2's \w, \W, \d, \D, \s, \S, \b,
+    \B and its POSIX classes reach ASCII and nothing else; Perl's are
+    Unicode-aware for any string carrying the UTF-8 flag, which is every
+    non-ASCII key our parsers produce. Measured over 43 (rule, key) pairs on
+    sops 3.13.3, 29 disagreed -- and 22 of those were a value sops ENCRYPTS
+    that this library wrote to disk READABLE. Not only on `rotate`: on the
+    caller's own `encrypt`, with one ordinary .sops.yaml, one `sops -e` and no
+    hand editing anywhere, `unencrypted_regex: '^\w+$'` over a key `café` gave
+    an encrypted secret from sops and a plaintext one from us, which `sops -d`
+    then refused at exit 25. The patterns are compiled /a, which is RE2's
+    answer for these classes and takes the UTF-8 flag out of the decision --
+    /a and not /aa, because RE2's (?i) does fold `k` to U+212A and `s` to
+    U+017F. An ASCII rule over ASCII keys does not move: of the 15_960 rule
+    decisions this distribution's test suite makes, 18 changed and every one
+    of them is a non-ASCII key. A pattern the two dialects do not agree on is
+    now REFUSED rather than matched with Perl's meaning -- lookarounds,
+    backreferences, atomic groups, possessive quantifiers, \Z \K \G \R \h \N
+    \X and the rest, (?#...), (?|...), the (?'name'...) spelling, and the
+    flags RE2 has no letter for -- because sops does not report those: it
+    discards the compile error, so the rule silently matches nothing, and an
+    `encrypted_regex` it cannot compile leaves EVERY value of the document in
+    plaintext at exit 0 (measured). `\v`, `\Q` and `\E` are refused for the
+    other reason: both dialects take them and read them differently. A pattern
+    Perl cannot compile, which RE2 may well take -- `(?U)`, `\C` -- is refused
+    with its reason instead of dying out of the middle of the tree walk.
+    `decrypt` and `extract` never consult the rule and are unaffected, so a
+    document carrying such a rule can still be read. Two divergences remain
+    and are documented: Perl's full case folding (`(?i)^ss$` and a key
+    U+00DF), and `$` before a trailing newline. See docs/adr/0048, karr #161.
     still divergent (sops: exit 25). `encrypt_file` and `encrypt_in_place`
     were never affected: both refuse an already-encrypted input. See
     docs/adr/0046, karr #150, and karr #160/#161 for the two halves left open.

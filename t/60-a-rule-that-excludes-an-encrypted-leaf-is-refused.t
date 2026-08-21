@@ -208,15 +208,23 @@ SKIP: {
         }
     };
 
-    subtest 'and the same hole with no hand-editing anywhere' => sub {
+    subtest 'the rule this guard used to catch now classifies the same way' => sub {
         # Every row above starts from a document whose rule was edited by
         # hand. This one does not: an ordinary rule, an ordinary `sops -e`,
-        # and a key that RE2 and Perl classify differently -- RE2's \w is
-        # ASCII-only, Perl's is Unicode-aware for the flagged string our
-        # parser produces. sops encrypts the value; should_encrypt_path says
-        # it is not encrypted; rotate used to write it back bare. That is what
-        # makes this a practical defect rather than a theoretical one, and the
-        # classification itself is karr #161.
+        # and a non-ASCII key. It used to be the proof that the defect was
+        # practical rather than theoretical -- RE2's \w is ASCII-only and
+        # Perl's was Unicode-aware for the flagged string our parser produces,
+        # so should_encrypt_path called a leaf sops had ENCRYPTED one the rule
+        # EXCLUDES, and this guard was the only thing between that and
+        # `café: hunter2` on disk.
+        #
+        # karr #161 closed the classification itself (docs/adr/0048): the two
+        # rule patterns are now compiled /a, which is RE2's answer for \w.
+        # So the premise is gone -- the rule no longer excludes the leaf --
+        # and what this subtest pins is the step after the guard: rotate goes
+        # THROUGH, and the value stays encrypted. The whole file of assertions
+        # above is unaffected; those documents carry rules that really do
+        # exclude an encrypted leaf, whichever dialect reads them.
         my $dir = tempdir(CLEANUP => 1);
         write_bytes("$dir/key.txt", $SECRET);
         local $ENV{SOPS_AGE_KEY_FILE} = "$dir/key.txt";
@@ -232,13 +240,18 @@ SKIP: {
         like $doc, qr/ENC\[AES256_GCM/,
             'and the value really is encrypted in the file sops wrote';
 
-        like exception {
+        is exception {
             File::SOPS->rotate(file => $file, identities => [ $SECRET ])
-        }, qr/\ARefusing to rotate/,
-            'rotate refuses it rather than baring it';
+        }, undef, 'rotate no longer refuses it: the rule and the file agree';
 
-        unlike slurp($file), qr/hunter2/, 'the secret stays off the disk';
-        is slurp($file), $doc, 'and the file is untouched';
+        my $after = slurp($file);
+        unlike $after, qr/hunter2/, 'the secret stays off the disk';
+        like $after, qr/ENC\[AES256_GCM/,
+            'and the value is still encrypted after the rotation';
+        isnt $after, $doc, 'under a new data key, which is what rotate is for';
+
+        my (undef, $read) = run($sops_bin, "-d '$file'");
+        is $read, 0, 'and sops reads the document we rotated';
     };
 }
 

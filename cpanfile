@@ -1,4 +1,4 @@
-requires 'perl', '5.010';
+requires 'perl', '5.014';
 
 requires 'Crypt::Age', '0.002';
 requires 'CryptX';

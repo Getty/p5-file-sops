@@ -263,7 +263,9 @@ Regular expression: a value is not encrypted when some component of its path
 matches it -- see L</should_encrypt_path>.
 
 Defaults to C<undef>. Mutually exclusive with the other rules, see
-L</Encryption rules are mutually exclusive>.
+L</Encryption rules are mutually exclusive>. Matched in Go RE2's dialect and
+not in Perl's, and a pattern the two do not agree on is refused rather than
+matched -- see L</The regex rules are matched in RE2's dialect>.
 
 =cut
 
@@ -275,7 +277,114 @@ Regular expression: a value is encrypted only when some component of its path
 matches it -- see L</should_encrypt_path>.
 
 Defaults to C<undef>. Mutually exclusive with the other rules, see
-L</Encryption rules are mutually exclusive>.
+L</Encryption rules are mutually exclusive>. Matched in Go RE2's dialect and
+not in Perl's, and a pattern the two do not agree on is refused rather than
+matched -- see L</The regex rules are matched in RE2's dialect>.
+
+=head2 The regex rules are matched in RE2's dialect
+
+B<New in 0.003, and it changes which keys get encrypted.> L</unencrypted_regex>
+and L</encrypted_regex> are matched here with Perl and in sops with Go's RE2,
+and those are not the same dialect. Two things follow.
+
+B<The character classes are ASCII-only.> RE2's C<\w>, C<\W>, C<\d>, C<\D>,
+C<\s>, C<\S>, C<\b>, C<\B> and its POSIX classes reach ASCII and nothing
+else, for every subject. Perl's are Unicode-aware for any string carrying the
+UTF-8 flag -- which is every non-ASCII key our parsers produce. Measured against
+sops 3.13.3 with one ordinary F<.sops.yaml>, one C<sops -e> and no hand editing
+anywhere:
+
+    unencrypted_regex: '^\w+$'      key: cafE<eacute>
+
+    sops                 encrypts the value
+    File::SOPS (0.002)   left it READABLE
+
+Twenty-nine such disagreements were measured over the class escapes, the
+thirteen POSIX classes and both rule fields; twenty-two of them left a secret
+readable that sops encrypts. The patterns are therefore compiled C</a>, which
+is RE2's answer for these classes -- and, not incidentally, it takes the UTF-8
+flag out of the answer, which ADR 0003 forbids reading everywhere else in this
+distribution. It is C</a> and not C</aa> because RE2's C<(?i)> B<is>
+Unicode-aware: Go folds C<k> to U+212A KELVIN SIGN and C<s> to U+017F LATIN
+SMALL LETTER LONG S, which C</a> keeps and C</aa> would break.
+
+An ASCII rule over ASCII keys does not move. Measured over the 15_960 decisions
+this distribution's own test suite makes -- every rule pattern in it against
+every key in it -- eighteen changed, all of them a non-ASCII key under
+C<^\w+$>, and none of them an ASCII one.
+
+B<A pattern the two dialects do not agree on is refused.> sops does not report
+a pattern RE2 cannot compile: it matches with the compile error discarded, so
+the rule silently matches nothing. Measured -- C<< --encrypted-regex '(?=f)foo' >>
+writes B<every value of the document in plaintext> at exit 0, under a C<sops>
+section that makes it look encrypted, and C<< --unencrypted-regex '(?=f)foo' >>
+encrypts every value. Neither is a classification that can be reproduced
+quietly, so a rule using one of these dies instead:
+
+=over 4
+
+=item * lookahead and lookbehind, C<(?=)>, C<(?!)>, C<< (?<=) >> and C<< (?<!) >>
+
+=item * backreferences, C<\1> and C<< (?P=name) >>
+
+=item * atomic groups C<< (?>...) >> and possessive quantifiers C<*+>, C<++>,
+C<?+>, C<{n,m}+>
+
+=item * the escapes RE2 has no rule for: C<\Z>, C<\K>, C<\G>, C<\R>, C<\h>,
+C<\H>, C<\V>, C<\N>, C<\X>, C<\C>, C<\c>, C<\e>, C<\o>, C<\g>, C<\k>,
+C<\u>, C<\l>, C<\U>, C<\L>, and C<\b> inside a character class
+
+=item * inline comments C<< (?#...) >>, branch resets C<< (?|...) >>, embedded
+code, subpattern calls and recursion, the C<< (?'name'...) >> spelling of a
+named group, the C<< (?^...) >> flag reset
+
+=item * every regex flag RE2 does not have: C<x>, C<a>, C<d>, C<l>, C<u>, C<n>
+and C<p>
+
+=item * C<\v>, C<\Q> and C<\E>, which both dialects take and read
+B<differently>: C<\v> is the vertical TAB to Go and the vertical-whitespace
+class to Perl, and C<\Q>/C<\E> quote a literal run for RE2 while a Perl
+pattern arriving in a variable keeps them as the letters C<Q> and C<E>
+(measured: C<\Qa.b\E> selects the key C<a.b> at sops and the key C<Qa.bE>
+here)
+
+=back
+
+Everything both dialects have is taken, C<(?i)>, C<(?m)>, C<(?s)>, C<(?U)>,
+C<\p{...}>, C<[[:alpha:]]>, C<[[:^alpha:]]>, C<(?PE<lt>nameE<gt>)>, C<< (?<name>) >>
+and the lazy quantifiers included. The verdicts were read off RE2 itself, not
+guessed: a F<.sops.yaml> C<path_regex> is the one place sops reports
+I<error parsing regexp> rather than discarding it.
+
+The refusal is raised where the rule is B<used>, not where it is parsed, so a
+document carrying such a rule can still be L<File::SOPS/decrypt>ed -- that path
+never consults the rule. L<File::SOPS/encrypt>, L<File::SOPS/rotate> and
+L<File::SOPS/edit> are the ones that stop.
+
+A pattern B<Perl> cannot compile is refused too, with the reason: the dialects
+disagree in that direction as well, and C<(?U)fo+> and C<\C> are patterns sops
+takes and this side cannot.
+
+=head3 Limits
+
+Two measured disagreements survive, both recorded in F<docs/adr/0048>:
+
+=over 4
+
+=item * B<Full case folding.> Perl's C<(?i)> folds U+00DF to C<ss> and RE2's
+does not, so C<< unencrypted_regex => '(?i)^ss$' >> leaves a key C<E<szlig>> readable
+here and sops encrypts it. Perl has no flag for simple-only folding.
+
+=item * B<C<$> before a trailing newline.> Perl's C<$> is C<< (?=\n?\z) >> and
+RE2's is C<\z>, so C<^foo$> matches a key C<"foo\n"> here and not there.
+C<\z> is in both dialects and says exactly what RE2's C<$> says.
+
+=back
+
+A C<\p{...}> naming a property Perl has and Go does not -- C<\p{Word}>,
+C<\p{Alpha}>, C<\p{IsAlpha}> -- is a third: RE2 rejects it, so sops's rule
+matches nothing, and this side cannot enumerate Go's table to tell that apart
+from C<\p{Greek}>, which both accept.
 
 =head2 Encryption rules are mutually exclusive
 
@@ -1240,6 +1349,302 @@ Each entry has C<recipient> and C<enc> fields.
 
 =cut
 
+###############################################################################
+# The two regex rules, and the dialect they are matched in
+###############################################################################
+
+# unencrypted_regex and encrypted_regex are matched HERE with Perl and in sops
+# with Go's RE2, and those are not the same dialect. Two consequences, both
+# measured against sops 3.13.3 -- docs/adr/0048, karr #161.
+#
+# 1. RE2's \w \W \d \D \s \S \b \B and its POSIX classes are ASCII-only for
+#    every subject. Perl's are Unicode-aware for any string carrying the UTF-8
+#    flag -- which is every non-ASCII key our parsers produce. So an
+#    `unencrypted_regex: ^\w+$` is a rule under which sops ENCRYPTS `café`,
+#    `密`, `n٣` and `a<NBSP>b` and this library left them BARE. That is why the
+#    patterns are compiled /a below: it is RE2's answer for these classes, and
+#    it makes the answer independent of a flag ADR 0003 forbids reading
+#    anywhere else in this distribution.
+#
+# 2. A pattern RE2 cannot COMPILE is not reported by sops. It matches with the
+#    error discarded, so the rule silently matches NOTHING: measured,
+#    `--encrypted-regex '(?=f)foo'` writes every value of the document in
+#    PLAINTEXT at exit 0, and `--unencrypted-regex '(?=f)foo'` encrypts every
+#    value. Neither is a classification that can be reproduced quietly, so the
+#    constructs RE2 rejects are refused here instead.
+
+# The escapes RE2 accepts, meaning by them what Perl means once the pattern is
+# compiled /a. Every OTHER alphanumeric escape is refused, because RE2 either
+# rejects it -- \Z \K \G \R \h \H \V \N \X \C \c \e \o \g \k \u \l \U \L are
+# all "invalid escape sequence", measured through a .sops.yaml path_regex,
+# which is the one place sops reports a compile error -- or reads it as
+# something else:
+#
+#   \v   the vertical TAB to Go, the vertical-whitespace CLASS to Perl.
+#   \Q   a quoted literal run to RE2, and NOTHING to Perl: \Q and \E are
+#        double-quotish escapes, processed when a pattern is written out in
+#        source and not by the regex compiler, so a pattern arriving in a
+#        variable -- which is every pattern here -- keeps them as the literal
+#        letters Q and E. Measured: `\Qa.b\E` selects the key `a.b` at sops
+#        and the key `Qa.bE` here.
+#
+# \0 covers the octal escapes (\0, \00, \017); a leading 1..9 is a
+# backreference here and an error there.
+my %RE2_ESCAPE = map { $_ => 1 } qw(
+    A B D P S W
+    a b d f n p r s t w x z
+    0
+);
+
+# The regex flags RE2 has, plus the `-` that turns one off. Perl's a, d, l, u,
+# n, p and x are all "invalid or unsupported Perl syntax" there; U is the
+# reverse case -- RE2 has it and Perl does not -- and fails to compile here,
+# which is _rule_qr's other croak.
+my %RE2_FLAG = map { $_ => 1 } qw( i m s U - );
+
+# The escapes both dialects accept and do not mean the same thing by. These
+# are the ones a whitelist cannot catch: nothing fails, the rule just selects
+# different keys on the two sides.
+my %RE2_MEANS_OTHER = (
+    v => 'the vertical TAB to Go RE2 and the vertical-whitespace CLASS to '
+       . 'Perl',
+    Q => 'a quoted literal run to Go RE2 and nothing at all to Perl',
+    E => 'the end of a quoted literal run to Go RE2 and nothing at all to '
+       . 'Perl',
+);
+
+# What in this pattern, if any, the two dialects do not agree on. Returns the
+# empty list when they do, and otherwise the construct and which KIND of
+# disagreement it is:
+#
+#   'unsupported' -- RE2 cannot compile it, so the rule matches nothing there
+#   'different'   -- both compile it and read it as different things
+#
+# The check is deliberately whitelist-shaped for escapes and for (?...) groups:
+# a construct nobody here has measured is refused rather than assumed
+# harmless, because the harm runs one way (a key sops encrypts, left bare).
+sub _re2_divergent_construct {
+    my ($pattern) = @_;
+    return () unless defined $pattern;
+
+    my @c         = split //, $pattern;
+    my $i         = 0;
+    my $in_class  = 0;
+    my $class_pos = 0;   # how far into the current [...] we are; a ] at 0 is
+                         # the literal character, in both dialects
+    my $quantified = 0;  # the token just read was a quantifier
+
+    while ($i < @c) {
+        my $ch = $c[$i];
+
+        if ($ch eq '\\') {
+            my $next = $c[$i+1];
+            return ('a trailing backslash', 'unsupported') unless defined $next;
+
+            if ($next =~ /\A[0-9A-Za-z]\z/) {
+                return ('a backreference (\\1, \\2, ...)', 'unsupported')
+                    if $next =~ /\A[1-9]\z/;
+                return ("the escape \\$next, which is $RE2_MEANS_OTHER{$next}",
+                        'different')
+                    if $RE2_MEANS_OTHER{$next};
+                return ("the escape \\$next", 'unsupported')
+                    unless $RE2_ESCAPE{$next};
+
+                # Outside a character class \b is the word boundary both
+                # dialects have; inside one it is BACKSPACE, which RE2 rejects.
+                return ('the escape \\b inside a character class', 'unsupported')
+                    if $next eq 'b' && $in_class;
+            }
+
+            $i += 2;
+            $class_pos++ if $in_class;
+            $quantified = 0;
+            next;
+        }
+
+        if ($in_class) {
+            if ($ch eq ']' && $class_pos > 0) {
+                $in_class   = 0;
+                $quantified = 0;
+                $i++;
+                next;
+            }
+
+            # [:alpha:] and [:^alpha:] carry a ] of their own.
+            if ($ch eq '[' && defined $c[$i+1] && $c[$i+1] eq ':') {
+                my $end = index($pattern, ':]', $i + 2);
+                if ($end >= 0) {
+                    $class_pos += $end + 2 - $i;
+                    $i = $end + 2;
+                    next;
+                }
+            }
+
+            $class_pos++;
+            $i++;
+            next;
+        }
+
+        if ($ch eq '[') {
+            $in_class   = 1;
+            $class_pos  = 0;
+            $quantified = 0;
+            $i++;
+            $i++ if defined $c[$i] && $c[$i] eq '^';   # [^...] is still at 0
+            next;
+        }
+
+        if ($ch eq '(') {
+            $quantified = 0;
+            if (defined $c[$i+1] && $c[$i+1] eq '?') {
+                my @divergent = _re2_divergent_group(substr($pattern, $i));
+                return @divergent if @divergent;
+            }
+            $i++;
+            next;
+        }
+
+        if ($ch eq '*' || $ch eq '+' || $ch eq '?') {
+            return ('a possessive quantifier (*+, ++, ?+ or {n,m}+)',
+                    'unsupported')
+                if $ch eq '+' && $quantified;
+            # A ? after a quantifier is the lazy form, which both dialects
+            # have, and it ends the quantifier rather than extending it.
+            $quantified = ($ch eq '?' && $quantified) ? 0 : 1;
+            $i++;
+            next;
+        }
+
+        if ($ch eq '{') {
+            # A brace run that is a repetition; anything else is a literal
+            # brace in both dialects.
+            if (substr($pattern, $i) =~ /\A(\{[0-9]+(?:,[0-9]*)?\})/) {
+                $i += length $1;
+                $quantified = 1;
+                next;
+            }
+            $quantified = 0;
+            $i++;
+            next;
+        }
+
+        $quantified = 0;
+        $i++;
+    }
+
+    return ();
+}
+
+# What follows a `(?`, given the rest of the pattern from the `(`.
+sub _re2_divergent_group {
+    my ($rest) = @_;
+
+    return () if $rest =~ /\A\(\?:/;              # (?:...)   non-capturing
+    return () if $rest =~ /\A\(\?P</;             # (?P<n>..) named
+    return ('a lookbehind ((?<=...) or (?<!...))', 'unsupported')
+        if $rest =~ /\A\(\?<[=!]/;
+    return () if $rest =~ /\A\(\?</;              # (?<n>...) named, Go 1.22+
+    return ('a lookahead ((?=...) or (?!...))', 'unsupported')
+        if $rest =~ /\A\(\?[=!]/;
+    return ('an atomic group ((?>...))', 'unsupported')
+        if $rest =~ /\A\(\?>/;
+    return ('an inline comment ((?#...))', 'unsupported')
+        if $rest =~ /\A\(\?#/;
+    return ('a branch reset ((?|...))', 'unsupported')
+        if $rest =~ /\A\(\?\|/;
+    return ('embedded code ((?{...}))', 'unsupported')
+        if $rest =~ /\A\(\?\??\{/;
+    return ('a backreference ((?P=name))', 'unsupported')
+        if $rest =~ /\A\(\?P=/;
+    return ('a subpattern call or recursion', 'unsupported')
+        if $rest =~ /\A\(\?(?:R\)|[0-9]|[&+]|-[0-9]|P>)/;
+    return ("a named group in Perl's (?'name'...) spelling", 'unsupported')
+        if $rest =~ /\A\(\?'/;
+    return ('a flag reset ((?^...))', 'unsupported')
+        if $rest =~ /\A\(\?\^/;
+
+    if ($rest =~ /\A\(\?([a-zA-Z-]*)[:)]/) {
+        my ($bad) = grep { !$RE2_FLAG{$_} } split //, $1;
+        return defined $bad ? ("the regex flag (?$bad)", 'unsupported') : ();
+    }
+
+    return ('a (?...) group RE2 does not have', 'unsupported');
+}
+
+{
+    # Everything in this block is compiled with ASCII-only character classes,
+    # which is what RE2 gives the pattern on the other side. It is deliberately
+    # /a and not /aa: measured, Go folds `k` to U+212A KELVIN SIGN and `s` to
+    # U+017F LONG S under (?i), which /a keeps and /aa would break. What /a
+    # does not reach is Perl's FULL case folding -- `(?i)^ss$` matches U+00DF
+    # here and not there -- which is recorded as a limit in docs/adr/0048.
+    use re '/a';
+
+    sub _rule_qr {
+        my ($field, $pattern) = @_;
+
+        my $shown = length($pattern) > 60
+            ? substr($pattern, 0, 57) . '...'
+            : $pattern;
+
+        my ($construct, $kind) = _re2_divergent_construct($pattern);
+        croak "Cannot use '$shown' as the $field: it uses $construct, "
+            . ($kind eq 'unsupported'
+                ? "which Go RE2 does not support. sops does not report that "
+                . "-- it discards the compile error, so the rule silently "
+                . "matches NOTHING. Measured on sops 3.13.3: an "
+                . "encrypted_regex it cannot compile leaves every value of "
+                . "the document in PLAINTEXT at exit 0, and an "
+                . "unencrypted_regex it cannot compile encrypts every value."
+                : "which both dialects accept and read DIFFERENTLY, so the "
+                . "same rule selects different keys in the two "
+                . "implementations.")
+            . " Rewrite the pattern in constructs both dialects agree on. "
+            . "See docs/adr/0048."
+            if defined $construct;
+
+        my $qr = eval { qr/$pattern/ };
+        croak "Cannot use '$shown' as the $field: it is not a valid Perl "
+            . "regular expression (" . _regex_reason($@) . "). RE2 and Perl "
+            . "do not accept the same patterns in either direction -- '(?U)' "
+            . "and '\\C' compile there and not here -- so a rule sops took "
+            . "can still be one this side cannot match with. See "
+            . "docs/adr/0048."
+            unless defined $qr;
+
+        return $qr;
+    }
+}
+
+sub _regex_reason {
+    my ($error) = @_;
+    my $reason = defined $error ? "$error" : '';
+    $reason =~ s/\s+at\s+\S+\s+line\s+\d+\.?\s*\z//;
+    $reason =~ s/\s+/ /g;
+    $reason =~ s/\A\s+|\s+\z//g;
+    return length $reason ? $reason : 'no reason given';
+}
+
+# Private, and it lives here rather than with the modelled fields because it
+# is not one: nothing constructs it, to_hash never sees it, and its only
+# reader is the method below.
+has _rule_matchers => (
+    is       => 'ro',
+    init_arg => undef,
+    default  => sub { {} },
+);
+
+# One compiled matcher per rule pattern. Keyed by the pattern itself, so a
+# caller changing the attribute -- both are rw -- gets a matcher for what the
+# attribute now holds rather than for what it held first.
+sub _rule_matcher {
+    my ($self, $field) = @_;
+
+    my $pattern = $self->$field;
+    return $self->_rule_matchers->{$field}{$pattern}
+        ||= _rule_qr($field, $pattern);
+}
+
 sub should_encrypt_key {
     my ($self, $key) = @_;
 
@@ -1253,11 +1658,11 @@ sub should_encrypt_key {
     }
 
     if (defined $self->unencrypted_regex) {
-        return 0 if $key =~ /$self->{unencrypted_regex}/;
+        return 0 if $key =~ $self->_rule_matcher('unencrypted_regex');
     }
 
     if (defined $self->encrypted_regex) {
-        return 1 if $key =~ /$self->{encrypted_regex}/;
+        return 1 if $key =~ $self->_rule_matcher('encrypted_regex');
         return 0;
     }
 
@@ -1301,6 +1706,11 @@ Rules are applied in this order:
 
 Returns true if the key should be encrypted, false otherwise.
 
+B<Dies> where the rule is a regex the two implementations do not read the same
+way -- an ASCII-only class is matched as one, but a construct Go RE2 rejects,
+or one the two dialects take and disagree about, is refused rather than matched
+with Perl's meaning. See L</The regex rules are matched in RE2's dialect>.
+
 =cut
 
 sub should_encrypt_path {
@@ -1318,11 +1728,13 @@ sub should_encrypt_path {
     }
 
     if (defined $self->unencrypted_regex && length $self->unencrypted_regex) {
-        $encrypted = 0 if grep { /$self->{unencrypted_regex}/ } @$path;
+        my $qr = $self->_rule_matcher('unencrypted_regex');
+        $encrypted = 0 if grep { $_ =~ $qr } @$path;
     }
 
     if (defined $self->encrypted_regex && length $self->encrypted_regex) {
-        $encrypted = (grep { /$self->{encrypted_regex}/ } @$path) ? 1 : 0;
+        my $qr = $self->_rule_matcher('encrypted_regex');
+        $encrypted = (grep { $_ =~ $qr } @$path) ? 1 : 0;
     }
 
     return $encrypted;
@@ -1341,6 +1753,10 @@ the path, in the same order, with later rules overriding earlier ones.
 A leaf is unencrypted if any component carries C<unencrypted_suffix> or matches
 C<unencrypted_regex>, and (when those are configured) encrypted only if some
 component carries C<encrypted_suffix> or matches C<encrypted_regex>.
+
+The two regex rules are matched in B<RE2's> dialect, not Perl's, and a pattern
+the two do not agree on is refused here rather than matched -- which is why
+this method can die. See L</The regex rules are matched in RE2's dialect>.
 
 This is the predicate L<File::SOPS> encrypts a document with, and the one it
 uses to decide which values the MAC covers when L</mac_only_encrypted> is set.
