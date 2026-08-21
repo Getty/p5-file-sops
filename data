@@ -1,0 +1,99 @@
+---
+class: standard
+completed: 2026-08-21T04:43:31Z
+created: 2026-08-20T00:23:29Z
+id: 75
+priority: medium
+started: 2026-08-21T01:33:40Z
+status: done
+tags:
+- format
+- metadata
+- roadmap
+- env
+- ini
+title: 'Metadata flattening: sops_age__list_0__map_enc is a second metadata wire format'
+updated: 2026-08-21T04:43:31Z
+---
+
+Aufgesplittet aus karr #36 (36b) am 2026-08-20 auf Maintainer-Entscheidung. Geteilt zwischen ENV (#36) und INI (#37) -- zweimal gebaut ist genau, wie die beiden auseinanderdriften.
+
+sops flacht die Metadaten in diesen Formaten auf Top-Level-Schluessel ab, mit einem eigenen Pfad-Mangling-Schema:
+
+  ENV:  sops_age__list_0__map_enc=-----BEGIN AGE ENCRYPTED FILE-----\nYWdl...\n
+        sops_lastmodified=2026-08-09T00:51:42Z
+  INI:  [sops]
+        age__list_0__map_enc = ...
+
+Also dasselbe Schema, in ENV unter einem sops_-Praefix, in INI in einer [sops]-SEKTION.
+
+File::SOPS::Metadata->to_hash erzeugt eine verschachtelte Struktur. Eine flatten/unflatten-Schicht, die byte-kompatibel zu diesem Schema ist, ist ein ZWEITES Metadata-Wire-Format, kein Formatierungsdetail.
+
+Falle, gemessen: Newlines innerhalb eines Werts werden als literales Backslash-n geschrieben und muessen den Round-Trip ueberleben -- der age-enc-Block besteht fast nur daraus.
+
+Wer von #36 und #37 zuerst drankommt, baut es TEILBAR, nicht formatspezifisch.
+
+Lane: format, Metadata-Fragen an api.
+2026-08-21 01:52 FERTIG. Schema gegen /tmp/sops (3.13.3) gemessen, Schicht gebaut, Tests gruen.
+
+GELIEFERT:
+  lib/File/SOPS/Metadata/Flat.pm   (neu) -- flatten/unflatten/escape_value/
+                                   unescape_value/is_metadata_key, prefix als
+                                   einziger Unterschied ENV vs INI
+  t/38-flat-metadata.t             (neu) -- 8 Subtests, davon einer gegen das
+                                   echte Binary
+  docs/adr/0022-...                (neu)
+  Changes                          {{$NEXT}}-Eintrag
+
+GEMESSEN (nicht aus dem Ticketkoerper uebernommen):
+  - Trenner: __map_K / __list_N, Wurzelname bar, rekursiv bis in jede Tiefe.
+    key_groups__list_0__map_age__list_0__map_enc = 5 Ebenen, real erzeugt mit
+    --shamir-secret-sharing-threshold 2.
+  - Indizes muessen luecklos ab 0 laufen; Luecke -> "Error while unflattening:
+    Incomplete list", exit 1.
+  - Reihenfolge ist ein STRUKTURELLER Walk, kein Bytesort: mit 11 Recipients
+    kommt __list_10__ NACH __list_9__. Zeilenreihenfolge ist beim Lesen egal.
+  - LEERE LISTEN verschwinden vollstaendig, und das muss so sein: sops_kms=
+    macht sops -d kaputt (kms[0] expected a map or struct, got "string").
+    from_hash stellt sie wieder her, also geht nichts verloren.
+  - ESCAPE: NUR Newline -> Backslash-n. Tab, CR und Backslash bleiben
+    unangetastet (Backslash wird NICHT verdoppelt). Rueckweg nicht-rekursiv:
+    A\nB -> Newline, A\\nB -> Backslash+Newline, A\tB und A\rB unveraendert.
+    Damit in EINER Richtung verlustig; bewusst so reproduziert, ADR 0022.
+  - INI-Padding ist rein kosmetisch: Padding komplett entfernen -> sops -d
+    exit 0. Breite = laengster Key DER SEKTION.
+  - mac_only_encrypted=true/false waehlt den DIGEST (false -> exit 0,
+    true -> MAC mismatch exit 51 auf demselben Dokument). unflatten gibt
+    "false" als String zurueck -> in Perl WAHR. Nicht hier entschieden,
+    an #77 angehaengt.
+
+SCHNITT UND BEGRUENDUNG: eigene Datei, nicht Metadata.pm. Sie muss zwei noch
+nicht existierende Handler bedienen; Metadata.pm modelliert die SEMANTIK der
+Sektion, das hier ist eine KODIERUNG davon; und Metadata.pm ist die api-Lane.
+Der ENV/INI-Unterschied ist das Attribut prefix und sonst nichts.
+
+Entscheidend fuer den Schnitt war eine Messung: der \n-Escape gehoert in DIESE
+Schicht, nicht in die Handler. INIs METADATEN sind \n-escaped, INIs DATEN aber
+nicht (go-ini schreibt """..."""), also passiert der Escape vor go-ini.
+
+BEWEIS (nicht nur unser flatten gegen unser unflatten):
+  - unflatten -> from_hash -> to_hash -> flatten reproduziert eine echte
+    sops-Datei BYTE FUER BYTE, in beiden Formaten.
+  - sops -d entschluesselt Dateien, deren KOMPLETTE Metadatensektion wir
+    geschrieben haben, in beiden Formaten, exit 0 -- und zwar mit nur dem
+    ZWEITEN Recipient-Key, also muss __list_1__ byte-exakt ueberlebt haben.
+  - Unsere [sops]-Sektion ist byte-identisch mit der von sops, Padding
+    inklusive.
+
+TESTLAEUFE: prove -lr t/ = 39 Dateien, 908 Tests, PASS (vorher 38/860).
+SOPS_BIN=/tmp/sops prove -l t/04-interop.t = 32/32 PASS, GELAUFEN nicht
+geskippt. t/38-flat-metadata.t: 8/8 mit Binary; Skip-Zweig separat geprueft
+und meldet laut.
+
+WAS #36 UND #37 DANACH NOCH SELBST TUN: siehe ADR 0022 "Consequences" und die
+neuen Tickets. Neu aufgemacht: #109 (ENV escaped auch DATENwerte -> MAC-relevant,
+wire-lane). An #77 angehaengt: die Metadaten-Typfrage inkl. mac_only_encrypted.
+
+NICHT committet (Auftrag). Dadurch: Git::GatherDir zieht die neuen Dateien
+noch nicht in dzil build ein -- nach dem Commit sind sie drin.
+ABGENOMMEN 2026-08-21. File::SOPS::Metadata::Flat ist gegen sops byte-genau verifiziert, nicht gegen sich selbst -- sops -d entschluesselt Dateien, deren ganze Metadatensektion wir geschrieben haben, mit nur dem ZWEITEN Recipient-Key. Drei Dinge gemessen, die eine Implementierung nach Ticketkoerper falsch gemacht haette (leere Liste hat keine Repraesentation, Reihenfolge ist ein Strukturwalk, nur das Newline wird escaped). Ohne Aufrufer, aber das war der Auftrag: die geteilte Vorarbeit fuer #36 und #37. Commit 06c5158, ADR 0022.
