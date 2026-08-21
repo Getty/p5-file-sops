@@ -786,6 +786,13 @@ Values excluded from encryption are still covered by the MAC, so they are
 authenticated even though they are readable -- unless C<mac_only_encrypted> is
 on.
 
+The rule is applied on the way B<in> only. Decryption here is driven by which
+values look encrypted and does not consult the rule at all, which is why
+L</rotate> and L</edit> -- the two methods that do both halves -- refuse a
+document whose rule and whose stored values disagree, rather than writing the
+difference out in plaintext. See
+L</A rule that does not cover what is encrypted is refused>.
+
 =head3 Reusing another document's rules
 
 C<metadata> takes a L<File::SOPS::Metadata> object -- typically one just
@@ -1573,7 +1580,7 @@ sub rotate {
 
     my $content = _read_file($file, 'file');
 
-    my (undef, $metadata) = _format_class($format)->parse($content);
+    my ($stored, $metadata) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
     _assert_rekeyable($metadata, $file, verb => 'rotate', noun => 'Rotation');
@@ -1590,6 +1597,14 @@ sub rotate {
         format     => $format,
         ignore_mac => $args{ignore_mac},
     );
+
+    # Asked after the decryption -- so that a document which cannot be read at
+    # all fails on the MAC and not on its rule -- and before anything is
+    # written. The decryption above returns the plaintext of every leaf that
+    # LOOKS encrypted; the re-encryption below encrypts only what the rule
+    # selects, and would write the rest out bare.
+    _assert_rule_covers_encrypted_leaves($stored, $metadata, $file,
+        verb => 'rotate', noun => 'Rotation');
 
     # Re-encrypt with new data key, under the rules this document already had
     my $encrypted = $class->encrypt(
@@ -1679,6 +1694,52 @@ anything. Rotate such a file with the sops CLI, which can re-encrypt for every
 backend; or, if losing those recipients is the intention, say so by calling
 L</decrypt> and L</encrypt> yourself.
 
+=head3 A rule that does not cover what is encrypted is refused
+
+B<New in 0.003, and a change for existing callers.> A rotation re-encrypts the
+document under the rule the document itself carries, and that rule has to be
+the one the document is B<already> encrypted under. Where a leaf is encrypted
+in the file and the rule says it is not, rotation is refused, naming the leaf
+and the rule that disagrees with it:
+
+    Refusing to rotate 'secrets.yaml': one of its values is encrypted at a
+    path this document's own encryption rule (unencrypted_regex: ^\w+$) says
+    is NOT encrypted -- db:password. ...
+
+Until this refusal such a file was rotated at exit 0 and B<the value was
+written back into it in plaintext>: L</decrypt> is driven by which values look
+encrypted and returns the plaintext of all of them, L</encrypt> is driven by
+the rule and encrypts only what the rule selects, and everything in between
+went to disk bare -- in a file that still looks like a sops file, with a valid
+MAC over the plaintext it now shows.
+
+sops cannot produce that file, because it decrypts B<rule-first>: a value the
+rule excludes is read as the literal C<ENC[...]> string and hashed as one, so
+the MAC stops the document before anything is written. Measured on 3.13.3,
+every rule shape that excludes an encrypted leaf -- a widened
+C<unencrypted_suffix>, an C<encrypted_suffix> or C<encrypted_regex> that
+matches nothing, an C<unencrypted_regex> that matches everything -- is exit 51,
+I<MAC mismatch>. Refusing here is the closest this layer can get to that
+without moving what the digest covers, which is the same fix and a larger one
+(karr #160).
+
+Two ways into such a file, and neither needs the rotation to be at fault. One
+is a C<sops> section edited by hand, or a document whose rule was replaced
+after it was written. The other needs no editing at all: C<unencrypted_regex>
+and C<encrypted_regex> are matched here by Perl and in sops by RE2, and RE2's
+C<\w>, C<\d>, C<\s> and POSIX classes are ASCII-only where Perl's are
+Unicode-aware -- so C<< unencrypted_regex => '^\w+$' >> classifies a key with
+a non-ASCII character differently in the two implementations, and sops
+encrypts a value this library then thought was never encrypted. That
+divergence is open and is karr #161; this refusal is what stops it costing a
+secret in the meantime.
+
+The B<opposite> disagreement is not refused: a leaf that is bare where the rule
+says it should be encrypted is simply encrypted on the way back out. Nothing is
+written in plaintext, so the fail-loud rule does not reach it -- but it is a
+divergence, because sops refuses that document too (exit 25, I<Input string
+E<lt>valueE<gt> does not match sops' data format>). It is part of karr #160.
+
 C<ignore_mac> is passed through to L</decrypt>; rotating a file you could not
 verify re-signs whatever it contained, so prefer to fail.
 
@@ -1698,7 +1759,7 @@ sub edit {
 
     my $content = _read_file($file, 'file');
 
-    my (undef, $metadata) = _format_class($format)->parse($content);
+    my ($stored, $metadata) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
     # Re-encryption here generates a NEW data key, exactly as rotate does, so
@@ -1712,6 +1773,12 @@ sub edit {
         format     => $format,
         ignore_mac => $args{ignore_mac},
     );
+
+    # rotate's refusal, in the one place here that can still act on it: before
+    # the editor is opened. Refusing afterwards would throw away what was just
+    # typed, for a defect that was in the file before the editor ran.
+    _assert_rule_covers_encrypted_leaves($stored, $metadata, $file,
+        verb => 'edit', noun => 'Editing');
 
     my $before = _serialize_plaintext($data, $format);
     my $after  = _edit_text($before, $file, \@editor);
@@ -1866,6 +1933,13 @@ document whose C<sops> section also holds C<pgp>, C<kms>, C<gcp_kms>,
 C<azure_kv>, C<hc_vault> or C<key_groups> material cannot be re-encrypted for
 those recipients here, and dropping them silently would revoke their access
 while reporting success. See L</Files rotate refuses>.
+
+It refuses the other of rotate's files too, and B<before the editor is opened>:
+a document holding an encrypted value at a path its own encryption rule says is
+not encrypted would come back from the editor with that value written out in
+plaintext. See L</A rule that does not cover what is encrypted is refused>.
+Refusing after the editor had run would throw away what was just typed, for a
+defect that was in the file before it started.
 
 Key B<order> is not preserved either: the plaintext handed to the editor is
 emitted from a Perl hash, so it comes out sorted whatever order the encrypted
@@ -2827,6 +2901,102 @@ sub _assert_rekeyable {
         . "silently dropped and the recipients behind them would lose access. "
         . "\u$words{verb} this file with the sops CLI, or, if losing them is "
         . "what you want, say so explicitly with decrypt followed by encrypt.";
+}
+
+# Every method that re-encrypts a document it just read writes it back under
+# the rule the document itself carries -- and that rule has to be the one the
+# document is already encrypted under. Where it is not, the two halves of the
+# round trip disagree: _decrypt_tree is driven by which values LOOK encrypted
+# and returns the plaintext of all of them, _encrypt_tree is driven by the
+# rule and encrypts only what the rule selects, and every leaf in between is
+# written back BARE. The secret lands on disk, in a file that still looks like
+# a sops file, and the method returns true.
+#
+# sops cannot reach that state, because it decrypts RULE-first: a value the
+# rule excludes is read as the literal ENC[...] string and hashed as one, so
+# the MAC stops the document before anything is written. Measured on 3.13.3,
+# every rule that excludes an encrypted leaf -- a changed unencrypted_suffix,
+# an encrypted_suffix or encrypted_regex that matches nothing, an
+# unencrypted_regex that matches everything -- is exit 51, MAC mismatch.
+#
+# Making _decrypt_tree rule-driven here is the same fix and the larger one: it
+# moves what the digest covers, which is not this layer's to move. Until it
+# lands this refuses, in the one direction that writes a secret out. See
+# docs/adr/0046 and karr #160.
+sub _assert_rule_covers_encrypted_leaves {
+    my ($stored, $metadata, $file, %words) = @_;
+
+    my @excluded
+        = _encrypted_leaves_the_rule_excludes($stored, $metadata, [], 0);
+    return 1 unless @excluded;
+
+    my @set = grep {
+        defined $metadata->rule_value($_) && length $metadata->rule_value($_)
+    } @File::SOPS::Metadata::ENCRYPTION_RULES;
+    my $rule = @set
+        ? join(', ', map { "$_: " . $metadata->rule_value($_) } @set)
+        : 'no encryption rule at all';
+
+    my $what = @excluded == 1
+        ? "one of its values is encrypted at a path this document's own "
+          . "encryption rule ($rule) says is NOT encrypted -- $excluded[0]"
+        : scalar(@excluded) . " of its values are encrypted at paths this "
+          . "document's own encryption rule ($rule) says are NOT encrypted "
+          . "-- the first of them $excluded[0]";
+
+    croak "Refusing to $words{verb} '$file': $what. $words{noun} re-encrypts "
+        . "the document under that rule, so "
+        . (@excluded == 1 ? 'that value' : 'every one of those values')
+        . " would be written back into the file in PLAINTEXT -- which is what "
+        . "this method did until 0.003, at exit 0 and with nothing else to "
+        . "show for it. sops refuses this document rather than reading it "
+        . "(measured on 3.13.3: exit 51, MAC mismatch), because it decrypts "
+        . "rule-first and hashes the ENC[...] string itself. Correct the rule "
+        . "-- in the sops section, or in the .sops.yaml the file was encrypted "
+        . "under -- so that it covers the values that really are encrypted; or "
+        . "decrypt the file and encrypt it again under the rule you want.";
+}
+
+# The paths of every stored leaf that IS encrypted and that should_encrypt_path
+# says is not. Deliberately one-directional: the other disagreement -- a bare
+# leaf the rule selects -- writes no secret out (it encrypts a value that was
+# readable), and sops answers it differently too, exit 25 rather than 51.
+#
+# The walk is _encrypt_tree's, with its two rules: an ARRAY contributes no path
+# component, and the decision is taken at the leaf against the WHOLE path. Keys
+# are sorted so that the path the refusal names is the same one on every run.
+sub _encrypted_leaves_the_rule_excludes {
+    no warnings 'recursion';
+    my ($node, $metadata, $path, $depth) = @_;
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth) if ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
+    if (ref $node eq 'HASH') {
+        return map {
+            my $k = $_;
+            push @$path, $k;
+            my @found = _encrypted_leaves_the_rule_excludes(
+                $node->{$k}, $metadata, $path, $depth);
+            pop @$path;
+            @found;
+        } sort keys %$node;
+    }
+    elsif (ref $node eq 'ARRAY') {
+        return map {
+            _encrypted_leaves_the_rule_excludes($_, $metadata, $path, $depth)
+        } @$node;
+    }
+
+    # Any other reference is not an ENC[...] string -- a plaintext comment leaf
+    # arrives here as a File::SOPS::Comment object -- and is_encrypted wants a
+    # scalar.
+    return () if ref $node;
+    return () unless defined $node
+        && File::SOPS::Encrypted->is_encrypted($node);
+    return () if $metadata->should_encrypt_path($path);
+
+    return join(':', @$path);
 }
 
 # --- how deep a document may be -----------------------------------------

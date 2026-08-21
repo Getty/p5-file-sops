@@ -1,6 +1,27 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE and SECURITY FIX: `rotate` and `edit` no longer write a
+    document's secrets to disk in PLAINTEXT when its encryption rule does not
+    cover the values that are actually encrypted. Decryption here is driven by
+    which values look encrypted and re-encryption by the rule, so every leaf
+    the rule excluded came back out of the file bare -- at exit 0, with a valid
+    MAC over the plaintext it now showed, in a file that still looked like a
+    sops file. All four rule fields reach it, not only a regex that matches
+    nothing, and it does not need a hand-edited section: `unencrypted_regex`
+    and `encrypted_regex` are matched here by Perl and in sops by RE2, whose
+    \w, \d, \s and POSIX classes are ASCII-only, so an ordinary .sops.yaml
+    rule plus one non-ASCII key made sops encrypt a value this library then
+    wrote back readable (measured end to end, no editing anywhere). Such a
+    document is now REFUSED, naming the leaf and the rule that disagrees with
+    it -- and in `edit`, before the editor is opened rather than after. sops
+    refuses the same documents rather than reading them (measured on 3.13.3:
+    exit 51, MAC mismatch), because it decrypts rule-first and hashes the
+    ENC[...] string itself. The opposite disagreement -- a bare value the rule
+    selects, which is quietly ENCRYPTED rather than exposed -- is unchanged and
+    still divergent (sops: exit 25). `encrypt_file` and `encrypt_in_place`
+    were never affected: both refuse an already-encrypted input. See
+    docs/adr/0046, karr #150, and karr #160/#161 for the two halves left open.
   - BUG FIX and BEHAVIOUR CHANGE: the metadata MAC's AAD is now the timestamp
     Go re-formats, not the text the document holds. `lastmodified` is a Go
     string only where mapstructure decodes it; everything in sops after that
