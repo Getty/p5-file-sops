@@ -1,0 +1,199 @@
+---
+class: standard
+completed: 2026-08-21T04:45:03Z
+created: 2026-08-21T01:50:33Z
+id: 108
+priority: high
+started: 2026-08-21T02:09:32Z
+status: done
+tags:
+- wire
+- format
+- interop
+- bug
+title: A sops-written YAML comment above a list item is read as a list element, and
+  the MAC fails
+updated: 2026-08-21T04:45:03Z
+---
+
+GEMESSEN 2026-08-21 gegen sops 3.13.3 (/tmp/sops), HEAD c8eee80. Vorfrage-Messung zu karr #76.
+
+INTEROP-LESEFEHLER IN EINEM FORMAT, DAS WIR HEUTE UNTERSTUETZEN. Kein Roadmap-Thema.
+
+sops haengt einen YAML-Kommentar an den FOLGENDEN Knoten. Steht dieser Knoten in
+einer SEQUENZ, schreibt sops den Kommentar als echtes Sequenz-Element:
+
+    list:
+        - ENC[AES256_GCM,...,type:comment]
+        - ENC[AES256_GCM,...,type:str]
+
+In einer MAPPING-Position bleibt es dagegen ein echter YAML-Kommentar
+(#ENC[...] auf eigener Zeile), den YAML::XS verwirft -- harmlos.
+
+MINIMALES REPRODUZIERBARES DOKUMENT (3 Zeilen Klartext):
+
+    list:
+      # only a sequence comment
+      - one
+
+Nach sops -e und dann File::SOPS->decrypt:
+
+    MAC verification failed: the digest over 2 leaf values in document order
+    does not match the one stored in the sops section.
+
+sops -d auf derselben Datei: exit 0.
+
+MIT ignore_mac => 1 kommt zurueck:
+
+    { "list" : [ " only a sequence comment", "one" ] }
+
+-- der Kommentartext ist ein stiller zusaetzlicher String im Array. Das ist die
+eigentliche Gefahr, nicht der MAC-Fehler: ein decrypt+encrypt-Zyklus macht den
+Kommentar PERMANENT zu einem Wert. Gemessen, beide Seiten exit 0, keine Warnung:
+
+    sops -d auf dem von File::SOPS neu verschluesselten Dokument
+        list:
+            - ' only a sequence comment'
+            - one
+
+Betroffen ist auch die Flow-Sequenz: ein nachgestellter Kommentar hinter
+`flow: [1, 2]  # after a flow seq` macht sops daraus eine Block-Sequenz mit dem
+Kommentar als Element 0. File::SOPS liest [" after a flow seq", 1, 2], sops
+liest [1, 2].
+
+WARUM ES BISHER NIEMAND GESEHEN HAT: der Quellkommentar in
+lib/File/SOPS/Encrypted.pm bei der type:comment-Zeile der Decrypt-Typleiter
+behauptet ausdruecklich
+
+    #   comment -- a YAML comment sops writes as `#ENC[...]` on its own line.
+    #              YAML::XS drops comments, so File::SOPS never meets one
+    #              through a document; this is here for a direct caller.
+
+Der zweite Satz ist gemessen falsch. In Sequenzposition trifft File::SOPS sehr
+wohl auf einen type:comment-Leaf durch ein Dokument, und behandelt ihn dann als
+gewoehnlichen Wert. Der Kommentar gehoert korrigiert.
+
+t/04-interop.t LIEF (32 Tests, sops 3.13.3, PASS) und hat kein einziges Dokument
+mit Kommentaren -- deshalb ist das nie aufgefallen.
+
+WICHTIG FUER DEN FIX -- gemessene Randbedingung: KOMMENTARE STEHEN NICHT IM MAC.
+Siehe die Messreihe an #76. Ein type:comment-Leaf muss also aus dem Digest
+HERAUSGEHALTEN werden, nicht hineingerechnet. Fuer die Mapping-Position tut
+File::SOPS das heute schon versehentlich richtig (YAML::XS verwirft sie); nur die
+Sequenzposition zaehlt sie faelschlich mit.
+
+Lane: wire (Digest-Walk und Encrypted.pm) mit format als Zweitleser -- die
+Unterscheidung Sequenz/Mapping faellt beim Parsen an.
+
+Messskripte und Testdateien:
+/tmp/claude-1000/-home-getty-dev-p5-file-sops/d4aee62c-59a4-4293-a4f8-a2a46316a947/scratchpad/m76/
+UMGESETZT 2026-08-21 gegen sops 3.13.3 (/tmp/sops), Basis HEAD 2c9ee58.
+docs/adr/0024. Lane wire, ohne lib/File/SOPS.pm anzufassen.
+
+ENTSCHEIDUNG: Weg (c) -- ABLEHNEN, nicht still verwerfen. Format::YAML::parse
+croakt auf einem type:comment-Leaf und nennt den Pfad (list:0, flow:0). Damit
+sind decrypt, decrypt_file, extract, rotate und edit betroffen, ignore_mac => 1
+eingeschlossen -- genau der Pfad, der die Korruption erzeugt hat. encrypt bleibt
+unberuehrt (Klartext enthaelt keine ENC-Werte).
+
+WARUM NICHT (a) "beim Parse entfernen": GEMESSEN, dass es funktioniert -- aber
+nur, wenn derselbe Drop auch in File::SOPS::_parse_in_document_order passiert.
+_document_leaves vergleicht beide Baeume elementweise; mit dem Drop nur im
+Parser kommt "list: the document has 2 entries here but the parsed tree has 1".
+Mit Drop in BEIDEN Baeumen verifiziert t3.enc.yaml und liefert { list => [one] }.
+Sechs Zeilen, zwei Dateien -- also machbar, und trotzdem abgelehnt: jeder
+Schreibpfad (rotate, edit, encrypt_in_place) wuerde das Dokument danach OHNE die
+Kommentare zurueckschreiben, still und ohne Diagnose. Lautes Falschlesen gegen
+leises Verlustschreiben getauscht. (c) -> (b) ist monoton, (a) -> (b) muesste
+zurueckgedreht werden.
+
+PREIS, offen benannt: ein Dokument, das sops liest, lehnt File::SOPS jetzt ab.
+Steht in POD, ADR, Changes und in der Fehlermeldung.
+
+VIERTE GEMESSENE BESTAETIGUNG, dass Kommentare nicht im MAC stehen (zu den drei
+an #76): einen type:str-Wert in Mapping-Position auf type:comment umetikettiert
+-> sops -d exit 51, MAC mismatch. Der Ausschluss haengt am Typ, nicht an der
+Position -- und ein Kommentar-Leaf in Mapping-WERT-Position ist damit ein
+Dokument, das sops selbst nicht liest.
+
+KORREKTUR ERLEDIGT: der falsche Quellkommentar an der type:comment-Zeile der
+Decrypt-Leiter in Encrypted.pm ist ersetzt, ebenso die POD-Stelle, die dasselbe
+behauptete.
+
+NEU: File::SOPS::Encrypted->encrypted_type -- liest das type:-Label ohne Base64
+zu dekodieren, dritter Nutzer des einen verankerten $ENC_REGEX. Noetig, weil
+sops einen Kommentar mit kaputtem Chiffrat toleriert (Messung c an #76) und der
+Guard ihn trotzdem als Kommentar erkennen muss.
+
+DATEIEN: lib/File/SOPS/Format/YAML.pm, lib/File/SOPS/Encrypted.pm,
+t/40-comment-leaf-refused.t (neu), docs/adr/0024-... (neu), Changes.
+lib/File/SOPS.pm NICHT angefasst.
+
+TESTS: prove -lr t/ -> 41 Dateien, 934 Tests, PASS.
+SOPS_BIN=/tmp/sops prove -l t/04-interop.t -> 32 Tests, PASS, GELAUFEN (nicht
+geskippt). Zusaetzlich gegen eine saubere Kopie (HEAD-lib + nur meine beiden
+Dateien) mit perl -I, um karr #111 in SOPS.pm auszuschliessen: identisch.
+
+NETZ (perl -I gegen eine lib OHNE den Guard, nicht prove -l): 7 von 11 Subtests
+fallen, 27 Einzelzusicherungen. Die vier, die auf beiden Seiten gruen sind, sind
+genau die "darf sich nicht bewegen"-Faelle (Mapping-Position, Dokumente ohne
+Kommentar, encrypted_type, das sops-geschriebene Mapping-Dokument).
+2026-08-21 02:28 Refusal implemented (docs/adr/0024). Interop RAN: 32 tests PASS against sops 3.13.3. Read the ADR's rejected-alternatives before accepting -- dropping the leaf silently was measured to work and deliberately not taken.
+NACHTRAG: waehrend dieser Arbeit ist karr #111 als d8d2325 (POD-only, lib/File/SOPS.pm) gelandet. Die oben genannten Testlaeufe sind gegen d8d2325 + diese Aenderung, nicht gegen 2c9ee58. Ergebnis unveraendert: 41 Dateien / 934 Tests PASS, t/04-interop.t 32 Tests PASS und gelaufen.
+KLARSTELLUNG 2026-08-21 auf Rueckfrage des Koordinators: Der Satz in meinem
+Bericht ("strict decrypt succeeds and hands back the phantom element") galt dem
+SYNTHETISCHEN Fixture aus t/40, nicht einem sops-geschriebenen Dokument. Fuer
+echte sops-Dokumente bleibt es bei dem, was der Ticketkopf, der Quellkommentar
+und das ADR sagen: strict decrypt scheitert an der MAC-Pruefung, und erst
+ignore_mac => 1 liefert das Phantom-Element. Nachgemessen statt erinnert.
+
+MESSUNG (sops 3.13.3, unpatched lib via perl -I, ohne den Guard):
+
+  Dokument                              type:comment-Leaves   strict decrypt
+  t3.enc.yaml (# only a sequence ...)   1                     MAC verification failed
+  t4.enc.yaml (flow-seq + mapping)      3 (1 in Sequenz)      MAC verification failed
+  "#   " (nur Leerzeichen)              1                     MAC verification failed
+  "#<TAB>"                              1                     MAC verification failed
+  "#x"                                  1                     MAC verification failed
+
+WARUM DAS IMMER SO IST: der Digest ist eine Konkatenation der Leaf-Klartexte
+ohne Trenner. sops laesst den Kommentar weg, wir (ungepatcht) nehmen ihn mit --
+die beiden sind nur gleich, wenn der Kommentar-Klartext LEER ist. Zwei Kandidaten
+dafuer, beide ausgeschlossen:
+
+  * Blanker "#" in einer Liste: sops schreibt DANN GAR KEINEN Kommentar-Leaf,
+    sondern ein leeres String-Element. Gemessen: 0 type:comment-Leaves, sops -d
+    gibt `- ""` zurueck, beide Implementierungen lesen dasselbe. Kein Fehler.
+  * Nur-Whitespace-Kommentar: der Whitespace bleibt Klartext, also nicht leer
+    -> Mismatch, siehe Tabelle.
+
+Zusaetzlich geprueft, ob ein Kommentar-Leaf ueberhaupt an einem UNVERSCHLUESSELTEN
+Pfad auftauchen kann (dort koennte mac_only_encrypted beide Seiten zum
+Ueberspringen bringen und den strict-Pfad still machen): NEIN. Mit
+--unencrypted-suffix _unencrypted, mit und ohne --mac-only-encrypted, laesst sops
+den Kommentar in einem unverschluesselten Teilbaum als echte Kommentarzeile
+stehen -- kein Leaf, YAML::XS verwirft ihn, beide Seiten einig.
+
+ERGEBNIS: kein sops-geschriebenes Dokument bekannt, bei dem der NORMALE
+decrypt-Pfad das Phantom-Element still zurueckgibt. Die stille Korruption
+bleibt auf ignore_mac => 1 beschraenkt. Ticket, ADR 0024, Quellkommentar und
+Changes-Eintrag beschreiben den Fehler damit richtig und werden nicht geaendert.
+
+WARUM DAS SYNTHETISCHE FIXTURE IN t/40 TROTZDEM SO GEBAUT IST: es wird von
+File::SOPS ueber [' only a sequence comment', 'one'] verschluesselt, danach wird
+Element 0 auf type:comment umetikettiert. Der gespeicherte MAC deckt beide
+Klartexte, und das Umetikettieren bewegt ihn nicht (_mac_bytes hasht den
+authentifizierten Klartext, typunabhaengig ausser bei bool). Dadurch prueft der
+Subtest den Guard OHNE Umweg ueber die MAC-Ordnung: die Ablehnung faellt beim
+Parse, nicht als Nebenwirkung einer Digest-Abweichung. Gegen das echte
+sops-Dokument prueft Subtest 9, gated auf die Binary.
+Implementiert und committet. Entscheidung: refusen statt droppen -- (c) ist monoton Richtung #76, (a) waere von demselben Ticket zurueckzudrehen. Preis offen benannt: ein Dokument, das sops liest, lesen wir jetzt nicht. Bereits korrumpierte Dokumente heilt der Guard nicht.
+ABGENOMMEN 2026-08-21, vom Maintainer an den Orchestrator delegiert -- und dies ist die einzige Abnahme dieser Runde, die etwas WEGNIMMT. Das gehoert beim Namen genannt: ein Dokument mit einem type:comment-Leaf, das sops schreibt und liest, kann File::SOPS ab jetzt nicht mehr lesen. Es wird refused, mit Pfadangabe, statt still korrumpiert.
+
+Abgenommen wird es trotzdem, aus drei Gruenden, die alle gemessen sind und nicht abgewogen werden mussten. Erstens war der Zustand vorher nicht 'lesbar', sondern falsch: strict decrypt starb ohnehin am MAC (fuenf sops-geschriebene Dokumente, 5 von 5), und der einzige Pfad, der etwas zurueckgab, war ignore_mac -- mit einem Phantom-Element, das ein decrypt+encrypt-Zyklus PERMANENT machte, danach beide Seiten exit 0 und keine Warnung. Es wird also keine funktionierende Faehigkeit gegen eine Fehlermeldung getauscht, sondern eine stille Korruption gegen eine laute Ablehnung. Zweitens ist die Richtung monoton: wenn #76 die Erhaltung bringt, wird dieser Guard eine glatte Entfernung -- die Alternative (Leaf beim Parse droppen) haette von demselben Ticket erst zurueckgedreht werden muessen und haette in der Zwischenzeit jeden rotate/edit/encrypt_in_place die Kommentare still aus der Datei schreiben lassen. Drittens ist der Preis an vier Stellen dokumentiert: ADR 0024, die POD, der Changes-Eintrag und die Fehlermeldung selbst.
+
+Was diese Abnahme NICHT bedeutet: dass der Zustand gut ist. #76 bleibt der eigentliche Fix und ist mit den konkreten Anforderungen versehen. Bis dahin ist ein Dokument mit Sequenz-Kommentaren hier nicht bearbeitbar.
+
+Bereits korrumpierte Dokumente heilt der Guard nicht und kann es nicht: ihr Kommentar ist ein echter type:str-Wert, nichts in der Datei unterscheidet ihn von einem, den der Autor geschrieben hat. Reparatur ist Handarbeit am entschluesselten Dokument.
+
+Commit 7a12364, ADR 0024.
