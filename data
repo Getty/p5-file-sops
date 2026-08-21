@@ -1,0 +1,83 @@
+---
+class: standard
+created: 2026-08-21T05:38:08Z
+id: 127
+priority: medium
+started: 2026-08-21T06:48:11Z
+status: backlog
+tags:
+- wire
+- yaml
+- interop
+- types
+- adr-0038
+title: A leading-zero integer is 493 to sops and 755 here -- same type label, different
+  value
+updated: 2026-08-21T07:41:51Z
+---
+
+Gefunden beim Abarbeiten von karr #118 (sops 3.13.3 in /tmp/sops). NICHT von #118 eingefuehrt und nicht tag-bedingt -- die getaggte und die untagged Schreibweise diverieren identisch.
+
+  plaintext  v: 0755          (oder v: !!int 0755)
+  sops -e    v: ENC[...,type:int]  plaintext 493   (go-yaml liest YAML 1.1 oktal)
+  File::SOPS v: ENC[...,type:int]  plaintext 755   (libyaml liest dezimal)
+
+Beide Dokumente verifizieren ihren eigenen MAC, `sops -d` exit 0 auf beiden Seiten. Also eine Wertdivergenz, keine Kompatibilitaetsstoerung -- aber SCHAERFER als karr #29 (done): dort war es eine TYP-Differenz (0x10, 1_000 sind str hier und int dort), hier ist der Typ auf beiden Seiten int und nur die ZAHL ist eine andere. Ein Leser bekommt 755 wo sops 493 gibt, ohne dass irgendwo etwas auffaellt.
+
+Die gefaehrliche Haelfte ist schon zu: der Foreign-Resolution-Guard (ADR 0013/0017) verweigert das Schreiben eines solchen Blatts im UNVERSCHLUESSELTEN Slot, mit einer Meldung, die das Oktal benennt -- gemessen. Offen ist nur der verschluesselte Slot.
+
+Selbe Familie wie karr #114 (.inf). Messung in docs/adr/0032, Abschnitt "The silent divergence hunt".
+MEASURED AND NARROWED, stays open -- docs/adr/0038 (50 scalars x 3 slot configurations, sops 3.13.3, each sops_mac decrypted and the digest SOLVED per row).
+
+BOTH halves of the ticket's claim were checked, because the priority hangs on them.
+
+  1. THE UNENCRYPTED HALF IS CLOSED, AND THE MESSAGE IS RIGHT. Verified: a plaintext
+     'v_unencrypted: 0755' croaks with 'its spelling is a leading-zero integer, which
+     libyaml reads as decimal and Go as octal', and the message names 493 as what to
+     pass instead -- which is, measured, exactly what sops -e writes from the same
+     plaintext. Nothing in that message is wrong for an int leaf. Same for 010 (-> 8)
+     and !!int 0755 (-> 493). #118's claim holds as filed.
+
+  2. THE ENCRYPTED HALF IS OPEN AND SILENT, as the ticket says. Measured, encrypted
+     slot only:
+       0755        sops type:int 493 | ours type:int 755   both sops -d exit 0
+       !!int 0755  sops type:int 493 | ours type:int 755   both sops -d exit 0
+       010         sops type:int 8   | ours type:int 10    both sops -d exit 0
+     No guard sees it and none can from the emitter: _encrypt_tree replaces the leaf
+     with an ENC[...] string long before the emitter runs, and that string is a string
+     to every resolver.
+
+NOW ALSO CARRIES karr #128's value half (folded in, same class, same mechanism):
+       2026-08-21   sops type:time 2026-08-21T00:00:00Z | ours type:str 2026-08-21
+       2001-12-14t21:59:43.10-05:00 -> sops 2001-12-14T21:59:43.1-05:00 | ours the source spelling
+
+PRIORITY STAYS MEDIUM. Nothing fails, no document is corrupt, and a caller reading the
+same file with plain YAML::XS gets 755 too -- the number libyaml itself chose. What IS
+worth recording, and the ticket is right about it: this is sharper than karr #29, where
+the TYPE label differed and something was visible. Here both sides say type:int and only
+the number differs, so nothing anywhere signals it.
+
+Closing it means resolving a plain scalar the way Go resolves it rather than the way
+libyaml does -- on the PARSE side, for every document, moving the value, the ciphertext
+and the digest. ADR 0002's territory and the wire lane's, not a formatting change.
+JSON is unaffected: 10 spellings measured in both slots, 10/10 identical label, plaintext
+and slot text.
+VERIFIZIERT UND VERENGT 2026-08-21, ADR 0038, bleibt offen bei medium. Die unverschluesselte Haelfte IST geschlossen, und die Meldung ist KORREKT -- sie nennt 493, und 493 ist gemessen genau das, was sops -e schreibt. Die VERSCHLUESSELTE Haelfte ist nicht gedeckt und ist still: _encrypt_tree ersetzt das Leaf durch einen ENC[...]-String, bevor der Emitter laeuft. NICHT auf high gehoben, und der Grund gehoert dazu: es scheitert nichts, und ein Aufrufer, der dieselbe Datei mit blossem YAML::XS liest, bekommt ebenfalls 755. Aber es ist schaerfer als karr #29 -- dort wich das Typ-Label ab und etwas war sichtbar; hier sagen beide Seiten type:int und nur die ZAHL bewegt sich. Dieses Ticket traegt jetzt zusaetzlich die Wert-Haelfte von karr #128 (Timestamps in jeder nicht-RFC3339-exakten Schreibweise).
+MEASURED FROM karr #135 (docs/adr/0039): this ticket is the second gate on
+karr #135, and its value is larger than its own row.
+
+karr #135 cannot quote a string leaf the emitter writes bare, even once karr #99
+gives it the ability, because for 15 of the 22 measured spellings a BARE and a
+QUOTED source arrive here as the identical Perl string -- verified through
+Format::YAML->parse, compared by detect_type and value_to_bytes -- while sops
+writes something different for each: 1_000 -> 1000, 0x1f -> 31, Null -> null,
+TRUE -> true, 2015-01-01 -> 2015-01-01T00:00:00Z from a bare source, and the
+quoted string verbatim from a quoted one (44 sops -e runs, all exit 0).
+
+Resolving a plain scalar the way Go resolves it -- this ticket -- removes that
+ambiguity at the parse, where the information still exists. The proof that it
+works is already in the tree: ADR 0026 / ADR 0034 do exactly this for the twelve
+non-finite tokens, and those seven spellings are the only ones of the 22 that
+karr #135 could distinguish today.
+
+So: #99 alone -> 7 of 22 writable. #99 + #127 -> 22 of 22.
