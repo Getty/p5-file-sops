@@ -1,0 +1,113 @@
+---
+class: standard
+completed: 2026-08-21T07:10:07Z
+created: 2026-08-21T06:06:12Z
+id: 134
+priority: high
+started: 2026-08-21T06:38:04Z
+status: done
+tags:
+- yaml
+- float
+- editor
+- interop
+- silent-data-loss
+title: edit silently retypes an encrypted non-finite float to a string
+updated: 2026-08-21T07:10:07Z
+---
+
+Found while measuring karr #123 (sops 3.13.3 at /tmp/sops). NOT the same
+defect and NOT fixed by karr #123 -- it is the ENCRYPTED-slot half of the same
+plaintext round trip, it is SILENT, and it is therefore worse.
+
+MEASURED, one document, key `keep` in an encrypted slot:
+
+  printf 'keep: .inf\nother: x\n' | sops -e   ->  keep: ENC[...,type:float]
+                                       sops -d   ->  keep: .inf
+
+  File::SOPS->edit on that file, editor changes `other` only:
+      returns 1, no warning, sops -d exit 0
+      wire AFTER: keep: ENC[...,type:str]
+      sops -d    : keep: Inf          <- a STRING now, not a number
+
+  sops edit on the same file, same editor:
+      exit 0, wire unchanged: type:float, sops -d prints `keep: .inf`
+
+MECHANISM. The encrypted leaf decrypts to a real Perl infinity. The plaintext
+emitter (Format::YAML::emit -> YAML::XS::Dump) writes a bare non-finite NV as
+`Inf` / `-Inf` / `NaN` -- tokens go-yaml resolves as STRINGS (they are the near
+misses ADR 0026 measured, and correctly leaves alone). So the editor is shown
+`Inf`, the string `Inf` comes back, detect_type says str, and the leaf is
+re-encrypted as type:str. karr #123 cannot reach this: its repair keys on the
+twelve %GO_CONSTANT tokens, and `Inf` is not one of them -- correctly, because
+a user who types `Inf` really does mean the string.
+
+The same emitter defect makes decrypt_file diverge from `sops -d` for the same
+document: we write `keep: Inf`, sops writes `keep: .inf`. And decrypt_file ->
+encrypt_file therefore retypes the leaf as well, silently, with no editor
+involved.
+
+WHERE THE FIX HAS TO GO. At the emit, not the parse -- the plaintext has
+genuinely destroyed the information by the time it is reparsed. A bare
+non-finite NV in a document with no MAC should be written as its go-yaml token
+(`.inf`, `-.inf`, `.nan`), which is what sops -d writes and what ADR 0026
+already established as the right carrier. It cannot go in Format::YAML alone:
+Encrypted::_canonical_floats short-circuits a non-finite leaf with
+`return $node unless _carries_go_non_finite_token(...)` before any handler hook
+is reached, so the leaf never sees `carrier`. Doing it in the handler would
+mean a second full tree walk in emit AND a second copy of the NO_AGREED_FORM
+decision -- this distribution's signature defect.
+
+So it needs lib/File/SOPS/Encrypted.pm, which was outside karr #123's
+boundary (karr #122/#114 were in flight there). Wire lane.
+
+Note the interaction with karr #122: once encrypt_value can see the format, a
+YAML encrypted slot can carry type:float/+Inf again, and then this round trip
+closes properly in both directions.
+2026-08-21 07:07 Fixed at the emit, in lib/File/SOPS/Encrypted.pm. ADR 0037.
+
+THE TICKET'S CENTRAL CLAIM WAS VERIFIED FIRST and holds: a canonical_float_tree
+call with three recording callbacks shows that for +Inf/-Inf/NaN NONE of
+roundtrips, carrier or reject_scalar is invoked -- the leaf leaves the walk
+unchanged. No fix in a format handler could have reached it.
+
+EXTENT, wider than the ticket said. decrypt_file diverges exactly as filed
+(0 of 3 leaf lines matched sops -d, now 3 of 3). JSON is NOT the same defect
+but a worse one: decrypt_file wrote "secret": null, and edit replaced the whole
+ENC[...] with a bare UNENCRYPTED null -- the value destroyed, not retyped --
+where sops refuses the same document (sops -d --output-type json and sops edit
+both exit 4).
+
+TARGET FORM, measured: sops -d writes .inf / -.inf / .nan for an encrypted
+type:float, in both wire formats. For JSON there is no reference form to copy,
+so the answer given is sops's own: refuse, naming the key path.
+
+MECHANISM: the walk asks the handler's own carrier for the token and verifies
+the answer with ADR 0031's gate (public token bytes AND value_to_bytes must
+both come back as the same bytes). The YAML carrier answers with a dualvar
+unchanged; the JSON carrier croaks. No handler file touched. Fails closed both
+directions. Only a leaf with NO public PV is repaired, so ADR 0031's banana row
+and the three contradictions are untouched in both directions -- measured.
+
+CIRCLE CLOSES: emit .inf -> ADR 0026 parse (ungated since ADR 0034) -> float,
+digest +Inf, token as its text. Verified for all three.
+
+karr #122 IS THE REMAINING RUNG, and edit now croaks there instead of
+corrupting. A measured note is on that ticket: its premise (the two formats
+disagree) is wrong -- both WIRE formats behave identically, only the OUTPUT
+format differs.
+
+t/52-non-finite-float-survives-the-encrypted-round-trip.t: 15 subtests, 196
+assertions, full edit round trip against the binary. Counter-check against
+unpatched 5ed2dc0 with perl -I and no use lib: 9 of 15 subtests and 80
+assertions FAIL; the six that pass are all must-not-move.
+
+t/46 section 6 and t/49 section 8 pinned the defect and are turned around in
+place, the replacement named in each.
+
+prove -lr t/: 1157/1157 at 5ed2dc0 -> 1172/1172 (53 files).
+SOPS_BIN=/tmp/sops prove -l t/04-interop.t: 32/32, EXECUTED not skipped.
+
+Filed karr #140 for what was left alone (a plaintext emit writes a
+contradictory string half verbatim). No git.
+ABGENOMMEN 2026-08-21. Commit 77e4fdc, ADR 0037. Die Abnahme gilt vor allem dem Befund, den das Ticket nicht kannte: in JSON war es keine Umtypisierung, sondern ZERSTOERUNG. decrypt_file schrieb "secret": null, und edit eines UNBETEILIGTEN Schluessels lieferte 1 zurueck, wobei das ENC[...] verschwunden und durch ein bares, unverschluesseltes null ersetzt war. Wo sops die Operation rundheraus ablehnt (exit 4), hat diese Bibliothek ein verschluesseltes Geheimnis still durch ein Klartext-null ersetzt. Das ist der schwerste Einzelbefund dieser Nacht. Ausserdem abgenommen: die Gegenprobe zu ADR 0031 in beide Richtungen -- zwoelf Encrypt-Pfad-Zeilen identisch vor und nach der Aenderung, Meldung fuer Meldung, also ist nichts schreibbar geworden, was ein Aufrufer konstruieren kann.
