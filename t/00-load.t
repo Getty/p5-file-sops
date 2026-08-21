@@ -13,6 +13,11 @@ use_ok('File::SOPS::Comment');
 # so below the next line this would be a no-op too (karr #153).
 use_ok('File::SOPS::Metadata::Flat');
 
+# And again for the same reason, with two handlers pulling it in rather than
+# one: File::SOPS loads Format::ENV and Format::INI eagerly and both of them
+# load this, so below the next line it would be a no-op as well (karr #158).
+use_ok('File::SOPS::Format::ENV::Ordered');
+
 use_ok('File::SOPS');
 use_ok('File::SOPS::Encrypted');
 use_ok('File::SOPS::Metadata');

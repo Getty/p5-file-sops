@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use File::SOPS::Comment;
 use File::SOPS::Encrypted;
+use File::SOPS::Format::ENV::Ordered;
 use File::SOPS::Metadata;
 use File::SOPS::Metadata::Flat;
 use namespace::clean;
@@ -778,6 +779,9 @@ this format carries, and the escape it shares with the data values
 
 =item * L<File::SOPS::Comment> - the comment leaf
 
+=item * L<File::SOPS::Format::ENV::Ordered> - the tied hash that carries the
+document order this handler's C<parse_in_document_order> returns
+
 =item * docs/adr/0030 - the value that is refused rather than written
 
 =item * docs/adr/0035 - what an unencrypted leaf is written as
@@ -792,38 +796,5 @@ key, the sorted emitter and the nine refusals
 =back
 
 =cut
-
-package File::SOPS::Format::ENV::Ordered;
-
-use strict;
-use warnings;
-
-# A ~15-line Tie::Hash is what "order preserving" means for a format whose
-# parser has none (docs/adr/0036). It is here rather than in a file of its own
-# because it is an implementation detail of one method: nothing else may tie a
-# hash to it, and it holds no format knowledge at all.
-#
-# YAML::PP's own ordered hash is not separately loadable and Tie::IxHash is not
-# a prerequisite of this distribution, so this is the cheapest thing that meets
-# the contract. Only STORE, FETCH, EXISTS and the iteration pair are exercised;
-# the rest are here so that the tie is not a trap for a later caller.
-
-sub TIEHASH  { bless { order => [], value => {}, at => 0 }, $_[0] }
-sub STORE    {
-    my ($self, $key, $value) = @_;
-    push @{ $self->{order} }, $key unless exists $self->{value}{$key};
-    $self->{value}{$key} = $value;
-}
-sub FETCH    { $_[0]->{value}{ $_[1] } }
-sub EXISTS   { exists $_[0]->{value}{ $_[1] } }
-sub DELETE   {
-    my ($self, $key) = @_;
-    @{ $self->{order} } = grep { $_ ne $key } @{ $self->{order} };
-    delete $self->{value}{$key};
-}
-sub CLEAR    { $_[0]->{order} = []; $_[0]->{value} = {} }
-sub FIRSTKEY { $_[0]->{at} = 0; $_[0]->{order}[0] }
-sub NEXTKEY  { $_[0]->{order}[ ++$_[0]->{at} ] }
-sub SCALAR   { scalar @{ $_[0]->{order} } }
 
 1;

@@ -6,14 +6,14 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use File::SOPS::Comment;
 use File::SOPS::Encrypted;
+# The tied hash docs/adr/0036 requires. USED WHERE IT STANDS rather than
+# copied: two copies of an order-preserving hash is exactly how ENV and INI
+# drift apart, which both tickets warned about for weeks. karr #158 gave it a
+# file of its own, so this loads the class itself where it used to load the
+# whole dotenv handler to reach it.
+use File::SOPS::Format::ENV::Ordered;
 use File::SOPS::Metadata;
 use File::SOPS::Metadata::Flat;
-# For File::SOPS::Format::ENV::Ordered, the tied hash docs/adr/0036 requires.
-# USED WHERE IT STANDS rather than copied: two copies of an order-preserving
-# hash is exactly how ENV and INI drift apart, which both tickets warned about
-# for weeks. It belongs in a file of its own -- karr #158, and this second
-# caller is the argument that closes it.
-use File::SOPS::Format::ENV;
 use namespace::clean;
 
 # Same reason as in the other three handlers: every frame between a caller and
@@ -1136,6 +1136,9 @@ Returns true if the filename ends with C<.ini> (case-insensitive).
 
 =item * L<File::SOPS::Format::ENV> - the dotenv handler, which shares this
 one's flat metadata, type rule and order-preserving reparse
+
+=item * L<File::SOPS::Format::ENV::Ordered> - the tied hash both of them carry
+that reparse's key order in, one per section here
 
 =item * L<File::SOPS::Metadata::Flat> - the flat metadata encoding, here with
 an empty prefix

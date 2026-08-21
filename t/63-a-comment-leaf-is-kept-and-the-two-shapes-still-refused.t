@@ -41,9 +41,10 @@ use Crypt::Age;
 #
 # THIS FILE THEREFORE PINS TWO THINGS AT ONCE, and the sections say which:
 #
-#   * the pins that FLIPPED -- a comment leaf in a sequence is read and kept
-#     where it used to be refused. The full round trip against the binary is
-#     t/56; here it is the tree, the digest and the message.
+#   * what is KEPT -- a comment leaf in a sequence is read, placed and written
+#     back, where ADR 0024 refused the whole document for it. The full round
+#     trip against the binary is t/56; here it is the tree, the digest and the
+#     message.
 #   * the refusals that REMAIN, which are the whole of what is left of ADR 0024:
 #     a comment as a MAPPING VALUE (a shape no SOPS store writes -- sops reads
 #     it back as a dump of Go's comment struct), and a comment this emitter is
@@ -100,7 +101,7 @@ my $COMMENT_LEAF = enc_string('comment', ' only a sequence comment');
 my $STR_LEAF     = enc_string('str',     'one');
 
 ###############################################################################
-# 1. WHAT FLIPPED. A comment leaf in a SEQUENCE is a leaf the document really
+# 1. WHAT IS KEPT. A comment leaf in a SEQUENCE is a leaf the document really
 #    has, so parse hands it on and the tree keeps it. Every assertion in this
 #    section was a refusal under docs/adr/0024.
 ###############################################################################
@@ -108,7 +109,7 @@ my $STR_LEAF     = enc_string('str',     'one');
 subtest 'a comment leaf in a sequence is handed on by parse' => sub {
     my $doc = "list:\n    - $COMMENT_LEAF\n    - $STR_LEAF\n";
 
-    # FLIPPED (docs/adr/0041): parse used to croak `list:0: ... type:comment`.
+    # Under ADR 0024 parse croaked here: `list:0: ... type:comment`.
     my ($data) = File::SOPS::Format::YAML->parse($doc);
     is_deeply($data, { list => [ $COMMENT_LEAF, $STR_LEAF ] },
         'the element is in the tree, at its index, untouched');
@@ -120,9 +121,9 @@ subtest 'a comment leaf in a sequence is handed on by parse' => sub {
 };
 
 subtest 'a comment leaf is kept at every depth a sequence reaches' => sub {
-    # FLIPPED (docs/adr/0041): all three of these were refusals at parse. The
-    # two SEQUENCE positions are now read; the MAPPING VALUE one is refused,
-    # one layer further in -- see section 4.
+    # Every position here was a refusal at parse under ADR 0024. The two
+    # SEQUENCE ones are read; the MAPPING VALUE one is refused, one layer
+    # further in -- see section 4.
     my %doc = (
         'a:b:1' => "a:\n    b:\n        - $STR_LEAF\n        - $COMMENT_LEAF\n",
         'deep'  => "outer:\n    - inner:\n        - $COMMENT_LEAF\n",
@@ -152,7 +153,7 @@ subtest 'a damaged comment leaf is recognised without being decoded' => sub {
     is(File::SOPS::Encrypted->encrypted_type($damaged), 'comment',
         'but the label is readable, so the digest can skip it');
 
-    # FLIPPED (docs/adr/0041): the document used to be refused at parse.
+    # Under ADR 0024 the document was refused at parse.
     my ($data) = File::SOPS::Format::YAML->parse("list:\n    - $damaged\n");
     is_deeply($data, { list => [$damaged] }, 'and the document parses');
 };
@@ -260,10 +261,10 @@ subtest 'decrypt keeps the comment, in both MAC modes' => sub {
     like($doc, qr/^\s*- ENC\[AES256_GCM,.*,type:comment\]$/m,
         'encrypt wrote the comment as a sequence element');
 
-    # FLIPPED (docs/adr/0041). Under ADR 0024 both of these croaked
-    # `list:0: ... type:comment`; before that they returned
-    # { list => [' only a sequence comment', 'one'] }, the comment as a silent
-    # extra STRING, which is the defect neither answer had to be.
+    # Under ADR 0024 both of these croaked `list:0: ... type:comment`; before
+    # that they returned { list => [' only a sequence comment', 'one'] },
+    # the comment as a silent extra STRING, which is the defect neither answer
+    # had to be.
     for my $mode (['strict', ()], ['ignore_mac', (ignore_mac => 1)]) {
         my ($name, %extra) = @$mode;
         my $got = eval { File::SOPS->decrypt(
@@ -370,7 +371,7 @@ subtest 'the file-based read paths keep it too' => sub {
     my $before = document_with_comment_leaf();
     write_file($file, $before);
 
-    # FLIPPED (docs/adr/0041): extract and rotate croaked `list:0: ...` here.
+    # Under ADR 0024 extract and rotate croaked `list:0: ...` here.
     is(File::SOPS->extract(file => $file, path => '["list"][1]',
         identities => [$secret]), 'one', 'extract reaches past the comment');
 
@@ -425,9 +426,9 @@ SKIP: {
         like($back, qr/# only a sequence comment/,
             'with the comment restored as a comment');
 
-        # FLIPPED (docs/adr/0041): this used to assert a refusal. The MAC
-        # verifying is the load-bearing half -- it is sops's own digest, and it
-        # only matches because the comment is left out of ours.
+        # ADR 0024 asserted a refusal here. The MAC verifying is the
+        # load-bearing half -- it is sops's own digest, and it only matches
+        # because the comment is left out of ours.
         my $got = eval { File::SOPS->decrypt(
             encrypted => scalar read_file("$tempdir/seq.enc.yaml"),
             identities => [$secret]) };
@@ -449,8 +450,8 @@ SKIP: {
             'the flow sequence became a block sequence led by the comment');
 
         write_file("$tempdir/flow.enc.yaml", $out);
-        # FLIPPED (docs/adr/0041): a refusal at flow:0 before. sops reads
-        # [1, 2] with a comment; so do we now, where we used to read
+        # A refusal at flow:0 under ADR 0024. sops reads [1, 2] with a
+        # comment; so do we, where karr #108 read
         # [' after a flow seq', 1, 2].
         my $got = eval { File::SOPS->decrypt(
             encrypted => scalar read_file("$tempdir/flow.enc.yaml"),
