@@ -1,0 +1,44 @@
+---
+class: standard
+completed: 2026-08-21T06:22:27Z
+created: 2026-08-21T05:38:44Z
+id: 129
+priority: low
+started: 2026-08-21T06:22:27Z
+status: done
+tags:
+- docs
+- yaml
+- float
+title: File::SOPS POD still says an unencrypted .inf fails verification, which ADR
+  0026 fixed
+updated: 2026-08-21T06:22:27Z
+---
+
+Found while working karr #113. Pre-existing drift, not caused by it, and in a
+file that lane could not touch (karr #117 was working in lib/File/SOPS.pm).
+
+lib/File/SOPS.pm, in the "A YAML literal that overflows a double comes back as
+a string" section, says of the twelve %GO_CONSTANT spellings:
+
+    ... an ENCRYPTED one of those decrypts to a real Inf here as it always
+    did, while an UNENCRYPTED one still fails verification, which is a
+    separate defect and open as karr #105
+
+karr #105 is closed and ADR 0026 shipped in the same unreleased cycle: an
+unencrypted plain .inf now READS, as the float go-yaml resolves, carrying the
+document token. And since karr #113 / ADR 0031 it is written back as well, so
+the sentence is wrong twice over.
+
+Same paragraph, one line up, is still correct and should stay: a literal that
+overflows a double (1e400) reaches the tree as a BARE non-finite double, which
+assert_representable still refuses on every write path.
+
+Two more places in that file to check while there: the =head3 "A YAML literal
+that overflows a double comes back as a string" and the extract POD around
+"Since 0.003 a non-finite YAML literal comes back from an unencrypted slot as
+a string" -- both are about ADR 0023 literals and read correct, but they sit
+next to the wrong sentence and a reader will not separate them.
+
+Documentation only, no behaviour. API lane (lib/File/SOPS.pm POD).
+ERLEDIGT 2026-08-21 in ed827d5 (karr #123), ohne eigenen Durchgang. Die Lane hat beim Ergaenzen der edit-POD den ganzen Abschnitt durchgesehen und die veraltete Behauptung mitkorrigiert -- 'an UNENCRYPTED one still fails verification, which is a separate defect and open as karr #105'. Verifiziert: der Satz existiert in lib/File/SOPS.pm nicht mehr. Das ist der richtige Weg fuer eine Stelle wie diese: wer ohnehin in der Datei steht und den Abschnitt liest, korrigiert ihn, statt ein zweites Ticket abzuwarten.
