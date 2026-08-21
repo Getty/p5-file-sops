@@ -2,8 +2,9 @@ package File::SOPS::Format::YAML;
 # ABSTRACT: YAML format handler for SOPS
 our $VERSION = '0.003';
 use Moo;
+use B ();
 use Carp qw(carp croak);
-use Scalar::Util qw(blessed dualvar);
+use Scalar::Util qw(blessed dualvar refaddr);
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -149,7 +150,99 @@ sub parse {
         $metadata = File::SOPS::Metadata->from_hash(delete $data->{sops});
     }
 
+    # AFTER the split, so the sops section is never rewritten -- and after the
+    # HashRef check, so there is a tree to walk. See _restring_non_finite_leaf.
+    _restring_non_finite_leaves($data, {});
+
     return ($data, $metadata);
+}
+
+###############################################################################
+# A literal libyaml numifies past the end of a double (karr #102, docs/adr/0023)
+#
+# `1e400`, a 401-digit integer, `Inf`, `NaN`: libyaml resolves each of them to a
+# number, and the number it lands on is +Inf, -Inf or NaN. go-yaml resolves none
+# of them -- strconv.ParseFloat answers ErrRange and yaml.v3 keeps a STRING --
+# so sops writes `type:str` and digests the token's own bytes. Ours said `float`
+# and digested `+Inf`, which is a document sops wrote that we cannot read and a
+# value we cannot write.
+#
+# The repair is at PARSE time and nowhere else, because what is wrong is our
+# parse result and not any guard downstream. _go_scalar_bytes already models the
+# Go side correctly for all 29 spellings measured; detect_type already reads the
+# SV and nothing else (ADR 0002); the non-finite guard from karr #59 is right
+# about every value it was written for and is untouched here. What this does is
+# hand the rest of the distribution the leaf go-yaml sees.
+#
+# The predicate is the SV, not the text (ADR 0002): a leaf whose PUBLIC SVf_NOK
+# and SVf_POK are both set and whose NV is NaN or +-Inf. It cannot collide with
+# the tokens Go DOES resolve to a non-finite float -- `.inf .Inf .INF +.inf
+# +.Inf +.INF -.inf -.Inf -.INF .nan .NaN .NAN`, the twelve in %GO_CONSTANT --
+# because YAML::XS hands every one of those back POK-ONLY. Measured against
+# sops 3.13.3: those twelve are `type:float` to sops and fire nothing here; the
+# 29 spellings that do fire are `type:str` to sops, every one. The two sets are
+# disjoint, and that disjointness is what keeps this from retyping a leaf Go
+# reads as a float.
+#
+# JSON is deliberately NOT walked. sops refuses such a JSON document at
+# unmarshal time (`strconv.ParseFloat: value out of range`, exit 2), so the
+# croak Format::JSON's leaf earns there is the reference behaviour -- see
+# ADR 0020, which predicted this lever and expected it to answer for both
+# parsers at once. Measured, it must not.
+my $POSITIVE_INFINITY = 9**9**9;
+
+sub _restring_non_finite_leaves {
+    my ($node, $seen) = @_;
+
+    # A recursive YAML anchor (`root: &a\n  b: *a`) really does come back from
+    # YAML::XS as a cycle, so this walk carries its own visited set. That keeps
+    # THIS walk terminating; the encrypt and decrypt walks do not and hang on
+    # such a document today, which is karr #110 and not widened into here.
+    return if $seen->{refaddr($node)}++;
+
+    if (ref $node eq 'HASH') {
+        for my $key (keys %$node) {
+            ref $node->{$key}
+                ? _restring_non_finite_leaves($node->{$key}, $seen)
+                : _restring_non_finite_leaf($node->{$key});
+        }
+    }
+    elsif (ref $node eq 'ARRAY') {
+        for my $entry (@$node) {
+            ref $entry
+                ? _restring_non_finite_leaves($entry, $seen)
+                : _restring_non_finite_leaf($entry);
+        }
+    }
+
+    return;
+}
+
+# $_[0] is the caller's element by alias, deliberately: the flags are read off
+# the SV the tree holds rather than off a copy, and the replacement is written
+# back into the same slot. Nothing here numifies anything -- B reads the NV and
+# the PV out of the SV's own slots, so this cannot retype a scalar the way a
+# numeric comparison on it would (karr #32).
+sub _restring_non_finite_leaf {
+    return unless defined $_[0];
+
+    my $sv    = B::svref_2object(\$_[0]);
+    my $flags = $sv->FLAGS;
+    return unless ($flags & B::SVf_NOK()) && ($flags & B::SVf_POK());
+
+    my $nv = $sv->NV;
+    return unless $nv != $nv
+        || $nv == $POSITIVE_INFINITY
+        || $nv == -$POSITIVE_INFINITY;
+
+    # The string half is what go-yaml kept, so it is what replaces the number.
+    # An empty one is not a token Go reads as anything but a null, and there is
+    # nothing to hand back, so the leaf is left exactly as it came.
+    my $pv = $sv->PV;
+    return unless length $pv;
+
+    $_[0] = $pv;
+    return;
 }
 
 =method parse
@@ -176,6 +269,36 @@ mapping -- C<sops: mine>, a list, or an explicit C<null>. Until 0.003 that
 entry was deleted from the tree and reported as no metadata at all, so
 L<File::SOPS/encrypt_file> wrote the document back without it. See
 L<File::SOPS::Metadata/from_hash>, which is where the refusal lives.
+
+=head3 A literal that overflows a double comes back as a string
+
+C<1e400>, a 401-digit integer, and the bare spellings C<Inf>, C<inf>, C<INF>,
+C<Infinity>, C<NaN>, C<nan>, C<NAN>, C<-Inf> and C<+Inf> are all resolved to a
+B<number> by libyaml, and the number each of them lands on is C<+Inf>, C<-Inf>
+or C<NaN>. go-yaml -- the parser sops reads a document with -- resolves none of
+them: C<strconv.ParseFloat> answers C<ErrRange> and it keeps a B<string>. So
+sops writes C<type:str> for such a leaf and digests the literal's own text.
+
+Since 0.003 this method hands back the string go-yaml sees, so that
+L<File::SOPS::Encrypted/detect_type> and the MAC agree with sops. Before it,
+such a document could be neither read (17 of 20 measured documents that sops
+writes failed MAC verification here) nor written (all 20 hit the non-finite
+refusal in L<File::SOPS::Encrypted/assert_representable>).
+
+Three things this is B<not>. It does not touch the twelve spellings go-yaml
+really does resolve to a non-finite float -- C<.inf .Inf .INF +.inf +.Inf
++.INF -.inf -.Inf -.INF .nan .NaN .NAN> -- because L<YAML::XS> returns every
+one of those as a plain string with no numeric half at all. It does not loosen
+L<File::SOPS::Encrypted/assert_representable>: a caller who passes
+L<File::SOPS/encrypt> a real C<9**9**9> still gets the refusal, because what is
+repaired here is a parse result and not a rule about values. And it does not
+apply to L<File::SOPS::Format::JSON>, where sops refuses the equivalent
+document itself, at unmarshal time.
+
+The cost is that the leaf is written back B<quoted> -- C<v: '1e400'> where sops
+writes C<v: 1e400>. Both are a string to both parsers, so the digest is the same
+text either way. See
+L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
 
 =cut
 

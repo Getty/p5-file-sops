@@ -1,6 +1,45 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE and BUG FIX: a YAML literal whose magnitude overflows a
+    double is now the STRING sops reads there, where it used to be a float
+    that had already become +Inf. `1e400`, a 401-digit integer and the bare
+    spellings Inf / inf / INF / Infinity / NaN / nan / NAN / -Inf / +Inf are
+    all resolved to a number by libyaml and to nothing at all by go-yaml,
+    which keeps a string when strconv.ParseFloat answers ErrRange. The two
+    halves of that were both broken, and the READ half is the one karr #102
+    was filed without: measured against sops 3.13.3 over 20 documents sops
+    writes and `sops -d` reads, `File::SOPS->decrypt` read 3 of 20 (the other
+    17 failed MAC verification) and `File::SOPS->encrypt` wrote 0 of 20 (20
+    non-finite croaks). Both are now 20 of 20, with sops's own `type:str` for
+    the encrypted slot. The three that read before did so by coincidence -
+    FormatFloat renders those three doubles as the very text their source
+    token used.
+    The repair is a walk in File::SOPS::Format::YAML::parse, and what makes it
+    safe is a disjointness measured against the binary rather than argued: the
+    only twelve tokens go-yaml resolves to a real non-finite float (.inf .Inf
+    .INF +.inf +.Inf +.INF -.inf -.Inf -.INF .nan .NaN .NAN) come back from
+    YAML::XS POK-ONLY, so they cannot fire a predicate that requires SVf_NOK.
+    All twelve are type:float to sops and move nothing here; all 29 spellings
+    that do move are type:str to sops. 27 of 105 corpus rows change, and every
+    one of them is a row whose digest input was +Inf, -Inf or NaN.
+    THE NON-FINITE GUARD IS UNTOUCHED: a caller who hands `encrypt` a real
+    9**9**9 still gets the karr #59 refusal, in both slots. What is removed is
+    an artefact of our parser, not a rule about values. JSON is deliberately
+    left alone too - `sops -e` refuses an overflowing JSON number at unmarshal
+    time (exit 2), so the croak there is the reference behaviour.
+    Three consequences a caller can see. The unencrypted slot comes out quoted
+    ('1e400') where sops writes it bare; both are a string to both parsers, so
+    the digest is the same text and `sops -d` exits 0 on either. A tagged
+    !!float 1e400 is retyped with the rest, because YAML::XS strips the tag -
+    a divergence only in the permissive direction, on input sops itself
+    refuses. And `x_unencrypted: NaN` or `-Inf` now returns the string where
+    it used to return a real Perl non-finite float; that is the correction,
+    since sops reads a string in that slot. An ENCRYPTED type:float whose
+    plaintext is +Inf / NaN is unaffected and still decrypts to a real Perl
+    infinity, byte-identical. See docs/adr/0023 and karr #102; karr #105 (a
+    bare .inf sops wrote, which fails our MAC) and karr #106 (a literal that
+    underflows to zero) are the neighbours it deliberately does not touch.
   - New: File::SOPS::Metadata::Flat, the flat metadata encoding the ENV and
     INI formats carry the sops section in -- sops_age__list_0__map_enc under a
     sops_ prefix in ENV, the same keys bare inside an [sops] section in INI.
