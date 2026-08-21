@@ -1,0 +1,37 @@
+---
+class: standard
+completed: 2026-08-21T09:53:44Z
+created: 2026-08-21T08:53:41Z
+id: 150
+priority: high
+started: 2026-08-21T09:28:36Z
+status: done
+tags:
+- api
+- mac
+- interop
+- rotate
+title: rotate writes a document in PLAINTEXT when its encryption rule matches none
+  of the encrypted leaves
+updated: 2026-08-21T09:53:44Z
+---
+
+Found while measuring karr #145/#146 (docs/adr/0043), NOT fixed there - it is outside that ticket's file boundary (lib/File/SOPS.pm) and it is a bigger question than the reference half that was fixed.
+
+MEASURED, sops 3.13.3, a document encrypted with unencrypted_suffix whose rule is then replaced by an encrypted_regex that matches nothing:
+
+  encrypted_regex: "^nothing$"
+    sops rotate  -> exit 51, "MAC mismatch. File has 9615C10A..."   (refuses)
+    File::SOPS->rotate -> exit 0, and the file now says `password: hunter2`
+
+The same for any rule that does not cover the leaves that are actually encrypted. The secret is written to disk in plaintext, in a file that still looks like a sops file, and the method reports success.
+
+WHY THE TWO DIFFER: sops decrypts RULE-DRIVEN - a leaf the rule says is not encrypted is taken as a literal value and hashed as one, so an ENC[...] string under a non-matching rule goes into the digest verbatim and the MAC stops it. This distribution decrypts ENC-DRIVEN (`_decrypt_tree` does not consult should_encrypt_key; file-sops-core names the asymmetry), so it decrypts everything, then re-encrypts only what the rule matches, and writes the rest bare.
+
+The reference half of this is already closed: a rule that is a LIST or a MAP is refused by Metadata->from_hash since docs/adr/0043, because sops refuses that document at exit 1. A rule that is an ordinary STRING and simply matches nothing is not, and that is the case this ticket is about.
+
+WHAT TO DECIDE (measure first): does encrypt/rotate need a guard that a document whose stored leaves are encrypted under a rule the new metadata does not reproduce is refused rather than written? Or does _decrypt_tree need to become rule-driven, which is a wire-lane change and moves what the MAC covers? The second is the reference behaviour and the larger change.
+
+Lane: api (with a wire-lane half if the second answer wins).
+2026-08-21 09:50 Guard landed, mechanism handed to karr #160, regex dialect to karr #161. Net 49, suite 61 files/1262 tests, interop executed 32/32.
+ABGENOMMEN 2026-08-21. Commit b88421e, ADR 0046. Die Abnahme gilt vor allem Schritt 2, den ich als Frage gestellt hatte und dessen Antwort den Charakter des Tickets aendert: es ist OHNE Handbearbeitung erreichbar. Nicht auf den vermuteten Wegen -- rotate liest .sops.yaml gar nicht -- sondern ueber den REGEX-DIALEKT: Perl matcht unicode-bewusst, sops matcht mit RE2, dessen \w \d \s und POSIX-Klassen ASCII-only sind. Eine gewoehnliche .sops.yaml, ein gewoehnliches sops -e, ein Nicht-ASCII-Schluessel wie 'café', und rotate schreibt das Geheimnis bar. Damit ist es ein SECURITY FIX und keine Robustheitsfrage. Ebenfalls abgenommen: dass nur die Richtung refused wird, die ein Geheimnis herausschreibt, und dass der Zwischenschritt monoton ist -- alles, was dieser Guard ablehnt, lehnt ein regel-getriebenes _decrypt_tree ebenfalls ab, am MAC, genau dort wo sops es ablehnt. Die eine ueberlebende Stelle (ignore_mac) ist im ADR benannt statt still vererbt.
