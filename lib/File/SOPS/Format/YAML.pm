@@ -1103,7 +1103,7 @@ comment line to write, so sops emits the comment as a real element:
         - ENC[AES256_GCM,...,type:str]
 
 This method hands that element on like any other. L<File::SOPS/decrypt> turns it
-into a C<File::SOPS::Comment> (see L<File::SOPS::Encrypted/THE COMMENT LEAF>), keeps it at
+into a C<File::SOPS::Comment> (see L<File::SOPS::Comment>), keeps it at
 its index, leaves it out of the MAC digest -- which is what sops does with it --
 and writes it back as a C<type:comment> element. Before 0.003 the comment was
 read as an ordinary list element: strict mode failed MAC verification, and
