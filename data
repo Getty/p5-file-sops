@@ -1,0 +1,84 @@
+---
+class: standard
+created: 2026-08-08T23:48:06Z
+id: 31
+priority: medium
+started: 2026-08-21T05:34:44Z
+status: backlog
+tags:
+- yaml
+- interop
+- wire-format
+- api
+title: 'Multi-document YAML: implement the shared-metadata, whole-stream-MAC model'
+updated: 2026-08-21T05:49:13Z
+---
+
+Follow-up to #14, which stopped the data loss by refusing multi-document YAML in File::SOPS::Format::YAML->parse. This ticket is the actual support.
+
+Not a parser change: it is a data-model change. sops holds one tree with N branches, ONE metadata and ONE MAC across all branches, so it reaches encrypt/decrypt, the MAC on both sides, the order-preserving reparse, decrypt_file s emitter, extract s path language and rotate.
+
+MEASURED against sops 3.13.3 (do not re-derive, and do not guess the parts not listed):
+
+1. Every document gets its own sops: block on write, byte-identical across documents - same age blob, same lastmodified, same mac.
+2. On read the metadata is taken from the FIRST document. A stream carrying it only in a later document is rejected with "sops metadata not found". A stream carrying it only in the first document reads fine, so the reader must not require it in every document.
+3. ONE MAC over ALL documents in document order. Dropping a document fails verification; swapping two documents fails verification. Each document contributes its leaves in that document s own key order.
+4. The AAD carries NO document index. A ciphertext produced at key path K in document 1 decrypts unchanged at key path K in document 2. _path_to_aad therefore needs no change.
+5. Separators: documents joined by ---. A LEADING --- in the input is dropped on write. A TRAILING --- is preserved, because it opens a real (empty) trailing document.
+6. An empty document anywhere is a real document: it gets its own metadata block and reads back as {}. YAML::XS agrees (a: 1\n---\n---\nb: 2\n loads as 3 documents).
+7. Every document must be a mapping. sops rejects a top-level sequence ("YAML documents that are sequences are not supported") and a top-level scalar ("YAML documents that are values are not supported"), which is the same rule as the existing HashRef check.
+
+TRAP, already guarded but re-check when the guard is lifted: in scalar context YAML::XS::Load returns the LAST document while YAML::PP->load_string returns the FIRST. The MAC walk takes key ORDER from the YAML::PP reparse and VALUES from the YAML::XS tree, so any code path that lets a multi-document stream reach that walk pairs one document s order with another s values. Both sides must become document lists together.
+
+Open design question, and the reason this is not a drive-by: the public API shape. encrypt(data => ...) currently takes a HashRef and decrypt returns one. An ArrayRef of HashRefs is unambiguous (a document must be a mapping), but it changes the documented return type of decrypt and the meaning of extract s path. This wants an ADR before implementation - it is the same class as docs/adr/0001 and 0002.
+
+Test scaffolding exists: t/09-multidoc-yaml.t pins the current refusal, including an interop subtest that drives the real binary. When support lands, most of that file becomes the wrong assertion and should be rewritten into a round-trip test (sops encrypts two documents -> we read them; we write two -> sops -d reads them), not deleted.
+PLAN (Orchestrator, 2026-08-16) -- gross. ADR ZUERST, und nicht am Parser anfangen.
+
+Die sieben gemessenen Punkte im Body SIND die Spezifikation und werden nicht
+neu hergeleitet. Was fehlt, ist die Entscheidung darueber -- und die ist die
+eigentliche Arbeit.
+
+SCHRITT 1 -- ADR, API-Lane, vor jeder Zeile Code.
+Die Frage: was gibt decrypt fuer einen Multi-Doc-Stream zurueck, und was nimmt
+encrypt entgegen?
+  (a) ArrayRef von HashRefs. Eindeutig, weil ein Dokument eine Map sein MUSS
+      (Punkt 7) -- aendert aber den dokumentierten Rueckgabetyp von decrypt.
+  (b) Immer ArrayRef, auch bei einem Dokument. Konsistent, bricht jeden
+      bestehenden Aufrufer.
+  (c) Kontextabhaengig, oder ein documents => 1 Argument. Vermeidet den Bruch
+      und erkauft ihn mit zwei Codepfaden fuer immer.
+Dazu gehoert in dasselbe ADR: was bedeutet dann die Pfadsprache von extract?
+sops kennt dort keine Dokumentachse -- also braucht sie eine, oder extract
+bleibt auf Dokument 0 und sagt das. Gleiche Klasse wie ADR 0001 und 0002.
+Ohne dieses ADR nicht anfangen.
+
+SCHRITT 2 -- die Falle aus dem Body ZUERST absichern, Wire-Lane.
+YAML::XS::Load gibt im Skalarkontext das LETZTE Dokument, YAML::PP->load_string
+das ERSTE. Der MAC-Walk nimmt die Reihenfolge aus dem PP-Reparse und die Werte
+aus dem XS-Baum. Beide Seiten muessen im SELBEN Commit auf Dokumentlisten
+umgestellt werden -- sonst paart der Walk die Reihenfolge des einen Dokuments
+mit den Werten eines anderen. Das faellt nicht auf, es liefert nur stillschweigend
+einen falschen MAC.
+
+SCHRITT 3 -- MAC ueber ALLE Dokumente in Dokumentreihenfolge, jedes Dokument mit
+seiner eigenen Key-Reihenfolge (Punkt 3). Die einzige echte Aenderung an der
+MAC-Berechnung. _path_to_aad bleibt unangetastet (Punkt 4, gemessen).
+
+SCHRITT 4 -- Metadata: EINE Instanz, auf jedes Dokument identisch geschrieben
+(Punkt 1); beim Lesen aus dem ERSTEN geholt und in spaeteren nicht verlangt
+(Punkt 2).
+
+SCHRITT 5 -- Separatoren (Punkt 5) und leere Dokumente (Punkt 6) im Emitter.
+
+SCHRITT 6 -- t/09-multidoc-yaml.t umschreiben, nicht loeschen: aus dem
+Refusal-Test wird ein Round-Trip-Test in beide Richtungen (sops schreibt zwei
+Dokumente, wir lesen sie; wir schreiben zwei, sops -d liest sie).
+
+Die Reihenfolge ist bindend. Lanes: 1 und 4 API, 2 und 3 Wire, 5 Format, 6
+Test-Writer -- NACHEINANDER, nicht parallel. Alle sechs Schritte fassen
+dieselben Dateien an, und parallele Worker ueberschreiben sich dort gegenseitig.
+
+Board-Empfehlung: erst vergeben, wenn #69 erledigt ist und der Review-Stapel
+(#46/#65/#66/#67) geschlossen ist. Dieses Ticket in einen Baum mit offenen
+Reviews zu legen, macht jeden spaeteren Diff unlesbar.
