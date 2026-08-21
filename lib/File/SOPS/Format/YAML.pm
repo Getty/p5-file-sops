@@ -6,6 +6,7 @@ use B ();
 use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar refaddr);
 use YAML::PP;
+use YAML::PP::Parser;
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -135,7 +136,18 @@ sub parse {
     # into every document) and ONE MAC spanning all documents in order.
     # Reproducing that is a data-model change well beyond this parser, so until
     # it exists the input is refused rather than quietly truncated.
-    my @docs = Load($content);
+    #
+    # The retry below exists for ONE token and runs only after YAML::XS has already
+    # refused the document. See _without_merge_tags: `die $load_error` reports
+    # libyaml's own message, unchanged, for everything that is not it.
+    my @docs = eval { Load($content) };
+    if (my $load_error = $@) {
+        my $retry = _without_merge_tags($content);
+        die $load_error unless defined $retry;
+        @docs = eval { Load($retry) };
+        die $load_error if $@;
+    }
+
     croak sprintf(
         "YAML input has %d documents; File::SOPS handles one document per "
         . "file. Multi-document YAML is not supported yet -- it used to be "
@@ -168,6 +180,112 @@ sub parse {
     _reject_comment_leaves($data, [], {});
 
     return ($data, $metadata);
+}
+
+###############################################################################
+# The !!merge tag sops writes on a merge key (karr #116, docs/adr/0028)
+#
+# sops does not expand a YAML merge key. It reads the document into a
+# yaml.Node tree, where go-yaml performs no merge resolution, so `<<` survives
+# as an ordinary key -- and go-yaml's emitter then writes the tag its resolver
+# assigned back out EXPLICITLY:
+#
+#     derived:
+#         !!merge <<:
+#             x: ENC[AES256_GCM,...,type:int]
+#         "y": ENC[AES256_GCM,...,type:int]
+#
+# YAML::XS accepts exactly three tags on a scalar -- !!str, !!int, !!float --
+# and dies on every other one, so this document could not be opened here at
+# all: `bad tag found for scalar: 'tag:yaml.org,2002:merge'`, a parse error
+# rather than a MAC error, on a file `sops -d` reads at exit 0. It is not only
+# a document sops authored: measured, `sops rotate -i` on a document THIS
+# library wrote with a `<<` key adds the tag, so one sops write-back was enough
+# to make our own output unreadable to us.
+#
+# For everything below the parse the tag carries nothing. Measured against
+# sops 3.13.3, `<<` is a completely ordinary key on both sides of the wire:
+# it is a path component in the AAD (`derived:<<:x:` decrypts and authenticates
+# the leaf under a merge key), and it is in the digest with its subtree, in the
+# document's own order, exactly like any other key. So dropping the tag before
+# YAML::XS sees it changes no path, no digest and no emitted byte -- the tree
+# is the tree sops has.
+#
+# WHY TEXT AND NOT A SECOND PARSER. YAML::PP reads the tag and gives the same
+# literal `<<` key, but it is not this module's parser and cannot become one
+# for one class of document: types come from the parser (ADR 0002) and the two
+# resolvers disagree, so a document would be typed by which tag it happened to
+# carry. YAML::XS has no hook -- no tag handler, and $YAML::XS::LoadBlessed
+# does not reach the yaml.org tags (measured, both settings die). What is left
+# is removing a tag that is redundant by construction: a plain `<<` key
+# resolves to this very tag, which is why go-yaml can add it back when reading
+# our untagged output (measured, `sops -d` prints `!!merge <<:` for a document
+# we wrote as `<<:`).
+#
+# WHY THIS TEXT SURGERY AND NOT THE ONE ADR 0019 REJECTED. There the surgery
+# would have had to find an arbitrary key path at arbitrary nesting in a
+# FINISHED document about to go on the wire, and a mis-hit would have written a
+# corrupt file. Here the target is one fixed token in one lexical position, on
+# the READ path, on a document YAML::XS has already refused -- and the
+# substitution is reconciled against ground truth before its result is parsed:
+# YAML::PP's PARSER (events only, no tree, no resolver) says how many
+# merge-tagged scalars the document really has, and unless the substitution
+# removed exactly that many, nothing is retried and libyaml's original error
+# stands. That closes the mis-hit: a tag the pattern missed is still in the
+# text and YAML::XS refuses again, so a successful retry with matching counts
+# proves every removal landed on a real tag. The case that gets no repair is a
+# tag the pattern cannot see -- flow style, or a %TAG-directive spelling --
+# which sops does not write and which fails exactly as it does today.
+my $MERGE_TAG = 'tag:yaml.org,2002:merge';
+
+# Tag position, block style: the start of the node, i.e. after the line's
+# indentation and after any block-sequence indicators (`- !!merge <<:`).
+my $MERGE_TAG_IN_TAG_POSITION = qr/^([ \t]*(?:-[ \t]+)*)!!merge[ \t]+(?=<<[ \t]*:)/m;
+
+sub _without_merge_tags {
+    my ($content) = @_;
+
+    # Cheapest gate first, and the only one that runs for a document that
+    # failed to parse for any other reason.
+    return unless $content =~ /!!merge/;
+
+    my $wanted = _merge_tagged_scalars($content);
+    return unless $wanted;
+
+    my $stripped = $content;
+    # s///g returns the empty string, not 0, when it matches nothing -- which
+    # is exactly the flow-style case below, and `'' == 1` is a warning.
+    my $removed  = ($stripped =~ s/$MERGE_TAG_IN_TAG_POSITION/$1/g) || 0;
+
+    return unless $removed == $wanted;
+    return $stripped;
+}
+
+# Ground truth, from the parser and not from the tree: YAML::PP's loader would
+# resolve values and blur the question, its parser only reports what the
+# document says. Fails safe -- a document YAML::PP refuses counts as nothing to
+# repair, which leaves today's error in place rather than guessing.
+sub _merge_tagged_scalars {
+    my ($content) = @_;
+
+    # YAML::XS::Load takes bytes and hands back characters; YAML::PP wants the
+    # characters. Same decode as File::SOPS::_parse_in_document_order, and for
+    # the same reason.
+    my $text = $content;
+    utf8::decode($text) unless utf8::is_utf8($text);
+
+    my $count = 0;
+    my $ok = eval {
+        YAML::PP::Parser->new(receiver => sub {
+            my (undef, $name, $event) = @_;
+            return unless $name eq 'scalar_event';
+            $count++ if ($event->{tag} // '') eq $MERGE_TAG;
+        })->parse_string($text);
+        1;
+    };
+
+    return unless $ok;
+    return $count;
 }
 
 ###############################################################################
@@ -652,6 +770,54 @@ is untouched, though it now names the leaf where a MAC error named nothing.
 
 See
 L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>.
+
+=head3 A merge key keeps its C<< << >>, and loses its C<!!merge> tag
+
+sops does not expand a YAML merge key. It unmarshals into a C<yaml.Node> tree,
+where go-yaml resolves no merges, so C<< << >> survives as an ordinary mapping
+key -- and go-yaml's emitter writes the tag its resolver assigned back out
+B<explicitly>:
+
+    derived:
+        !!merge <<:
+            x: ENC[AES256_GCM,...,type:int]
+        "y": ENC[AES256_GCM,...,type:int]
+
+L<YAML::XS> accepts C<!!str>, C<!!int> and C<!!float> on a scalar and dies on
+every other tag, so before 0.003 such a document could not be B<opened> here at
+all: C<bad tag found for scalar: 'tag:yaml.org,2002:merge'>, a parse error
+rather than a MAC error, on a file C<sops -d> reads at exit 0. Nor was it only
+sops's own documents -- measured, one C<sops rotate -i> on a document
+L<File::SOPS> had written with a C<< << >> key added the tag, and File::SOPS
+could no longer read its own output.
+
+Since 0.003 the tag is dropped from the text and the parse retried. Only that
+tag, only after L<YAML::XS> has already refused the document, and only when
+L<YAML::PP>'s parser confirms the substitution removed exactly as many
+merge-tagged scalars as the document really contains; otherwise nothing is
+retried and libyaml's own error stands. A document that parses today therefore
+takes the identical path it always did.
+
+B<Nothing about the value layer changes>, which is why this is a parser repair
+and not a wire one. Measured against sops 3.13.3 across five documents, one per
+position sops writes the tag in: C<< << >> is a path component in the AAD
+(a leaf under it authenticates as C<< derived:<<:x: >> and under nothing else)
+and a member of the MAC digest with its whole subtree, in the document's own
+order. No AAD path, no digest byte and no emitted byte moves.
+
+Two things this is B<not>. It does not make L<YAML::XS> resolve the merge:
+C<< <<: *b >> still gives a literal C<< << >> key holding the aliased mapping,
+with nothing folded into the parent -- which is what makes the round trip
+correct, because sops does not fold it either. And it does not put the tag
+back on the way out; this module writes the plain C<< <<: >> spelling, which
+go-yaml re-tags for itself (measured, C<sops -d> on a document we wrote as
+C<< <<: >> prints C<< !!merge <<: >>).
+
+A merge tag this cannot see -- flow style, or a C<%TAG>-directive spelling --
+is refused as it is today, as are the other tags L<YAML::XS> rejects
+(C<!!bool>, C<!!null>, C<!!binary>, C<!!timestamp>, C<!!value>). sops was not
+measured to write any of them into an encrypted document. See
+L<docs/adr/0028|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0028-the-merge-tag-is-dropped-because-the-merge-key-is-an-ordinary-key.md>.
 
 =head3 A comment inside a list is refused
 

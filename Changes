@@ -55,6 +55,34 @@ Revision history for File-SOPS
     still expands to independent values as before. Cost: one extra pass over
     the distinct nodes, 3.3% of an encrypt call on a 45,000-node document. See
     docs/adr/0027 and karr #112.
+  - BUG FIX: a YAML document whose source used a merge key can now be read.
+    sops does not expand `<<`: it unmarshals into a yaml.Node tree, where
+    go-yaml resolves no merges, so the key survives and go-yaml's emitter
+    writes its tag back out explicitly as `!!merge <<:`. YAML::XS accepts
+    only !!str, !!int and !!float on a scalar, so such a file could not be
+    OPENED here at all - `bad tag found for scalar:
+    'tag:yaml.org,2002:merge'`, a parse error rather than a MAC error, on a
+    document `sops -d` reads at exit 0. It was not only sops's own files:
+    measured, one `sops rotate -i` on a document File::SOPS had written with
+    a `<<` key added the tag, and File::SOPS could then no longer read its
+    own output. The tag is now dropped from the text and the parse retried,
+    but only after YAML::XS has already refused the document, and only when
+    YAML::PP's parser confirms the substitution removed exactly as many
+    merge-tagged scalars as the document really has - otherwise nothing is
+    retried and libyaml's own error stands, so a mis-hit cannot reach the
+    parser. Nothing else moves, and that was measured rather than assumed:
+    the stored MAC was decrypted out of five sops-written documents, one per
+    position sops writes the tag in, and reproduced leaf by leaf. `<<` is an
+    ordinary key on both sides of the wire - a path component in the AAD
+    (`derived:<<:x:` authenticates and `derived:x:` does not) and a member of
+    the digest with its whole subtree, in document order. No AAD path, no
+    digest byte and no emitted byte changes, and every document that parses
+    today takes the identical path it always did. This module still writes
+    the untagged spelling, which is not a loss: go-yaml assigns the merge tag
+    to a plain `<<` for itself, and `sops -d` on a document we wrote as `<<:`
+    prints `!!merge <<:` back. YAML::XS still does not fold `<<: *b` into its
+    parent, which is what makes the round trip correct, since sops does not
+    fold it either. See docs/adr/0028 and karr #116.
   - BEHAVIOUR CHANGE and BUG FIX: a YAML literal whose magnitude overflows a
     double is now the STRING sops reads there, where it used to be a float
     that had already become +Inf. `1e400`, a 401-digit integer and the bare
