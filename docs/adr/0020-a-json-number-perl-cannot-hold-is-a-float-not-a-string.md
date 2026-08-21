@@ -317,6 +317,69 @@ refuses that document itself, at unmarshal time — measured, exit 2,
 `strconv.ParseFloat: value out of range` — so a croak is closer to the
 reference than the string we write today.
 
+### The overflow row's other half: what the plaintext emitters write
+
+The croak names the **write** paths. The plaintext emitters — `decrypt_file`
+and `edit` — call no guard, so on that side the leaf reaches
+`canonical_float_tree`, where its `value_to_bytes` is `+Inf`, it matches
+`$NO_AGREED_FORM` and it is returned untouched (measured: `roundtrips` is not
+called for it at all). Each emitter then renders it from whichever half it
+prefers, and the two do not agree. Measured on the same tree —
+`Format::JSON->parse` of `{"v":1` followed by 400 zeros — at `f286764^` and at
+`3e5e6b0`:
+
+| | `f286764^` | now |
+|---|---|---|
+| the leaf | `POK` — a string | `NOK+POK` — a float, NV `+Inf`, its 401 digits as its text |
+| `detect_type` | `str` | `float` |
+| `Format::JSON->emit` | `"100…0"`, quoted | `"100…0"`, quoted — **unchanged** |
+| `Format::YAML->emit` | `'100…0'`, quoted | `100…0`, **bare** |
+
+**The moved row is not reachable through a plaintext emitter of this
+distribution's own.** `decrypt_file` and `edit` resolve one `$format` and use it
+for the parse and for the emit alike, so a tree that came out of
+`Format::JSON->parse` is always written by `Format::JSON->emit` — the row that
+did not move. Measured end to end through `decrypt_file` on the one document
+that gets all the way through: a `sops -e --mac-only-encrypted` JSON file whose
+unencrypted slot was then hand-edited to the bare literal, so that the digest
+does not cover that slot and verification passes rather than stopping the read.
+Output before and after: byte-identical, the quoted string. Without
+`mac_only_encrypted` the same edit fails verification and needs
+`ignore_mac => 1`, at `f286764^` exactly as now.
+
+The **YAML row above is a JSON parse meeting a YAML emitter, not a YAML
+document.** A YAML document is unaffected, as the caller table says: `YAML::XS`
+has always handed back the same `NOK+POK` leaf for those digits, so its
+plaintext emit was bare before this change as well (measured, `decrypt_file` of
+a `sops -e` YAML file, identical at `f286764^`). What that document runs into on
+the way in — `assert_representable` refusing a value `sops -e` writes, and a MAC
+neither implementation computes the same way — is karr #102 and predates this
+decision.
+
+That leaves a document that barely exists. `sops -e` refuses such a JSON
+plaintext at unmarshal time (exit 2) and `sops -d` refuses a hand-edited one the
+same way (exit 1) — the reference can neither write it nor read it — this
+library croaks before writing one at the row above, and a document File::SOPS
+wrote before this change carries the value **quoted** (measured at `f286764^`:
+`"v_unencrypted" : "100…0"`), which is `STRING` to the oracle and so never
+becomes this leaf at all.
+
+So the bare form is reachable in exactly one place: a caller who takes the tree
+from `decrypt` or from `Format::JSON->parse` and hands it to a YAML emitter
+itself. That is the `decrypt` row of the table above — a dualvar where a string
+used to be — seen through the other format's emitter, and it is a consequence of
+this decision rather than a defect in it. A plaintext document has no MAC and no
+second reader that has to agree with one, which is why `canonical_float_tree`
+passes the leaf through instead of choosing a form for it.
+
+If the quoted form is ever wanted back, the lever is the **parse-time** question
+karr #102 asks — whether a literal that overflows a double should resolve as a
+`str`, the way go-yaml appears to resolve it — answered for both parsers at
+once. Not the emitter, which would have to read a value's text to tell this
+float from any other, and that is the pattern-matching ADR 0002 removed; and in
+no case the non-finite guard, which is right about every value it was written
+for. Measured and closed as karr #103.
+
 ### Cost
 
 One extra decode-time output parameter and one extra tree walk per JSON parse,
