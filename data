@@ -1,0 +1,76 @@
+---
+class: standard
+completed: 2026-08-21T04:43:20Z
+created: 2026-08-20T15:25:45Z
+id: 103
+priority: low
+started: 2026-08-21T01:22:12Z
+status: done
+tags:
+- wire
+- yaml
+- json
+- plaintext
+title: Plaintext YAML emit of a double-overflowing literal changed from quoted to
+  bare with ADR 0020
+updated: 2026-08-21T04:43:20Z
+---
+
+Found by the wire lane while VERIFYING the ADR 0020 table for karr #63 (sops 3.13.3 at /tmp/sops). Small, probably unreachable, recorded so it is not rediscovered. Adjacent to #102, but a different thing: #102 is pre-existing and encrypt-side, this one is new with ADR 0020 and plaintext-emit-side.
+
+A bare JSON integer literal that overflows a double (1 followed by 400 zeros) is now a float leaf whose NV is +Inf, carrying its 401 digits as its string half. On the ENCRYPT path assert_representable croaks (karr #59 non-finite guard), which is what ADR 0020 documents and what sops does one step earlier at unmarshal time.
+
+The PLAINTEXT emitters (decrypt_file, edit) do not call assert_representable. There the leaf reaches canonical_float_tree, matches $NO_AGREED_FORM, and is returned untouched, so the emitters write it from the dualvars string half. Measured, same tree, baseline f286764^ vs HEAD:
+
+  JSON plaintext emit   quoted string  ->  quoted string   (unchanged)
+  YAML plaintext emit   quoted string  ->  BARE number     (changed)
+
+Nothing verifies or fails either way, since a plaintext document has no MAC. The reachability is the reason this is low: the only route is an encrypted document that already carries a bare 400-digit literal in an unencrypted slot. Our own encrypt now refuses to create one, sops cannot unmarshal a JSON document containing one, and a document File::SOPS wrote before 0.003 carries the value QUOTED (it was a str), which the type map still reads as a string. So there may be no document that reaches this at all.
+
+Open question is only whether the bare form is wrong enough to care about, or whether this is a note on ADR 0020s consequences. Do NOT fix by loosening the non-finite guard.
+
+Wire lane. Needs no sops binary to reproduce; the before/after is a two-line emit comparison.
+2026-08-21 01:31 DECIDED: consequence of ADR 0020, not a defect. No code change. Recorded in
+docs/adr/0020, new section "The overflow row's other half: what the plaintext
+emitters write" (63 added lines, nothing removed).
+
+REPRODUCED, both halves, f286764^ vs 3e5e6b0, same tree (Format::JSON->parse of
+{"v":1 + 400 zeros), no sops binary needed:
+
+  leaf              POK / detect_type str   ->  NOK+POK / detect_type float, NV +Inf
+  Format::JSON->emit  "100...0" quoted      ->  "100...0" quoted   UNCHANGED
+  Format::YAML->emit  '100...0' quoted      ->  100...0  bare      CHANGED
+
+Mechanism confirmed directly: canonical_float_tree never calls roundtrips for
+this leaf, the $NO_AGREED_FORM branch returns it untouched.
+
+REACHABILITY: the moved row is NOT reachable through decrypt_file or edit.
+Both resolve one $format and use it for the parse AND the emit, so a
+Format::JSON->parse tree is always written by Format::JSON->emit, which is the
+unchanged row. Proven end to end on the one document that gets all the way
+through: sops -e --mac-only-encrypted JSON, unencrypted slot hand-edited to the
+bare literal (digest does not cover it, so verification PASSES rather than
+stopping the read) -> decrypt_file output byte-identical at HEAD and baseline,
+the quoted string. Note for the record: without mac_only_encrypted the same
+edit fails verification and needs ignore_mac => 1 -- so the MAC is NOT the gate
+the body assumed; the format coupling is.
+
+The document itself barely exists, as the body suspected: sops -e refuses such
+a JSON plaintext (exit 2), sops -d refuses a hand-edited one (exit 1), HEAD
+croaks before writing one, and f286764^ writes it QUOTED (measured:
+"v_unencrypted" : "100...0"). Only route to the bare form is a caller emitting
+a JSON-parsed tree as YAML itself.
+
+Also measured and worth keeping straight: a YAML *document* is unaffected.
+YAML::XS returned the same NOK+POK leaf at f286764^, its plaintext emit was
+already bare, and decrypt_file of a sops -e YAML file fails MAC verification
+identically before and after. That is karr #102, not this.
+
+Non-finite guard untouched, as the ticket requires. If the quoted form is ever
+wanted, the lever is #102's parse-time resolution question for both parsers,
+not the emitter (which would have to read a value's text -- ADR 0002).
+
+TESTS, both run against this worktree: prove -lr t/  Files=38 Tests=860 PASS;
+SOPS_BIN=/tmp/sops prove -l t/04-interop.t  Tests=32 PASS, RAN (not skipped)
+against sops 3.13.3.
+ABGENOMMEN 2026-08-21, vom Maintainer an den Orchestrator delegiert. Entscheidung bestaetigt: Konsequenz von ADR 0020, kein Defekt, kein Code bewegt. Der Abschnitt in docs/adr/0020 haelt zusaetzlich fest, dass die Prämisse des Ticketkoerpers falsch war -- nicht der MAC verhindert den Fall, sondern die Format-Kopplung. Commit 20b72b0.
