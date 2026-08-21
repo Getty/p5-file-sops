@@ -1,0 +1,51 @@
+---
+class: standard
+created: 2026-08-21T07:36:21Z
+id: 141
+priority: low
+status: backlog
+tags:
+- wire
+- yaml
+- float
+- guards
+title: A bare non-finite float in an UNENCRYPTED YAML slot is refused where the emit
+  walk would now write it correctly
+updated: 2026-08-21T07:36:21Z
+---
+
+Split out of karr #122 rather than folded into it, because it is a decision
+about a DIFFERENT slot and it moves ADR 0037s own counter-check table.
+
+MEASURED against sops 3.13.3 at /tmp/sops, with assert_representables
+non-finite gate bypassed in a scratch copy of lib/ at HEAD (i.e. WITH
+ADR 0037s emit repair in place), unencrypted slot, one document per row:
+
+  YAML, bare 9**9**9 / -9**9**9 / NaN   3 of 3 WRITTEN as .inf / -.inf / .nan,
+                                        sops -d exit 0, the leaf a float
+  JSON, the same three                  3 of 3 CROAK, from the emit walk
+                                        (_non_finite_token_leaf: the JSON
+                                        carrier has no token), which is right
+
+So the refusal in assert_representable for a leaf with NO string half of its
+own is now redundant in YAML and duplicated in JSON. Its premise -- that the
+YAML emitter writes a bare `Inf`, which go-yaml reads as a string -- was
+removed by ADR 0037, which teaches _canonical_floats to ask the handlers
+carrier for the token. ADR 0031s measurement of this cell (+Inf exit 51,
+-Inf/NaN exit 0 with a silently retyped leaf) was taken BEFORE that change and
+no longer reproduces.
+
+WHAT IT WOULD COST, measured: the whole thing is one condition
+(`_has_public_pv($value) &&` in front of the existing refusal). It flips
+8 further subtests beyond karr #122s own -- t/28 sections 1-6 (three YAML rows
+become documents, three JSON rows keep refusing with the emit walks message
+instead of the guards), t/39 section 11, t/42 section 11, t/46 sections 4-5,
+and t/52 section 9, which is ADR 0037s twelve-row encrypt-path counter-check.
+
+WHAT MUST NOT MOVE, and does not in the measurement: every leaf that STATES a
+string half its number contradicts -- dualvar(+Inf, banana), dualvar(+Inf,
+-.inf), dualvar(+Inf, .INf) -- is written with the callers text and is
+sops -d exit 51 (MAC mismatch) if the gate is opened for it too. Those rows
+stay refused in every variant measured.
+
+Wire lane. Needs the binary and its own ADR.
