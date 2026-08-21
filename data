@@ -1,0 +1,43 @@
+---
+class: standard
+created: 2026-08-21T07:06:29Z
+id: 140
+priority: medium
+status: backlog
+tags:
+- float
+- yaml
+- json
+- emitter
+- guards
+title: A plaintext emit writes a non-finite float's contradictory string half verbatim
+updated: 2026-08-21T07:06:29Z
+---
+
+Found while measuring karr #134 / docs/adr/0037 (sops 3.13.3 at /tmp/sops).
+Pre-existing, unmoved by that change, and deliberately left alone there.
+
+A non-finite float that carries a PUBLIC string half is written by the
+plaintext emitters exactly as that half reads, whatever it says:
+
+  Format::YAML->emit({v => dualvar(+Inf, "banana")})  ->  v: banana
+  Format::JSON->emit({v => dualvar(+Inf, "banana")})  ->  {"v":"banana"}
+  the same for ".INf", ".infinity", "Inf", and for the contradictions
+  dualvar(+Inf,"-.inf") / dualvar(-Inf,".inf") / dualvar(NaN,".inf")
+
+The MAC-covered paths refuse every one of those already: assert_representable
+gates on _carries_go_non_finite_token, and ADR 0013 guard has the last word.
+Only a plaintext emit -- decrypt_file, edit, or a direct emit() call -- writes
+them, and the leaf then reparses as the STRING it says, so a decrypt_file ->
+encrypt_file round trip retypes it.
+
+Not fixed in ADR 0037 on purpose: repairing it means overwriting a string half
+the caller chose, on the strength of the number beside it, which is exactly the
+guess ADR 0012 refuses to make for an integer whose halves disagree. ADR 0037
+narrowed its own repair to a leaf with NO public PV for that reason.
+
+Reachable only by a caller who constructs such a dualvar by hand -- no parse
+and no decryption produces one -- which is why this is medium rather than high.
+Wire lane. Decide whether the plaintext emitters should refuse it (naming the
+key path, the way the MAC-covered paths do) rather than writing a document
+their own reader will read differently.
