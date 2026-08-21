@@ -1,0 +1,100 @@
+---
+class: standard
+completed: 2026-08-21T05:17:52Z
+created: 2026-08-21T04:03:34Z
+id: 117
+priority: low
+started: 2026-08-21T04:06:17Z
+status: done
+tags:
+- robustness
+- diagnostics
+title: Ein Dokument tiefer als 100 flutet STDERR mit Deep-recursion-Warnungen
+updated: 2026-08-21T05:18:13Z
+---
+
+Gefunden beim Abarbeiten von karr #112. Vorbestehend, unabhaengig vom dortigen Guard.
+
+Jeder Baum-Walk in dieser Distribution rekursiert ohne no warnings
+"recursion": _sorted_leaves, _encrypt_tree, _decrypt_tree, _document_leaves,
+_assert_acyclic, _expansion_census, Encrypted::_canonical_floats. Perls
+Schwelle von 100 ist fest, also warnt ein Dokument, das tiefer als 100
+verschachtelt ist, bei JEDEM Aufruf jenseits davon -- einmal pro Knoten,
+pro Walk.
+
+Gemessen an einer 265 Ebenen tiefen Alias-Kette (ein Dokument, das sops
+akzeptiert): File::SOPS->encrypt braucht 0,77 s und schreibt 6,4 MB, dabei
+in der Groessenordnung 100.000 Warnzeilen auf STDERR, verteilt auf
+_sorted_leaves, _encrypt_tree und Encrypted::_canonical_floats. Werden die
+Warnungen ueber $SIG{__WARN__} eingesammelt statt verworfen, dauert
+derselbe Aufruf mehr als 2 Minuten -- die Warnungen kosten mehr als die
+Arbeit.
+
+Kein Datenverlust und kein Wire-Problem: die Ausgabe ist korrekt. Es ist
+Diagnose-Laerm, der eine korrekte Operation wie einen Fehler aussehen
+laesst, und er trifft genau die tiefen Dokumente, die sops akzeptiert.
+
+Offene Frage vor einem Fix: no warnings "recursion" lokal in den Walks
+schaltet auch das Netz ab, mit dem t/41 seinen Rueckfall begrenzt. Die
+beiden Interessen kollidieren, also nicht blind stumm schalten -- t/41
+liest die Warnung absichtlich (und t/43 dokumentiert, warum sie dort
+gerade nicht greift).
+DONE, with one part handed to karr #120.
+
+MEASURED FIRST, because it decided the design: sops DOES have a depth limit.
+Against sops 3.13.3, counting containers from the documents own root mapping,
+same boundary for `a: {a: {a: ...}}` and `a: [[[ ... ]]]`:
+
+  go-yaml (sops -e AND sops -d)  10001 accepted, 10002 refused
+                                 "yaml: exceeded max depth of 10000"
+  encoding/json (sops -e)        10000 accepted, 10001 refused
+                                 "invalid character { exceeded max depth"
+
+and the -d refusal precedes the key, like the cycle and the alias bomb: the
+same over-deep encrypted file with SOPS_AGE_KEY_FILE=/nonexistent still reports
+the depth. So a depth bound is reference-compatible, and 10000 is the deepest
+a document can be and still be readable in BOTH formats.
+
+DECISION (docs/adr/0029), three parts that only work together:
+  1. `no warnings recursion` in the six walks in SOPS.pm, per walk not per file.
+  2. $File::SOPS::MAX_DEPTH = 10000, asked by every one of those walks. This is
+     what replaces the warning as a signal, and it is a real guard rather than
+     a test hook: a document too deep to process is now refused instead of
+     crawling. Writable, so t/41 can lower it -- and so can a caller reading
+     untrusted documents.
+  3. The walks carry ONE key path, pushed and popped, instead of copying it per
+     level. Without this the bound is decorative: 4000 levels took 101s and
+     410 MB in _sorted_leaves alone, 10000 never finished. With it, 10000
+     levels take 0.017s and 24 MB.
+
+NUMBERS (the tickets own two claims did not reproduce on HEAD, and are corrected):
+  265-level alias chain, encrypt: 505 warning lines / 63,457 bytes STDERR /
+  0.807s BEFORE -- not ~100,000 lines. With a collecting $SIG{__WARN__} it was
+  0.754s, not >2 minutes. The 6.4 MB in the ticket is the encrypted OUTPUT, and
+  that part reproduces exactly (6,411,482 bytes). The huge numbers most likely
+  predate the karr #112 alias-bomb guard, which now refuses the shapes that
+  cross perls threshold tens of thousands of times.
+  AFTER: 168 lines / 23,856 bytes / 0.417s, and every remaining line is
+  File::SOPS::Encrypted::_canonical_floats plus Format::YAMLs two leaf walks --
+  karr #116s files, off limits here. Handed over as karr #120.
+
+t/41s NET, re-verified as a net: the child now lowers $File::SOPS::MAX_DEPTH to
+200 instead of dying on perls "Deep recursion" warning. Rehearsed twice against
+the final tree -- cycle guard body removed: 14 of 23 red in 0.367s; guard call
+sites removed: 14 of 23 red in 0.363s. Every failure reports RAN AWAY, none
+hangs, none allocates. Shape-independent, which the warning was not for the
+leafy cycles: a plain bound at the default 10000 would have cost 2.5 GB there.
+
+NEW t/45-deep-document-is-quiet.t (37 tests, 6.4s): the noise itself, the bound
+in each of the six walks (t/41s net rests on that and nothing else said so), the
+bound through the public API at the real number, and the sops boundary in both
+formats plus a 1000-container round trip through the binary. Rehearsed: with
+the `no warnings` lines removed, 11 of 37 red in 6.2s; with the bound removed
+from _sorted_leaves alone, 1 of 37 red -- and t/41 still passes, which is
+exactly why that section exists.
+
+TESTS: prove -lr t/ 46 files 1062/1062 PASS.
+       SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 PASS (it RAN).
+2026-08-21 05:14 Implemented; noise fix partial by file boundary, remainder handed to karr #120
+ABGENOMMEN 2026-08-21. Die Abnahme gilt ausdruecklich der DRITTEN Komponente: ohne push/pop statt Pfadkopien waere die Tiefengrenze dekorativ gewesen -- 4000 Ebenen kosteten 101 s und 410 MB allein in _sorted_leaves, 10000 kamen nie zurueck. Eine Grenze, die vor der Maschine nicht erreicht wird, ist keine. Und der Grenzwert ist wieder KEIN eigener: go-yaml akzeptiert 10001 und lehnt 10002 ab, Gos encoding/json 10000 bzw. 10001 -- 10_000 ist der tiefste Wert, der in BEIDEN sops-Formaten lesbar bleibt. Zwei Zahlen des Ticketkoerpers reproduzierten nicht (505 statt 100.000 Warnzeilen, 0,75 s statt 2 min); die Lane hat das gemeldet statt die neuen Zahlen stillschweigend zu benutzen -- die alten stammen vermutlich von vor dem #112-Guard. Commit 7cf29a9, ADR 0029.
+KORREKTUR zur Abnahmenotiz: der Commit ist 5536313, nicht 7cf29a9 -- der Hash in der Notiz oben wurde vor dem Commit geschrieben und geraten. Inhalt der Abnahme unveraendert.
