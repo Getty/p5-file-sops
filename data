@@ -1,0 +1,134 @@
+---
+class: standard
+completed: 2026-08-21T07:52:36Z
+created: 2026-08-21T03:14:10Z
+depends_on:
+- 122
+id: 114
+priority: low
+started: 2026-08-21T05:49:42Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- float
+title: An encrypted .inf is type:str here and type:float to sops
+updated: 2026-08-21T08:00:55Z
+---
+
+Found while measuring karr #105 (sops 3.13.3 at /tmp/sops). Independent of it,
+and NOT fixed by ADR 0026, which touches unencrypted slots only.
+
+An ENCRYPTED slot holding a YAML `.inf` is stored differently by the two
+implementations, and neither side fails:
+
+  plaintext  v: .inf
+  sops -e    v: ENC[...,type:float]   plaintext +Inf
+  File::SOPS v: ENC[...,type:str]     plaintext .inf
+
+Both documents verify their own MAC and both are read by the other side, so
+this is a value divergence rather than a compatibility failure:
+
+  sops -e       -> sops -d        v: .inf         (a float)
+  File::SOPS -e -> sops -d        v: ".inf"       (a string)
+
+Measured for all twelve %GO_CONSTANT spellings, both directions, exit 0
+throughout. Reading is already correct in both directions: File::SOPS decrypts
+sops's type:float +Inf to a real Perl infinity (bit-identical, pinned in t/39),
+and sops reads our type:str back as the string it is.
+
+MECHANISM: the same one as karr #105. YAML::XS hands `.inf` back as a POK-only
+string, so detect_type says str and the value is encrypted verbatim; go-yaml
+resolves the float before sops ever types the leaf. ADR 0026 repairs this at
+parse time for a document that carries a sops section, which an encrypted slot
+of a PLAINTEXT document being encrypted does not -- the walk is deliberately
+gated off there (ADR 0026, "Rejected alternatives", last entry but one).
+
+WHY IT IS LOW: nothing fails, nothing is lost, and a round trip through either
+implementation alone is stable. What differs is the type label and therefore
+what a caller of the OTHER implementation gets back for that key -- a float
+where the first writer meant a float, or a string.
+
+Fixing it means letting the karr #105 walk run on plaintext documents too,
+which was rejected in ADR 0026 for a measured reason (it replaces ADR 0013's
+good error message with the non-finite guard's misleading one) -- so this
+probably waits on karr #113. Wire lane. Needs the sops binary to prove.
+MESSUNG ABGESCHLOSSEN, KEIN CODE GEAENDERT. sops 3.13.3 /tmp/sops.
+ENTSCHEIDUNG: in der Wire-Lane ist NICHTS ZU TUN, und das ist die Antwort, kein
+Aufschub. Die Divergenz kostet gemessen nichts, sie entsteht nicht in dieser
+Schicht, und ihre Reparatur ist HINTER karr #122 eingereiht, nicht davor.
+
+DIE KOPPLUNG LAEUFT ANDERSHERUM ALS ANGENOMMEN. karr #122 beantwortet dieses
+Ticket NICHT und macht es auch nicht gegenstandslos: #122 entscheidet ueber ein
+non-finites FLOAT-Blatt im verschluesselten Slot; das Blatt dieses Tickets ist
+an derselben Stelle ein STRING (YAML::XS gibt `.inf` POK-only zurueck) und wird
+nie ein Float, also greift #122s Entscheidung nie darauf. Umgekehrt gilt es
+sehr wohl: die Reparatur DIESES Tickets erzeugt genau die Eingabe, die #122
+ablehnt. Gemessen mit der heutigen Bibliothek, verschluesselter Slot:
+  v => '.inf' (POK-only)              -> type:str, sops -d exit 0
+  v => dualvar(+Inf,'.inf')           -> ENCRYPT CROAK, YAML wie JSON
+Das zweite ist die Blattform, die ADR 0026s Walk liefern wuerde. #114 vor #122
+zu reparieren macht aus einem funktionierenden encrypt einen croak.
+
+WAS ES KOSTET: nichts Messbares. Beide Dokumente sind in sich stimmig, beide
+werden von beiden Seiten gelesen, MAC-Klartext in beiden Richtungen aus dem
+mac:-Feld ENTSCHLUESSELT und gegen SHA-512 ueber die entschluesselten
+Blattklartexte geprueft -- sops' type:float digestiert +Inf, unser type:str
+digestiert .inf, beide match.
+
+DIE RUECKLESE-FRAGE, gemessen (B-Flags, nicht abgeleitet):
+  sops -e   type:float -> File::SOPS->decrypt  [NOK]  Inf     -> sops -d: .inf
+  wir       type:str   -> File::SOPS->decrypt  [POK]  .inf    -> sops -d: ".inf"
+Kein Aufrufer bekommt einen String, wo die Leitung float sagt. ADR 0009 und
+0010 sind NICHT verletzt: was als float geschrieben wurde, kommt als float
+zurueck (NOK, kein POK), was als str geschrieben wurde, als str. Die Divergenz
+entsteht beim ENCRYPT durch libyaml gegen go-yaml und ist danach in beide
+Richtungen stabil und symmetrisch. Auch extract gibt [NOK] Inf fuer sops'
+type:float zurueck.
+
+WO SIE HINGEHOERT: Format::YAML::parse, ADR 0026s Walk auch auf
+Klartextdokumente laufen zu lassen -- die vorletzte "Rejected alternative"
+jenes ADRs, und dieselbe Entscheidung, die karr #123 zu treffen hat. Format-
+Lane, nicht hier. Reihenfolge: #122 zuerst, dann #123/#114 zusammen.
+
+Board: haengt jetzt an #122.
+
+BEIDE TESTZEILEN GELAUFEN, unveraendert gegenueber 0da0170: prove -lr t/
+49 Dateien 1100/1100 PASS; SOPS_BIN=/tmp/sops prove -lv t/04-interop.t 32/32
+PASS, AUSGEFUEHRT nicht geskippt, Binary /tmp/sops.
+2026-08-21 06:04 Wire-Lane-Antwort: nichts zu tun. Divergenz kostet gemessen nichts, entsteht im Parser (libyaml vs go-yaml), Reparatur gehoert in Format::YAML::parse und muss hinter karr #122 warten.
+GESCHLOSSEN DURCH karr #122 / docs/adr/0040. Gemessen, sops 3.13.3 /tmp/sops.
+
+Der Anhang von gestern sagte, #122 beantworte dieses Ticket NICHT, weil das
+Blatt hier ein STRING sei (YAML::XS gibt `.inf` POK-only zurueck) und nie ein
+Float werde. Das galt bis ADR 0034: seitdem laeuft ADR 0026s Reparatur auf
+JEDEM Parse, auch auf Klartextdokumenten, also kommt genau dieses Blatt jetzt
+als dualvar($double, $token) -- ein FLOAT -- am Encrypt-Pfad an. ADR 0034 hat
+das ausdruecklich als seine eine Zeile notiert, in der diese Bibliothek etwas
+ablehnt, was sops schreibt, und karr #122 als das genannt, was sie aufloest.
+
+KORPUS, alle zwoelf %GO_CONSTANT-Schreibweisen, Klartext `secret: <token>` mit
+`secret` im verschluesselten Slot, encrypt_file, daneben sops -e auf derselben
+Datei:
+
+  vor  77e4fdc   0 von 12   croak (assert_representables non-finite-Guard)
+  nach 0040     12 von 12   type:float, sops -d exit 0
+  sops          12 von 12   type:float, sops -d exit 0
+
+und sops -d schreibt fuer UNSER Dokument denselben Klartext wie fuer sein
+eigenes, Zeichen fuer Zeichen, in allen zwoelf Zeilen. Die Divergenz, die
+dieses Ticket beschreibt -- type:str hier gegen type:float dort -- existiert in
+keiner Zeile mehr.
+
+DIE RUECKLESE-RICHTUNG bleibt, wie hier gemessen: ein entschluesseltes
+type:float non-finites Blatt kommt als nacktes NV zurueck (NOK gesetzt, POK
+nicht), in beiden Formaten. ADR 0009 und 0010 sind unberuehrt; gepinnt in t/54
+Abschnitt 7.
+
+Gepinnt: t/54 Abschnitt 15 (die zwoelf Schreibweisen gegen sops), t/49
+Abschnitt 4 (dieselbe Zeile aus ADR 0034s Sicht).
+
+NICHTS OFFEN. Kein Rest fuer die Format-Lane: die Reparatur, die dieses Ticket
+brauchte, ist ADR 0034 (bereits geliefert), und das Tor, das sie blockierte,
+ist ADR 0040.
