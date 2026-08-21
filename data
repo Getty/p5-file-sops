@@ -1,0 +1,26 @@
+---
+class: standard
+created: 2026-08-21T08:53:58Z
+id: 151
+priority: low
+status: backlog
+tags:
+- api
+- metadata
+- interop
+title: rotate stamps 3.7.3 over the document's own sops version, where sops preserves
+  it verbatim
+updated: 2026-08-21T08:53:58Z
+---
+
+Found while measuring karr #145 (docs/adr/0043), not part of it.
+
+MEASURED, sops 3.13.3: `sops rotate` writes the sops section's `version` field back VERBATIM. 3.7.3 stays 3.7.3, 3.13.3 stays 3.13.3, and so do v3.13.3, 1.2.3 and 3.13.3-rc.1. sops does not normalise the field to its own version on a rewrite; only `sops -e` on a plaintext file stamps its own.
+
+Here, File::SOPS::Metadata->policy_args deliberately omits `version` (its POD says why: it "names the implementation doing the writing rather than the one that wrote the file before"), so File::SOPS->rotate builds a fresh Metadata and the field comes out as $File::SOPS::Metadata::SOPS_VERSION - 3.7.3. A file written by sops 3.13.3 therefore claims 3.7.3 after a rotate here.
+
+NOTHING BREAKS: 3.7.3 is a version sops reads at exit 0, and no digest, AAD or decryption decision reads the field. It is a provenance stamp that goes backwards, and it is worth deciding deliberately rather than leaving it as a side effect of policy_args: either carry the document's version across a rotate the way sops does, or say in policy_args' POD that we stamp our own on purpose and that this is the divergence.
+
+Relevant when deciding: the read side accepts any version at all, deliberately (docs/adr/0043), so carrying one across would be the first path that lets a document's version reach a document again - and a document whose version sops refuses would then be rewritten still refused. That argues for keeping the stamp and documenting it.
+
+Lane: api.
