@@ -11,6 +11,13 @@ Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 > confirmed by the maintainer and recorded in ADR 0007).
 > The description of what exists lives in skill `file-sops-core`; the POD in
 > `lib/File/SOPS.pm` is the contract.
+>
+> **The ADRs are the second contract, and there are now 30 of them.** They are not
+> background reading: several record deliberate divergences and refusals that look
+> like bugs until you find the measurement behind them. Before changing anything in
+> `Format::YAML::parse`, in the walks in `SOPS.pm`, or in `assert_representable`,
+> read what already decided that ground — ADR 0023 to 0030 are all from a single
+> night of work and all sit in exactly those three places.
 
 ## Delegation
 
@@ -234,8 +241,10 @@ cannot re-wrap.
 ## Files
 
 `ENV.pm` and `INI.pm` do not exist (karr #36, #37); everything else under `lib/` does.
-The `t/` layout below was the sketch — the real suite is 18 files and is listed by
-`ls t/`, with `t/04-interop.t` the only one that talks to the sops binary.
+The `t/` layout below was the sketch — the real suite is listed by `ls t/` and is
+well past 40 files, and `t/04-interop.t` is **no longer** the only one that talks
+to the sops binary: most files added since t/34 drive it directly, which is why
+`SOPS_BIN` now changes far more than one file's outcome.
 
 ```
 lib/
@@ -244,6 +253,8 @@ lib/
 │   └── SOPS/
 │       ├── Encrypted.pm        # Encrypted value parsing/generation
 │       ├── Metadata.pm         # SOPS metadata handling
+│       ├── Metadata/
+│       │   └── Flat.pm         # the sops_age__list_0__map_enc encoding
 │       ├── Format/
 │       │   ├── YAML.pm
 │       │   ├── JSON.pm
@@ -252,6 +263,11 @@ lib/
 │       └── Backend/
 │           └── Age.pm          # age encryption backend
 ```
+
+`Metadata/Flat.pm` is the one file here with no caller: it is the flat metadata
+wire format ENV and INI carry the `sops` section in, built and measured against
+the binary ahead of either handler so that the two cannot build it twice and
+drift (karr #75, ADR 0022).
 
 ## References
 
