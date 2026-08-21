@@ -1,6 +1,34 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BUG FIX and BEHAVIOUR CHANGE: `File::SOPS::Metadata->from_hash` now reads
+    the two `sops`-section fields that are not strings the way sops reads
+    them, out of text. `mac_only_encrypted: "false"` in a document - quoted in
+    YAML or JSON, and every leaf of the flat ENV/INI encoding, which has no
+    types at all - used to arrive here as the Perl string 'false', which is
+    TRUE, and that option SELECTS THE DIGEST: with it on the MAC covers only
+    the encrypted values, behind a fixed 32-byte initialization block. So a
+    document sops reads at exit 0 had the wrong MAC computed for it, silently.
+    It is now the boolean false. Measured against sops 3.13.3, in a NESTED
+    YAML section and not only in a flat one, which is why the coercion is here
+    and not in `Metadata::Flat->unflatten` (that stays faithful and keeps
+    returning strings - a fix there would have left the identical bug in YAML,
+    the format that has a handler today): the accepted set is
+    strconv.ParseBool's exactly - 1 t T TRUE true True 0 f F FALSE false False
+    - plus the empty string as false. `"yes"`, `"no"`, `"on"`, `"off"`, `"2"`
+    and every other spelling are now REFUSED, naming the field and the value,
+    because sops refuses each of them with exit 1 rather than guessing.
+    `shamir_threshold` is decoded the same way, through
+    strconv.ParseInt(s, 0, 64): `"2"` is 2, `"010"` is 8 and not 10, `"0x10"`
+    is 16, `"1_000"` is 1000, `""` is 0, and `" 2"`, `"2.0"`, `"08"` and
+    anything outside Go's int64 are refused. A value the parser already typed
+    - a real boolean, a real number - is passed through untouched, so NOTHING
+    MOVES for a document sops itself wrote: measured before and after, the MAC
+    plaintext of a YAML and a JSON document with `mac_only_encrypted` absent,
+    explicitly `false`, and set is unchanged in all six cases. The constructor
+    is unchanged too - `new(mac_only_encrypted => $flag)` still means Perl's
+    truth of `$flag`; the weak decoding belongs to reading a document. See
+    docs/adr/0042 and karr #138, handed over from karr #77.
   - BUG FIX: the refusal for a YAML leaf whose spelling Go's parser resolves
     differently stopped giving an int leaf's answer for a leaf that is a
     STRING. It ended with "sops itself resolves such a spelling when it

@@ -5,6 +5,8 @@ use Moo;
 use Carp qw(croak);
 use POSIX qw(strftime);
 use JSON::MaybeXS;
+use Scalar::Util qw(blessed);
+use File::SOPS::Encrypted;
 use namespace::clean;
 
 our $SOPS_VERSION = '3.7.3';
@@ -280,6 +282,16 @@ same document.
 C<undef> or false is emitted as no key at all in the C<sops> section, which is
 what the Go implementation writes.
 
+B<The constructor takes a Perl boolean; L</from_hash> takes a document's field
+and decodes it the way sops does.> The two are deliberately different. A caller
+writing C<< mac_only_encrypted => $flag >> means Perl's truth of C<$flag>,
+which is the only thing that word can mean in a Perl API. A B<document> saying
+C<mac_only_encrypted: "false"> means the boolean false -- measured, in a nested
+YAML section as much as in a flat one -- and Perl's C<'false'> is B<true>, so
+reading it as Perl would selects the other digest for a file sops reads at exit
+0. See L</from_hash> for the accepted set and docs/adr/0042 for the
+measurement.
+
 B<What it costs, in YAML:> a leaf the MAC no longer covers is one no reader
 verifies, and this distribution and sops do not resolve every YAML spelling the
 same way. C<mode_unencrypted: 0755> is the realistic case -- sops reads the
@@ -315,6 +327,14 @@ demonstrably changes what sops does with it.
 
 Fields this class does model are never stored here -- L</to_hash> lets the
 attributes win -- so C<extra> cannot be used to shadow C<mac> or C<age>.
+
+B<One unmodelled field is decoded on the way in rather than kept verbatim:>
+C<shamir_threshold>, the only one of them that is not a string. L</from_hash>
+reads it the way sops does and refuses what sops refuses -- see
+L</Two fields are decoded weakly, because sops decodes them weakly>. It stays
+in C<extra> because this class models what the field B<is>, not what it
+B<means>: C<key_groups> is what gives a threshold its meaning, and that is the
+field this distribution cannot implement.
 
 =cut
 
@@ -460,6 +480,222 @@ sub _shape_of {
     return "a $ref reference";
 }
 
+###############################################################################
+# Weak decoding -- the two fields in a `sops` section that are not strings
+#
+# sops decodes its whole metadata section through mapstructure with
+# WeaklyTypedInput, so a field's TEXT is read as its type: `mac_only_encrypted:
+# "false"` is the boolean false and `shamir_threshold: "2"` is the integer 2.
+# Anything outside the accepted set is not guessed at -- sops stops with
+# `cannot parse value as 'bool'` / `as 'int'` and exit 1.
+#
+# That is not a property of the untyped ENV and INI encodings, which is what
+# decides that this lives HERE and not in File::SOPS::Metadata::Flat->unflatten:
+# measured against sops 3.13.3 in a NESTED yaml section, a quoted "false" is
+# false there too. Coercing in unflatten would leave the identical bug in the
+# format that has a handler today. See docs/adr/0042, and t/55 for the tables.
+#
+# It matters most for mac_only_encrypted, which PICKS THE DIGEST: with it set
+# the MAC covers only the encrypted values, behind a 32-byte prefix. Perl's
+# 'false' is TRUE, so reading the string as Perl would means computing the
+# wrong MAC for a document sops reads at exit 0.
+
+# strconv.ParseBool's accepted set, exactly -- and it is short. `yes`, `no`,
+# `on` and `off` are NOT in it, in any case, quoted or bare.
+my %PARSE_BOOL = (
+    '1' => 1, 't' => 1, 'T' => 1, 'TRUE'  => 1, 'true'  => 1, 'True'  => 1,
+    '0' => 0, 'f' => 0, 'F' => 0, 'FALSE' => 0, 'false' => 0, 'False' => 0,
+);
+
+# A reference where sops wants a scalar: it refuses with "expected type 'bool',
+# got unconvertible type". A JSON::PP::Boolean is not one of these -- it is the
+# typed value itself.
+sub _is_unconvertible {
+    my ($value) = @_;
+    return 0 unless ref $value;
+    return 0 if blessed($value) && $value->isa('JSON::PP::Boolean');
+    return 1;
+}
+
+# Whether the parser already typed this scalar. Asked of
+# File::SOPS::Encrypted->detect_type rather than of the SV flags here, so that
+# the question "is this a string or a number" has ONE answer in this
+# distribution -- see ADR 0002. Only a string is decoded; a value that arrived
+# typed is what sops's decoder does no work on.
+sub _is_text {
+    my ($value) = @_;
+    return File::SOPS::Encrypted->detect_type($value) eq 'str' ? 1 : 0;
+}
+
+sub _decode_bool_field {
+    my ($field, $value) = @_;
+
+    return $value unless defined $value;
+
+    croak "the 'sops' section's '$field' is " . _shape_of($value) . ", and a "
+        . "boolean is what belongs there. sops refuses the same document with "
+        . "\"'$field' expected type 'bool', got unconvertible type\", exit 1."
+        if _is_unconvertible($value);
+
+    # A real boolean passes through, and so does a number: Go asks `!= 0` of
+    # one, which is Perl's own truth for it.
+    return $value unless _is_text($value);
+
+    # mapstructure maps the empty string to the zero value before ParseBool
+    # ever sees it, so `mac_only_encrypted: ""` is false and not an error.
+    return JSON->false unless length $value;
+
+    croak "the 'sops' section's '$field' is '$value', which sops cannot read "
+        . "as a boolean. It decodes that section weakly, through "
+        . "strconv.ParseBool -- 1, t, T, TRUE, true, True, 0, f, F, FALSE, "
+        . "false, False, and the empty string as false -- and refuses "
+        . "anything else with \"cannot parse value as 'bool'\", exit 1. Note "
+        . "that yes, no, on and off are not in that set."
+        unless exists $PARSE_BOOL{$value};
+
+    # A JSON::PP::Boolean and not 1/0, so that every emitter writes `true` or
+    # `false` rather than degrading it to an int on the next write.
+    return $PARSE_BOOL{$value} ? JSON->true : JSON->false;
+}
+
+sub _decode_int_field {
+    my ($field, $value) = @_;
+
+    return $value unless defined $value;
+
+    croak "the 'sops' section's '$field' is " . _shape_of($value) . ", and an "
+        . "integer is what belongs there. sops refuses the same document with "
+        . "\"'$field' expected type 'int', got unconvertible type\", exit 1."
+        if _is_unconvertible($value);
+
+    return $value unless _is_text($value);
+
+    # Same rule as above, one type over: the empty string is the zero value.
+    return 0 unless length $value;
+
+    my $number = _go_parse_int($value);
+
+    croak "the 'sops' section's '$field' is '$value', which sops cannot read "
+        . "as an integer. It decodes that section weakly, through "
+        . "strconv.ParseInt(s, 0, 64): the spelling picks the base (0x hex, "
+        . "0b binary, 0o or a bare leading zero octal, otherwise decimal), "
+        . "underscores may separate digits, and the value has to fit Go's "
+        . "int64. Anything else is refused with \"cannot parse value as "
+        . "'int'\", exit 1."
+        unless defined $number;
+
+    return $number;
+}
+
+# strconv.ParseInt($text, 0, 64) -- the call mapstructure makes for an int
+# field. Returns undef exactly where Go returns an error. Measured row for row
+# against sops 3.13.3 (t/55): "010" is 8 and not 10, "0x10" is 16, "1_000" is
+# 1000, and " 2", "2 ", "08", "1__0" and 2**63 are all refused.
+sub _go_parse_int {
+    my ($text) = @_;
+
+    return undef unless _underscores_ok($text);
+
+    my $rest     = $text;
+    my $negative = ($rest =~ s/\A([+-])//) && $1 eq '-';
+
+    # ParseUint's own emptiness check, which is why a bare sign is an error.
+    return undef unless length $rest;
+
+    # The base prefix. Go tests len(s) >= 3 here, so `0x` on its own is not a
+    # prefix at all -- it falls through to the bare-leading-zero octal and
+    # then fails on the digit `x`.
+    my $base = 10;
+    if (length($rest) >= 3 && $rest =~ /\A0([bBoOxX])/) {
+        my $marker = lc $1;
+        $base = $marker eq 'b' ? 2 : $marker eq 'o' ? 8 : 16;
+        $rest = substr $rest, 2;
+    }
+    elsif ($rest =~ /\A0/) {
+        $base = 8;
+        $rest = substr $rest, 1;
+    }
+
+    $rest =~ tr/_//d;
+
+    # Only the bare-leading-zero branch can empty $rest, and there Go's digit
+    # loop runs zero times over a zero accumulator: "0" and "-0" are both 0.
+    return 0 unless length $rest;
+
+    my %DIGITS = (
+        2  => qr/\A[01]+\z/,
+        8  => qr/\A[0-7]+\z/,
+        10 => qr/\A[0-9]+\z/,
+        16 => qr/\A[0-9a-fA-F]+\z/,
+    );
+    return undef unless $rest =~ $DIGITS{$base};
+
+    # Past a UV both of these hand back a double, which is far outside the
+    # window and so refused below -- the rounding cannot pull a too-large
+    # magnitude back inside it.
+    my $magnitude = do {
+        no warnings qw( portable overflow );
+        $base == 10 ? 0 + $rest
+      : $base == 16 ? oct("0x$rest")
+      : $base == 2  ? oct("0b$rest")
+      :               oct("0$rest");
+    };
+
+    # int64 reaches one further down than up, so a negative magnitude fits
+    # exactly when magnitude-1 fits as a positive one. Asked of
+    # File::SOPS::Encrypted rather than spelled here, because two copies of
+    # that boundary is this distribution's signature defect.
+    return undef unless File::SOPS::Encrypted->integer_fits_int64(
+        $negative ? $magnitude - 1 : $magnitude);
+
+    # Built from the magnitude's own decimal spelling, so that int64's floor
+    # survives: negating a Perl UV of 2**63 produces a double, while numifying
+    # '-9223372036854775808' produces the integer.
+    return $negative ? 0 + ('-' . $magnitude) : $magnitude;
+}
+
+# A port of Go's strconv.underscoreOK, which is where ParseInt's underscore
+# rule lives: an underscore may appear only between digits, or between a base
+# prefix and the first digit.
+sub _underscores_ok {
+    my ($text) = @_;
+
+    my $s = $text;
+    $s =~ s/\A[+-]//;
+
+    # '^' before the number, '0' after a digit or a base prefix, '_' after an
+    # underscore, '!' after anything else.
+    my $saw = '^';
+    my $i   = 0;
+    my $hex = 0;
+
+    if (length($s) >= 2 && $s =~ /\A0([bBoOxX])/) {
+        $i   = 2;
+        $saw = '0';
+        $hex = lc($1) eq 'x';
+    }
+
+    for (; $i < length $s; $i++) {
+        my $c = substr $s, $i, 1;
+
+        if ($c =~ /\A[0-9]\z/ || ($hex && $c =~ /\A[a-fA-F]\z/)) {
+            $saw = '0';
+            next;
+        }
+
+        if ($c eq '_') {
+            return 0 unless $saw eq '0';
+            $saw = '_';
+            next;
+        }
+
+        return 0 if $saw eq '_';
+        $saw = '!';
+    }
+
+    return $saw eq '_' ? 0 : 1;
+}
+
 sub from_hash {
     my ($class, $hash) = @_;
 
@@ -494,6 +730,12 @@ sub from_hash {
     my %extra = map  { $_ => $hash->{$_} }
                 grep { !$MODELLED_FIELD{$_} } keys %$hash;
 
+    # The one unmodelled field with a type of its own. It stays in `extra`
+    # because this class does not model what it MEANS -- only what it is.
+    $extra{shamir_threshold}
+        = _decode_int_field('shamir_threshold', $extra{shamir_threshold})
+        if exists $extra{shamir_threshold};
+
     return $class->new(
         extra              => \%extra,
         age                => $hash->{age}                // [],
@@ -509,7 +751,8 @@ sub from_hash {
         encrypted_suffix   => $hash->{encrypted_suffix},
         unencrypted_regex  => $hash->{unencrypted_regex},
         encrypted_regex    => $hash->{encrypted_regex},
-        mac_only_encrypted => $hash->{mac_only_encrypted},
+        mac_only_encrypted =>
+            _decode_bool_field('mac_only_encrypted', $hash->{mac_only_encrypted}),
     );
 }
 
@@ -558,6 +801,80 @@ first and does not call this method at all when the answer is no.
 
 Dies if the document carries more than one encryption rule, see
 L</Encryption rules are mutually exclusive>.
+
+=head2 Two fields are decoded weakly, because sops decodes them weakly
+
+Everything in a C<sops> section is a string except two fields, and B<sops reads
+both of them out of text> -- it decodes the whole section through mapstructure
+with C<WeaklyTypedInput>, so C<mac_only_encrypted: "false"> is the boolean
+false and C<shamir_threshold: "2"> is the integer 2. Anything outside the
+accepted set is not guessed at: sops stops with C<cannot parse value as 'bool'>
+or C<as 'int'> and exit 1.
+
+This method does the same, and B<refuses the same> -- naming the field and the
+value it could not read.
+
+=head3 It is not a flat-format concern, which is what decides it lives here
+
+The obvious home looks like L<File::SOPS::Metadata::Flat/unflatten>, since the
+ENV and INI encodings are untyped and hand back every leaf as a string. It is
+the wrong home: measured against sops 3.13.3, the weak decoding applies to a
+B<nested YAML> C<sops:> section just as much, so a fix there would leave a
+quoted C<mac_only_encrypted: "false"> in a YAML document still reading as Perl
+truth -- the identical bug in the format that has a handler today. C<unflatten>
+therefore stays the structural inverse of C<flatten> with no schema at all, and
+the coercion lives here, at the one place every format's parsed section
+arrives. docs/adr/0042 records the measurement and the decision.
+
+What it costs to get wrong is not cosmetic: L</mac_only_encrypted> B<selects
+the digest>. With it set the MAC covers only the encrypted values, behind a
+fixed 32-byte initialization block, so the two settings can never produce the
+same digest for the same document.
+
+=head3 C<mac_only_encrypted>: C<strconv.ParseBool>'s set, and nothing else
+
+    "1"  "t"  "T"  "TRUE"   "true"   "True"     -> true
+    "0"  "f"  "F"  "FALSE"  "false"  "False"    -> false
+    ""                                          -> false
+    everything else                             -> dies
+
+C<yes>, C<no>, C<on> and C<off> are B<not> in that set, quoted or bare, and
+neither is C<"tRuE">, C<" false"> or C<"2">: sops refuses each of them with
+exit 1. The empty string is mapstructure's own rule rather than ParseBool's --
+it maps an empty string to the zero value before ParseBool is reached.
+
+A decoded value is a L<JSON::PP::Boolean>, never C<1> or C<0>, so that the next
+write emits C<true> or C<false> rather than degrading it to an integer.
+
+=head3 C<shamir_threshold>: C<strconv.ParseInt(s, 0, 64)>
+
+Base B<0> means the spelling picks the base, and the surprise is real:
+
+    "2"       -> 2          "010"     -> 8      (a leading zero is octal)
+    "0x10"    -> 16         "0b101"   -> 5
+    "0o17"    -> 15         "1_000"   -> 1000   (underscores separate digits)
+    "+2"      -> 2          ""        -> 0
+    everything else, and anything outside Go's int64  -> dies
+
+So C<" 2">, C<"2 ">, C<"2.0">, C<"1e3">, C<"08">, C<"1__0"> and C<2**63> are
+all refused, as sops refuses them. C<"010"> is the row that makes a
+decimal-only parse unacceptable: it would read 10 where sops reads 8, silently.
+
+=head3 Only a string is decoded
+
+A value the parser already typed is passed through untouched -- a
+L<JSON::PP::Boolean>, or a number, which Go tests as C<!= 0> and Perl tests the
+same way. The question "is this scalar a string or a number" is asked of
+L<File::SOPS::Encrypted/detect_type> rather than answered a second time here,
+so this method cannot drift away from the rest of the distribution (ADR 0002).
+
+A reference where sops wants a scalar dies too: sops refuses that document with
+C<expected type 'bool', got unconvertible type>, exit 1.
+
+B<Nothing moves for a document that already carried a real boolean or a real
+number>, which is every document sops itself writes: measured before and after,
+the MAC plaintext of a YAML and a JSON document with C<mac_only_encrypted>
+absent, explicitly C<false>, and set, is unchanged in all six cases.
 
 =cut
 
