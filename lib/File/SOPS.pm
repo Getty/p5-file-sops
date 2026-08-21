@@ -40,6 +40,7 @@ use File::SOPS::Metadata;
 use File::SOPS::Backend::Age;
 use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
+use File::SOPS::Format::ENV;
 use namespace::clean;
 
 our $VERSION = '0.003';
@@ -615,9 +616,14 @@ C<docs/adr/0001>), so it is a wire-format change for a cosmetic gain. karr #83.
 =cut
 
 my %FORMATS = (
-    yaml => 'File::SOPS::Format::YAML',
-    yml  => 'File::SOPS::Format::YAML',
-    json => 'File::SOPS::Format::JSON',
+    yaml   => 'File::SOPS::Format::YAML',
+    yml    => 'File::SOPS::Format::YAML',
+    json   => 'File::SOPS::Format::JSON',
+    env    => 'File::SOPS::Format::ENV',
+    # sops's own name for the format, accepted for the same reason `yml` is:
+    # a caller who knows it from `--input-type dotenv` should not have to
+    # translate. format_name stays 'env'.
+    dotenv => 'File::SOPS::Format::ENV',
 );
 
 # Everything that describes HOW a document gets encrypted, as opposed to what
@@ -683,7 +689,7 @@ sub encrypt {
     my $encrypted = File::SOPS->encrypt(
         data               => \%data,
         recipients         => \@age_public_keys,
-        format             => 'yaml',  # or 'json', defaults to 'yaml'
+        format             => 'yaml',  # or 'json' / 'env', defaults to 'yaml'
         mac_only_encrypted => 0,       # optional
 
         # optional, at most ONE of these four
@@ -716,7 +722,15 @@ replaced by the metadata -- and since the digest had already covered it, the
 resulting document failed its own MAC on the next read. sops refuses such a
 file too, with exit code 203, and its advice applies here: rename the entry.
 
-Supported formats: C<yaml>, C<yml>, C<json>.
+Supported formats: C<yaml>, C<yml>, C<json>, C<env>. C<dotenv> is accepted as
+an alias for C<env>, which is the name sops itself uses for the format.
+
+The C<env> format is flat and untyped, and both properties are visible to a
+caller: a nested value is refused (sops refuses the same tree), and an
+B<unencrypted> leaf comes back from the round trip as the text it was written
+as -- C<42> as C<"42">, a boolean as C<"True">, an C<undef> as C<''>. An
+encrypted leaf keeps its type, because the C<type:> label carries it. A comment
+lives under the empty key, as a list. See L<File::SOPS::Format::ENV>.
 
 A C<File::SOPS::Comment> in C<data> is written as a sops comment
 (C<type:comment>) and is left out of the MAC, which is what sops does with one.
@@ -1241,7 +1255,8 @@ before deciding there was no metadata section, so the guard above never saw it
 and the key was simply missing from the output. See
 L<File::SOPS::Metadata/from_hash>.
 
-Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>)
+Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>,
+C<.env>)
 unless explicitly specified.
 
 C<mac_only_encrypted>, the four encryption rules and C<metadata> are all
@@ -3767,6 +3782,13 @@ sub _detect_format {
     if ($content =~ /^\s*\{/) {
         return 'json';
     }
+    # Asked of the handler rather than spelled here: what an env document looks
+    # like includes where its metadata sits, and `sops_` has one spelling in
+    # this distribution (File::SOPS::Metadata::Flat's prefix). This sub is only
+    # ever asked about ENCRYPTED content, which is what makes the question
+    # answerable at all -- a plaintext .env and a plaintext .properties file
+    # are the same bytes.
+    return 'env' if File::SOPS::Format::ENV->detect_content($content);
     return 'yaml';
 }
 
@@ -3775,12 +3797,16 @@ sub _detect_format_from_filename {
 
     return 'json' if $filename =~ /\.json$/i;
     return 'yaml' if $filename =~ /\.ya?ml$/i;
+    return 'env'  if $filename =~ /\.env$/i;
     return 'yaml';
 }
 
 =head1 SEE ALSO
 
 =over 4
+
+=item * L<File::SOPS::Format::ENV> - the dotenv format handler, its flat
+metadata section and its comment leaves
 
 =item * L<File::SOPS::Encrypted> - Encrypted value parsing and generation
 

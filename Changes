@@ -1856,6 +1856,42 @@ Revision history for File-SOPS
     half of the same ticket is decided too: sops decodes its section weakly in
     EVERY format (a quoted `mac_only_encrypted: "false"` is the boolean false
     in nested YAML as well), so the coercion belongs in
+  - NEW FORMAT: `format => 'env'` (`dotenv` is accepted as sops's own name for
+    it), the dotenv handler CLAUDE.md has promised since 0.001. A `.env`
+    document now goes through every method - `encrypt`, `decrypt`, the file
+    variants, `encrypt_in_place`, `edit`, `extract` and `rotate` - and is
+    auto-detected from a `.env` extension and from encrypted content. Proved
+    in BOTH directions against sops 3.13.3: a document sops wrote reads here
+    with its MAC verified, and one written here comes back out of `sops -d` at
+    exit 0. WHAT IS NEW HERE and not already decided by the four ADRs this
+    consumes: a COMMENT - which in this format is the ordinary case and not
+    the exception - lives in the tree under the EMPTY KEY, as a list of
+    `File::SOPS::Comment` objects. That is not a convention chosen for
+    convenience: measured against sops 3.13.3, every comment leaf in an env
+    document authenticates under the AAD `:` and under nothing else, which is
+    the path `['']`, and a list adds no path component. So a `.env` with
+    comments in it survives `decrypt_file` and `edit` without losing them -
+    the half of karr #76 that Format::YAML cannot do. KEYS ARE WRITTEN SORTED
+    and the comment block comes first, where sops writes document order: the
+    MAC's encrypt side hashes `sort keys`, so a document this library writes
+    has to BE in that order (measured: sorting the data lines of a
+    sops-written file makes `sops -d` fail at exit 51). Reading takes its
+    order from the document, through the per-format reparse, or every env
+    file sops writes would fail to verify. An UNENCRYPTED leaf is written as
+    exactly the bytes the digest covers, so this library writes `True`, an
+    empty value and `1` where sops writes `true`, `<nil>` and `1.0` and then
+    refuses to read its own file (karr #124, #125, #137). REFUSED, each
+    naming the line or the key: a line that is neither a comment nor
+    `KEY=VALUE`, a duplicate key (sops keeps both, a Perl hash cannot), an
+    empty data key (that is where the comments are), a top-level `sops_` key
+    (sops: exit 203), a nested value (sops: exit 4), an unblessed reference, a
+    comment in a value slot, a comment holding a newline, a value the format's
+    newline escape cannot round-trip (docs/adr/0030), and bytes that are not
+    valid UTF-8. Two of those are documents sops reads and this does not, and
+    both are recorded. An unencrypted value's TYPE is erased by the round trip
+    - `42` comes back as `"42"`, a boolean as `"True"` - because the store has
+    no syntax for one; an encrypted leaf keeps its type. Nothing about YAML or
+    JSON moves. See docs/adr/0045 and karr #36.
     File::SOPS::Metadata->from_hash and not in Metadata::Flat->unflatten, which
     stays faithful to the untyped encoding. See docs/adr/0035 and karr #77.
 
