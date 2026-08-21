@@ -1,0 +1,37 @@
+---
+class: standard
+created: 2026-08-21T09:20:49Z
+id: 157
+priority: low
+status: backlog
+tags:
+- env
+- api
+- interop
+title: An env document with a data key named 'sops' can be read here but not re-encrypted
+updated: 2026-08-21T09:20:49Z
+---
+
+Measured at karr #36 against sops 3.13.3.
+
+In a FLAT format the metadata does not live under a key called `sops` -- it lives in top-level `sops_*` keys. So `sops=1` is an ordinary data key there, and sops treats it as one:
+
+    $ printf "sops=1\nA=2\n" > sk.env
+    $ sops -e --age age1... sk.env > sk.enc.env      # exit 0
+    $ sops -d sk.enc.env
+    sops=1
+    A=2                                               # exit 0
+
+(A key starting with `sops_` IS refused, exit 203 -- that one File::SOPS::Format::ENV refuses too.)
+
+File::SOPS reads such a document fine: Format::ENV->parse gives `sops => 1` as data, and decrypt returns it. But File::SOPS::encrypt refuses `exists $data->{sops}` FORMAT-BLIND, so every write path fails on it:
+
+    rotate refused: data contains a top-level "sops" entry, which is reserved
+    for the SOPS metadata section. ... use edit to change its contents or
+    rotate to re-key it
+
+-- advice that names the method that just failed. So an env document sops wrote can be read but never rotated, edited or re-encrypted here.
+
+THE GUARD IS RIGHT FOR YAML AND JSON and wrong for a flat format: there is no collision to prevent. The question is where the reserved-name rule belongs. Format::JSON::serialize already carries its own copy of it, and Format::ENV carries the `sops_` one, so the format-blind check in encrypt() is the duplicate. Whether it can be narrowed without weakening the YAML/JSON case is the API lane's call.
+
+Vanishingly rare in practice; recorded because it is a document the reference implementation reads and this one cannot write back.
