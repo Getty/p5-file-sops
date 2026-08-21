@@ -7,6 +7,10 @@
   lanes correct it where they measure something else, marked where it sits
   rather than smoothed over; lane 1 (`file-sops-wire`) has run and left two
   corrections, in "The two gates" and in "What changes for existing callers".
+  A third correction landed 2026-08-21 as karr #107: the cross-format YAML
+  rows split on `uint64max`, and that is not the discriminator — measured, it
+  is whether ADR 0011's repair has to fire at all. Marked where it sits, in
+  "The two gates".
 - Date: 2026-08-20
 - Tags: int, float, json, wire-format, guards, interop, parser
 - Resolves karr #101
@@ -210,14 +214,34 @@ can reach them by parsing JSON and emitting YAML, which is a supported crossing:
 | cross-format cell | result |
 |---|---|
 | encrypted slot, whole window | written `type:float`, `sops -d` **exit 0** |
-| unencrypted slot, canonical decimal ≤ `uint64max` | **croak**, ADR 0013's message |
+| unencrypted slot, `%.15g` form round-trips | written in **exponent** notation, `sops -d` **exit 0** |
+| unencrypted slot, `%.15g` form does not round-trip, canonical decimal ≤ `uint64max` | **croak**, ADR 0013's message |
 | unencrypted slot, canonical decimal > `uint64max` | written bare, `sops -d` **exit 0** |
 
-The third row is not a hole in ADR 0013: `18446744073709551615` is written as
-`18446744073709552000`, which is past `uint64max`, so `yaml.v3` resolves it as a
-float and `_go_int` correctly declines to refuse it. The three rows together are
-what the consequences table's YAML row should have said, and did not — see the
-correction there.
+**Corrected 2026-08-21, karr #107.** This table had three rows and split them on
+`uint64max` alone, which is measurably not the discriminator. The sweep that
+found it: 12 literals across the window × 2 formats × 2 slots, the float answer,
+against sops 3.13.3 — 7 of 48 cells croak, all of them unencrypted YAML, but
+`9300000000000000000`, `9999999999999999999` and `18000000000000000000` have a
+canonical decimal **well below** `uint64max` and reach that slot at `sops -d`
+exit 0. The full series is in the comment block above the `int64` croak in
+`lib/File/SOPS/Encrypted.pm`.
+
+The real split sits **upstream of `_go_int`**, and it is ADR 0011's repair
+deciding whether it has to fire. `YAML::XS` writes Perl's `%.15g` form. Where
+that form round-trips to the same double — `9.3e+18`, `1e+19`, `1.8e+19` — the
+leaf goes out in exponent notation, which `_go_int` does not match at all, so
+ADR 0013 never looks at it. Where it does not round-trip, the repair writes the
+bare canonical decimal instead and `_go_int` reads a `uint64` there: refusal.
+Two ways through the unencrypted slot, not one.
+
+The last row is still not a hole in ADR 0013, but its reason is the second of
+those two paths rather than a rule of its own: `18446744073709551615` does not
+round-trip through `%.15g`, so the repair writes its canonical decimal
+`18446744073709552000` bare — and *that* is past `uint64max`, so `yaml.v3`
+resolves it as a float and `_go_int` correctly declines to refuse it. The rows
+together are what the consequences table's YAML row should have said, and did
+not — see the correction there.
 
 ### The two gates, and why they are in that order
 
@@ -367,7 +391,7 @@ prototype loaded.
 | `detect_type` of such a leaf | `int` | `float` — the two slots now agree, where the unencrypted one used to disagree with the encrypted one |
 | a **quoted** `"9223372036854775808"` | `type:str` | unchanged |
 | the same digits in a **YAML document**, any slot | croak, `int64` message | **unchanged** — same croak, same message |
-| the same digits **parsed from JSON and emitted as YAML** | croak, `int64` message | three outcomes, see below |
+| the same digits **parsed from JSON and emitted as YAML** | croak, `int64` message | four outcomes, see below |
 | a **caller-supplied Perl UV** in the window, not from a JSON parse | croak | **unchanged, still croaks** |
 
 The `extract` row above is a correction, and the last two rows are consequences
@@ -404,13 +428,15 @@ with the **`int64`** message exactly as it does today — measured at f1c1471,
 `v_unencrypted: 9223372036854775808` parsed as YAML and encrypted as both
 `format => 'yaml'` and `format => 'json'`, the `int64` message both times.
 ADR 0013's message belongs to a different input, the **cross-format** one: a
-leaf this decision's parser produced, emitted as YAML. That case has the three
+leaf this decision's parser produced, emitted as YAML. That case has the
 outcomes tabulated under "The two gates" — the encrypted slot writes
-`type:float` and `sops -d` reads it, an unencrypted slot croaks with ADR 0013's
-message while the canonical decimal is still inside `uint64`, and past
-`uint64max` it is written bare and `sops -d` reads that too. Nothing in
-`Format::YAML` moves either way; what changed is only which of its existing
-answers a JSON-parsed leaf can now reach.
+`type:float` and `sops -d` reads it, and an unencrypted slot croaks with ADR
+0013's message only where ADR 0011's repair has to write the bare canonical
+decimal and that decimal is still inside `uint64`. Where the `%.15g` form
+round-trips the leaf leaves in exponent notation and `_go_int` never matches it,
+and past `uint64max` the bare decimal is written and `sops -d` reads that too;
+both of those are `exit 0`. Nothing in `Format::YAML` moves either way; what
+changed is only which of its existing answers a JSON-parsed leaf can now reach.
 
 **`0+$v` moves for a leaf the caller could read exactly before.** For a
 sops-written value the two are the same number to sixteen digits and the
