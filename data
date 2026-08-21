@@ -1,0 +1,58 @@
+---
+class: standard
+completed: 2026-08-21T08:59:51Z
+created: 2026-08-21T08:25:06Z
+id: 146
+priority: low
+started: 2026-08-21T08:31:08Z
+status: done
+tags:
+- metadata
+- api
+- interop
+- mac
+title: a float-spelled string metadata field stringifies differently here than in
+  Go
+updated: 2026-08-21T08:59:51Z
+---
+
+Found while measuring karr #138 (docs/adr/0042), checked and deliberately left alone. sops weakly decodes its STRING metadata fields too - a non-string value is stringified rather than refused.
+
+MEASURED, sops 3.13.3, sops rotate on a document carrying one rule field, reading back what it wrote:
+
+  unencrypted_suffix: 3       -> "3"
+  unencrypted_suffix: 3.13    -> "3.13"
+  unencrypted_suffix: true    -> "1"
+  unencrypted_suffix: false   -> "0"
+
+For every one of those Perls own stringification agrees: JSON::PP::Boolean numifies to 1/0 and an integer stringifies to its digits, so the suffix a rule matches with is the same text either way. Nothing to do.
+
+THE ONE SPELLING WHERE IT DIVERGES is a float outside positional range: Go formats a float64 with strconv.FormatFloat(v, "f", -1, 64), so `unencrypted_suffix: 1e20` is "100000000000000000000" there and "1e+20" here. Same for encrypted_suffix, unencrypted_regex and encrypted_regex.
+
+Why it is not nothing: an encryption rule decides which leaves are encrypted, and with mac_only_encrypted set it also decides which leaves the digest covers - so in principle this can move a MAC. Why it is not urgent: a float as a key suffix or as a regex is a hand-written pathology; no sops store produces one.
+
+If it is fixed, the conversion already exists and must be reused rather than respelled: File::SOPS::Encrypted->value_to_bytes is the single source of truth for a scalars wire text and already implements FormatFloat(-1). Do NOT write a second float formatter in Metadata.pm.
+
+Lane: api.
+MEASURED (sops 3.13.3, /tmp/sops). The ticket's claim is CONFIRMED, and the direction question it was handed with is answered: sops does not only READ the stringified value, it WRITES IT BACK.
+
+sops rotate, reading back what it wrote:
+  unencrypted_suffix: 3      -> "3"        3.13 -> "3.13"     1.5 -> "1.5"
+  unencrypted_suffix: true   -> "1"        false -> "0"
+  unencrypted_suffix: 1e20   -> "100000000000000000000"
+  unencrypted_suffix: 0755   -> "493"      (go-yaml resolves the octal first)
+The decode is visible without the round trip too: 'mac: 1e20' fails with "Input string 100000000000000000000 does not match sops' data format", 'mac: true' with "Input string 1".
+
+REACHABILITY, which is what decides it: sops writes these fields as QUOTED STRINGS, always - including when it normalises a hand-written float. So no document sops wrote can carry a float there, and our own writes carry back the scalar the parser gave us. The divergence needs a hand-edited document to exist at all, and the first sops write removes it. Under ADR 0038's discriminator both implementations read back what they wrote and agree on it.
+
+DECIDED for the float half: nothing changed, documented. Restringifying would give Metadata.pm a second opinion about a scalar's text (ADR 0002's territory) for a suffix nobody can name.
+
+WHAT DID CHANGE, found while measuring this: the same weak decoding refuses a LIST or a MAP outright. Measured for all nine string fields of the section - mac, lastmodified, version, the four encryption rules, both comment rules - always "'<field>' expected type 'string', got unconvertible type", exit 1, before the document is opened. An unknown field is the exception: 'totally_unknown_field: []' is exit 0, ignored whatever it holds.
+
+We accepted all of them, and two were not inert:
+  * encrypted_regex: [] reached should_encrypt_key AS THE PATTERN, matched no key, and File::SOPS->rotate wrote 'password: hunter2' into the file and reported success - for a document sops -d will not open. Reproduced in t/57; it is one of the assertions that fails without the fix.
+  * lastmodified: [] becomes the AAD the MAC is authenticated with, whose bytes are then a memory address.
+
+from_hash now refuses a reference in all nine, naming the field and the shape and quoting sops's message. Unmodelled fields keep whatever they hold (sops ignores them; key_groups is a list by definition). docs/adr/0043, t/57 (94 assertions fail without it), Changes.
+2026-08-21 08:54 Measured and DECIDED: the float spelling stays as it is (unreachable from any document either implementation wrote), the LIST/MAP half is now refused in all nine string fields - it was a plaintext-on-disk path through rotate. docs/adr/0043, t/57.
+ABGENOMMEN 2026-08-21. Commit 5de41fe, ADR 0043. Die Float-Haelfte bleibt unveraendert und dokumentiert -- sops schreibt dort immer einen QUOTIERTEN String, also kann kein von sops geschriebenes Dokument einen Float tragen, und beide Seiten lesen zurueck, was sie geschrieben haben (ADR 0038). Was die Messung stattdessen fand, ist der eigentliche Inhalt dieses Commits: eine DATENEXPOSITION. encrypted_regex: [] wird von sops mit exit 1 abgelehnt, ohne das Dokument je zu oeffnen -- unser rotate lieferte exit 0 und schrieb die Geheimnisse im KLARTEXT auf die Platte, in eine Datei, die weiterhin wie eine sops-Datei aussieht, und meldete Erfolg.
