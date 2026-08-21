@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-08-21T11:22:37Z
+created: 2026-08-21T09:21:03Z
+id: 158
+priority: low
+started: 2026-08-21T11:05:47Z
+status: done
+tags:
+- env
+- housekeeping
+title: File::SOPS::Format::ENV::Ordered should be its own file
+updated: 2026-08-21T11:22:37Z
+---
+
+The tied hash that gives Format::ENV->parse_in_document_order its key order (docs/adr/0036 requires a tied hash and nothing else) lives as a second package at the bottom of lib/File/SOPS/Format/ENV.pm, because karr #36 had a one-new-lib-file boundary.
+
+That is exactly where File::SOPS::Comment sat until karr #147 moved it out, and the same argument applies: a package in a file whose name does not match is invisible to a reader looking for it, and dzil indexes it anyway.
+
+It is ~15 lines of Tie::Hash with no format knowledge at all -- STORE/FETCH/EXISTS/FIRSTKEY/NEXTKEY plus the ones a later caller would trip over. Moving it is a move, not a rename: nothing outside that one method ties a hash to it.
+
+Do it when INI (karr #37) lands, if INI needs the same class -- at which point it is shared code and the file is no longer optional.
+Datei-Referenz: der tied Hash liegt am Ende von lib/File/SOPS/Format/ENV.pm; der Test dazu ist t/59-env-format-handler.t.
+
+ABGENOMMEN 2026-08-21. Commit 42f15b8. Die Abnahme gilt der Pruefmethode: DREI Builds statt zwei -- vorher, nachher mit getrackter Datei, und nachher OHNE. Der dritte ist die Git::GatherDir-Falle selbst und zeigt, dass 'keine Warnung' allein nichts beweist, weil ein Build ohne die Datei die Warnung ebenfalls verliert, aber dann auch das Modul und den provides-Eintrag nicht hat. Nur der getrackte Build hat beides. Ebenso gemessen statt angenommen: die Zirkularitaet, mit SOPS.pm, Encrypted.pm und Format/ENV.pm nachweislich ausserhalb von %INC -- derselbe Fehler ist in dieser Sitzung zweimal aufgetreten.
