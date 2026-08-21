@@ -1,0 +1,80 @@
+---
+class: standard
+completed: 2026-08-21T08:30:33Z
+created: 2026-08-21T06:31:30Z
+id: 138
+priority: high
+started: 2026-08-21T08:01:53Z
+status: done
+tags:
+- api
+- mac
+- metadata
+title: Metadata->from_hash must decode mac_only_encrypted and shamir_threshold weakly,
+  as sops does
+updated: 2026-08-21T08:30:33Z
+---
+
+Uebergabe aus karr #77 an die api-Lane. Entschieden in docs/adr/0035,
+Abschnitt "The metadata half of karr #77, and where it belongs"; gemessen und
+gepinnt in t/50-flat-store-type-policy.t (Subtest "the metadata half").
+Die wire-Lane hat Metadata.pm nicht angefasst -- es ist nicht ihre Datei.
+
+DAS PROBLEM, MAC-RELEVANT: File::SOPS::Metadata::Flat->unflatten gibt jedes
+Leaf als STRING zurueck, weil die flachen Formate untypisiert sind. Perls
+"false" ist WAHR. Ein Format-Handler, der unflatten-Ausgabe an from_hash
+reicht, schaltet mac_only_encrypted also EIN -- und diese Option WAEHLT den
+Digest (mit ihr deckt der MAC nur verschluesselte Werte, hinter dem
+32-Byte-Praefix MACOnlyEncryptedInitialization). Falsche Antwort =
+falscher Digest fuer ein Dokument, das sops fehlerfrei liest.
+
+DIE MESSUNG, DIE DEN ORT ENTSCHEIDET: sops dekodiert seine Metadaten in JEDEM
+Format schwach, nicht nur in den flachen. In einer VERSCHACHTELTEN
+YAML-sops-Sektion (sops 3.13.3):
+
+  mac_only_encrypted:  false "false" "FALSE" "False" "f" "F" "0" ""  -> FALSE
+  mac_only_encrypted:  true "true" "TRUE" "True" "t" "T" "1" 1 1.0   -> TRUE
+  mac_only_encrypted:  "yes" "no" "on" "off"                        -> exit 1
+                       (decoding failed: cannot parse value as bool)
+  mac_only_encrypted:  "2"                                          -> exit 1
+  shamir_threshold:    2  "2"                                       -> 2
+  shamir_threshold:    "false" "true"                               -> exit 1
+                       (cannot parse value as int)
+  shamir_threshold:    false / true (bare)                          -> akzeptiert
+
+Das ist genau strconv.ParseBools Menge, erreicht ueber mapstructures
+weakly-typed decoding. Ein gequotetes "false" in einer YAML-Datei ist fuer
+sops also die boolesche Falschheit -- was bedeutet, dass der Bug HEUTE schon
+in dem Format existiert, das einen Handler hat.
+
+DIE ENTSCHEIDUNG: die Coercion gehoert in File::SOPS::Metadata->from_hash,
+der einen Stelle, an der jede Format-Sektion ankommt, typisiert oder nicht.
+NICHT in Metadata::Flat->unflatten (strukturelle Umkehrung von flatten, hat
+kein Schema, und wuerde das YAML-Loch offen lassen) und NICHT in den
+Handlern (dann steht sie zweimal da).
+
+UMZUSETZEN:
+  * mac_only_encrypted: ParseBools Menge oben, plus leerer String -> false,
+    plus numerisch 0 -> false und alles andere numerisch -> true; jede andere
+    Zeichenkette CROAKT, wie sops mit exit 1 abbricht. Ergebnis ist
+    JSON->true / JSON->false, nicht 1/0 (Invariante 6).
+  * shamir_threshold: Integer-Parse, sonst croak.
+  * Ein echter JSON::PP::Boolean bzw. eine echte Zahl aus YAML/JSON bleibt
+    unveraendert -- die Coercion greift nur auf Strings.
+  * Nicht schweigend raten: was sops mit exit 1 ablehnt, lehnen wir laut ab.
+
+t/38-flat-metadata.t nagelt heute fest, DASS unflatten den String als String
+zurueckgibt -- das bleibt richtig und darf nicht angefasst werden; die
+Aenderung ist eine Stufe weiter oben. Das POD an Flat::unflatten sagt schon,
+wohin sie gehoert.
+
+Lane: api.
+IMPLEMENTED. Measurement re-verified against /tmp/sops 3.13.3 before building on it: 34 mac_only_encrypted spellings and 46 shamir_threshold spellings, all as the ticket said (the interop half of t/55 passes BEFORE the implementation, which is the measurement confirming itself). ParseBool's set exactly, yes/no/on/off refused with exit 1 quoted AND bare; shamir_threshold is ParseInt(s,0,64) - '010' is 8, '0x10' is 16, '1_000' is 1000, '' is 0, out-of-int64 refused.
+
+Coercion landed in Metadata->from_hash only; Flat->unflatten untouched. Only a STRING is decoded (asked of Encrypted->detect_type, one ladder); a real boolean/number passes through, so no digest moves for any document sops writes - measured before/after, YAML and JSON, mac_only_encrypted absent/false/true: 8DAD2C9C.. / 8DAD2C9C.. / 9B5BB7DF.. identical either side. to_hash was already exact (real JSON::PP::Boolean, omitted when off) and is unchanged.
+
+Fields checked: mac_only_encrypted and shamir_threshold are the ONLY non-string fields in sops's Metadata struct. version/lastmodified/mac/the four rules and every per-backend key entry are strings - checked and unaffected, with three divergences found and filed rather than folded in: karr #144 (lastmodified is re-formatted to RFC3339 before becoming the MAC's AAD - MAC-relevant, wire lane), karr #145 (version is semver-parsed by sops), karr #146 (a float-spelled string field stringifies differently). karr #143 for Flat.pm's now-stale POD.
+
+Files: lib/File/SOPS/Metadata.pm, t/55-weakly-decoded-metadata-fields.t (new), docs/adr/0042 (0041 was taken by karr #76 mid-task), Changes. Net: 110 assertions red before, 287 green after, 10/10 subtests. Interop RAN (sops 3.13.3, /tmp/sops): t/04 32/32 PASS.
+2026-08-21 08:28 Implemented, ADR 0042 written, regression test t/55 green (287 assertions, interop ran). t/12 and t/40 in the tree are karr #76's in-flight work, verified independent of this change.
+ABGENOMMEN 2026-08-21. Commit 77587af, ADR 0042. Der staerkste Beleg ist strukturell und kein Zahlenwert: die Interop-Haelfte des neuen Tests BESTEHT, BEVOR DIE IMPLEMENTIERUNG EXISTIERT -- sie misst sops und nicht uns. Dazu eine Messung, die das Ticket nicht hatte und die den Entwurf entschieden hat: sops SCHREIBT DEN DEKODIERTEN WERT ZURUECK (rotate normalisiert 0x10 zu 16, 010 zu 8, mac_only_encrypted: 'false' zu gar keinem Schluessel). Das Dekodieren reproduziert sops also, statt eine eigene Regel hinzuzufuegen -- und deshalb ist ABLEHNEN bei einem Wert ausserhalb der Menge referenztreu und keine Haerte von uns. Und der Beweis, dass sich nichts bewegt: MAC-Klartext byte-identisch vor und nach der Aenderung, beide Formate, drei Zustaende von mac_only_encrypted.
