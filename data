@@ -1,0 +1,87 @@
+---
+class: standard
+created: 2026-08-09T00:53:43Z
+id: 39
+priority: low
+status: backlog
+tags:
+- roadmap
+- backend
+title: 'Backends beyond age: the metadata is done, the wrapping is all that is missing'
+updated: 2026-08-21T03:24:57Z
+---
+
+CLAUDE.md lists PGP, AWS KMS, GCP KMS, Azure Key Vault and HashiCorp Vault
+as later phases. File::SOPS::Backend::Age is still the only one. Split out
+of karr #4.
+
+SCOPE: HashiCorp Vault is the only realistic candidate for an actual
+implementation. PGP, AWS KMS, GCP KMS and Azure KV are out of scope and
+likely stay out — the metadata round-trip already covers reading documents
+shared with such recipients, and "not implemented, refuses loudly" is the
+defensible permanent answer for the cloud backends.
+
+WHAT ALREADY EXISTS, and it is more than the title suggests:
+
+- File::SOPS::Metadata models `pgp`, `kms`, `gcp_kms`, `azure_kv` and `hc_vault`
+  as first-class attributes; `key_groups` and anything unrecognised survive in
+  `extra`. A document carrying any of them round-trips through parse/serialize
+  with those entries byte-identical (t/15-rotate.t pins it).
+- key_material_fields() already answers "which backends does this document carry
+  a wrapped data key for", and _assert_rekeyable() already refuses to rotate or
+  edit such a document rather than silently revoking those recipients.
+- A document shared with, say, PGP AND age recipients can already be READ here
+  through its age entry, MAC and all. Only writing for the other backend is
+  missing.
+
+So the shape of the remaining work per backend is narrow and identical:
+
+    encrypt_data_key(data_key => $bytes, recipients => \@ids) -> [ { ... } ]
+    decrypt_data_key(<field> => \@entries, identities => ...) -> $bytes
+
+plus the per-entry field names that backend writes into its section (vault:
+`path`, `key`, `method`, `context`, `enc`, `created_at` — MEASURE them against
+the sops binary, do not take them from the docs), plus dropping the backend
+out of the _assert_rekeyable refusal list once it can re-wrap, plus a
+`recipients` argument shape that can name which backend a recipient belongs to.
+
+Order by cost, cheapest first:
+1. HashiCorp Vault via HTTP against the transit engine — a token, a path, and
+   a key name. Testable offline against a vault dev server in CI. This is the
+   one to land when the use case arrives.
+2. (out of scope) PGP via gpg CLI. The most likely "shared with an age file"
+   candidate but no current need.
+3. (out of scope, likely permanent) AWS/GCP/Azure KMS: each needs an SDK or
+   hand-rolled request signing plus credentials, and none can be tested here
+   without an account.
+
+Whatever lands first must NOT weaken the guard in _assert_rekeyable for the
+backends still missing.
+PLAN (Orchestrator, 2026-08-16) -- bewusst NICHT einplanen, bis ein Anwendungsfall da ist.
+
+Der Body hat die Arbeit bereits richtig zugeschnitten: PGP und die drei
+Cloud-KMS sind out of scope und bleiben es. "not implemented, refuses loudly"
+ist die vertretbare Dauerantwort, und der Metadata-Round-Trip deckt das LESEN
+solcher Dokumente heute schon ab.
+
+Bleibt HashiCorp Vault. Auch das ist kein Ticket fuer jetzt, sondern eins fuer
+den Moment, in dem jemand es braucht. Wenn es soweit ist, ist die Form eng:
+
+  1. Die Feldnamen der vault-Eintraege GEGEN DAS BINARY messen, nicht aus der
+     Doku nehmen (path, key, method, context, enc, created_at). Der Body sagt
+     das ausdruecklich, und es ist die einzige Stelle, an der geraten werden
+     koennte.
+  2. encrypt_data_key / decrypt_data_key in File::SOPS::Backend::Vault, in
+     genau der Signatur, die Backend::Age schon hat.
+  3. Das recipients-Argument braucht eine Form, die den Backend benennt --
+     heute ist "recipients" implizit age. Das ist eine API-Aenderung und
+     betrifft auch creation_rules_for, wo age heute der einzige gelesene
+     Schluessel ist.
+  4. hc_vault aus der Refusal-Liste in _assert_rekeyable nehmen -- und NUR das.
+     Der Guard darf fuer die anderen Backends nicht schwaecher werden. Das ist
+     die eine Zeile, an der dieses Ticket schiefgehen kann.
+  5. Testbar offline gegen einen vault dev server.
+
+Board-Handlung jetzt: Prioritaet bleibt low, Status bleibt backlog. Kein Agent
+bekommt das ohne Anwendungsfall.
+MAINTAINER-ENTSCHEIDUNG BESTAETIGT 2026-08-21: bleibt GEPARKT. Nicht neu bewerten, nicht wieder vorschlagen, bis ein Anwendungsfall da ist. Der Body und der Plan vom 2026-08-16 haben die Arbeit bereits richtig zugeschnitten und werden dadurch nicht ungueltig: PGP und die drei Cloud-KMS sind dauerhaft out of scope -- 'not implemented, refuses loudly' ist die vertretbare Dauerantwort, und das LESEN von Dokumenten, die mit solchen Recipients geteilt sind, deckt der Metadata-Round-Trip heute schon ab, MAC und alles. Bleibt HashiCorp Vault als einziger realistischer Kandidat, und auch der erst, wenn jemand ihn braucht. Wer das Ticket dann aufnimmt: die Feldnamen der vault-Eintraege GEGEN DAS BINARY messen, nicht aus der Doku nehmen, und den Guard in _assert_rekeyable fuer die weiterhin fehlenden Backends nicht schwaechen.
