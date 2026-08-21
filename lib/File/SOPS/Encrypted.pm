@@ -9,6 +9,10 @@ use MIME::Base64 qw(encode_base64 decode_base64);
 use Crypt::AuthEnc::GCM qw(gcm_encrypt_authenticate gcm_decrypt_verify);
 use Crypt::PRNG ();
 use JSON::MaybeXS;
+# The type ladder's own value: detect_type produces the type from it and
+# _deserialize_value produces it from the type (docs/adr/0041). It loads
+# nothing from this distribution, so the dependency runs one way only.
+use File::SOPS::Comment;
 use namespace::clean;
 
 =head1 SYNOPSIS
@@ -122,7 +126,7 @@ attaches one to the node that B<follows> it: above a mapping key it stays a
 C<#ENC[...]> line, which L<YAML::XS> discards, but above a B<sequence entry>
 sops writes it as a real sequence element (C<- ENC[...,type:comment]>) and every
 parser keeps it. Such a leaf is not a value, so it has a Perl value of its own
--- L</THE COMMENT LEAF> -- which L</decrypt_value> hands back, L</detect_type>
+-- L<File::SOPS::Comment> -- which L</decrypt_value> hands back, L</detect_type>
 types, and the MAC digest leaves out. Before 0.003 the leaf was read as an
 ordinary string, which failed MAC verification and, under
 C<ignore_mac =E<gt> 1>, put a value in the caller's list that the file does not
@@ -266,9 +270,9 @@ sub is_comment {
 
     if (File::SOPS::Encrypted->is_comment($value)) { ... }
 
-Class method. True for a C<File::SOPS::Comment> (L</THE COMMENT LEAF>), which
-is what a B<plaintext> tree holds where the document holds a comment. False for
-everything else, C<undef> and every other reference included.
+Class method. True for a L<File::SOPS::Comment>, which is what a B<plaintext>
+tree holds where the document holds a comment. False for everything else,
+C<undef> and every other reference included.
 
 It is the predicate behind L</detect_type>'s C<comment> rung, kept as a method
 of its own because the MAC walk has to ask the same question without asking for
@@ -511,11 +515,10 @@ C<type:bytes> is the one exception: it is SOPS's binary type, so it is returned
 as raw bytes with nothing decoded. A C<type:str> whose plaintext is not valid
 UTF-8 is also returned as bytes rather than being mangled.
 
-C<type:comment> comes back as a C<File::SOPS::Comment> (L</THE COMMENT LEAF>)
-and B<not> as its text, because a comment is not a value: an object cannot be
-mistaken for a string by a caller walking the tree, and it is what tells
-L<File::SOPS/encrypt> to write the leaf back as a comment. Until 0.003 this
-returned the text.
+C<type:comment> comes back as a L<File::SOPS::Comment> and B<not> as its text,
+because a comment is not a value: an object cannot be mistaken for a string by
+a caller walking the tree, and it is what tells L<File::SOPS/encrypt> to write
+the leaf back as a comment. Until 0.003 this returned the text.
 
 A C<type:float> value comes back as a scalar Perl calls a float B<even when its
 digits spell a whole number>, so C<detect_type> still says C<float> and the
@@ -651,7 +654,7 @@ itself> rather than from a pattern match on its text.
 
 =over 4
 
-=item * a C<File::SOPS::Comment> (L</THE COMMENT LEAF>) is C<comment>
+=item * a L<File::SOPS::Comment> is C<comment>
 
 =item * a L<JSON::PP::Boolean> (C<JSON-E<gt>true>, C<JSON-E<gt>false>, or a
 C<true>/C<false> loaded by L<YAML::XS> or L<JSON::MaybeXS>) is C<bool>
@@ -1283,7 +1286,7 @@ nothing else; the bytes always come from the value:
 
 =item * a boolean is C<True> or C<False> (SOPS titlecases them)
 
-=item * a comment (L</THE COMMENT LEAF>) is its text, verbatim -- what sops
+=item * a comment (L<File::SOPS::Comment>) is its text, verbatim -- what sops
 puts after the C<#>, leading space included
 
 =item * an integer is its canonical decimal form -- Perl's C<0 + $value>,
@@ -2237,101 +2240,13 @@ sub _random_bytes {
     return $bytes;
 }
 
-###############################################################################
-# The comment leaf (karr #76, docs/adr/0041)
-#
-# sops attaches a comment to the node that FOLLOWS it. Above a mapping key that
-# stays a `#ENC[...,type:comment]` line, which YAML::XS drops before this
-# distribution sees a tree; above a SEQUENCE entry there is no comment line to
-# write, so sops emits the comment as a sequence ENTRY of its own -- in YAML and,
-# measured, in `--output-type json` as well.
-#
-# That entry needs a Perl value that cannot be mistaken for a string, or reading
-# it puts a value in the caller's list that the file does not contain and a
-# re-encrypt makes it permanent (karr #108). This is that value, and it is the
-# same move type:bool already makes with JSON::PP::Boolean.
-#
-# NO OVERLOADED STRINGIFICATION, deliberately. An object that compares equal to
-# a string slips through every `eq` in this distribution, which is how a comment
-# became a value in the first place; and detect_type would then have two ways to
-# answer for the same leaf. ->text is the way to the text.
-#
-# It lives HERE rather than in a file of its own because it is the ladder's
-# value: detect_type produces the type from it and _deserialize_value produces
-# it from the type, and both are three lines away. A file of its own is a move,
-# not a rename, and costs nothing on the day a second such class exists.
-package File::SOPS::Comment;
-
-use strict;
-use warnings;
-use Carp qw(croak);
-
-sub new {
-    my ($class, %args) = @_;
-    my $text = $args{text};
-
-    croak "text required" unless defined $text;
-    croak "a comment's text is a string, not a " . ref($text) . " reference"
-        if ref $text;
-
-    # Measured against sops 3.13.3: a bare `#` above a sequence entry is
-    # written as an UNENCRYPTED empty string element (`- ""`) and no comment
-    # leaf at all, so type:comment never carries an empty plaintext. Refused
-    # here rather than three layers down in encrypt_value, whose message is
-    # about GCM ciphertext length and says nothing about comments.
-    croak "a comment's text cannot be empty: AES-GCM ciphertext is the length "
-        . "of its plaintext, so there is no ENC[...] to write -- and sops "
-        . "itself writes an empty comment as an empty string element rather "
-        . "than as a comment"
-        unless length $text;
-
-    return bless { text => $text }, $class;
-}
-
-sub text { $_[0]->{text} }
-
-package File::SOPS::Encrypted;
-
-=head1 THE COMMENT LEAF
-
-    my $comment = File::SOPS::Comment->new(text => ' a comment');
-    $comment->text;   # => ' a comment'
-
-C<File::SOPS::Comment> is the Perl representation of SOPS's C<type:comment>: a
-leaf that is B<not a value>. sops attaches a comment to the node that follows
-it, and where that node is a sequence entry it has nowhere to put a comment
-line, so it writes the comment as a sequence entry of its own. This class is
-what such an entry becomes on the way in, and what produces one on the way out.
-
-=over 4
-
-=item * L</detect_type> answers C<comment> for it, and L</value_to_bytes>
-writes its text as UTF-8 bytes, verbatim -- the same treatment a string gets.
-
-=item * L</decrypt_value> builds one for every C<type:comment> leaf, so a tree
-handed back by L<File::SOPS/decrypt> holds objects where the document holds
-comments.
-
-=item * It is B<excluded from the MAC digest>, because sops excludes it --
-measured four ways, in both MAC modes.
-
-=item * C<text> is everything after the C<#>, B<leading space included>, which
-is what the plaintext holds. It is never empty: sops writes a bare C<#> as an
-empty string element instead.
-
-=back
-
-There is deliberately B<no overloaded stringification>: a comment that compares
-equal to a string is how one became a value in the first place. It is loaded
-with this module and has no file of its own yet.
-
-See L<docs/adr/0041|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0041-a-sops-comment-is-a-leaf-of-its-own-not-a-value-and-not-a-refusal.md>.
-
 =head1 SEE ALSO
 
 =over 4
 
 =item * L<File::SOPS> - Main SOPS interface
+
+=item * L<File::SOPS::Comment> - the leaf a C<type:comment> value becomes
 
 =item * L<Crypt::AuthEnc::GCM> - AES-GCM implementation from CryptX
 
