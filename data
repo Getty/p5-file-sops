@@ -1,0 +1,21 @@
+---
+class: standard
+completed: 2026-08-21T11:05:04Z
+created: 2026-08-21T09:20:13Z
+id: 155
+priority: low
+started: 2026-08-21T09:28:19Z
+status: done
+tags:
+- env
+- test
+title: t/00-load.t does not load File::SOPS::Format::ENV
+updated: 2026-08-21T11:05:04Z
+---
+
+One line. t/00-load.t enumerates every module in the distribution and use_oks it; File::SOPS::Format::ENV (karr #36, landed 2026-08-21) is missing because the file was outside that task's file boundary.
+
+    use_ok('File::SOPS::Format::ENV');
+
+next to the two other Format handlers. Nothing else is missing: File::SOPS loads it, and t/58-env-format-handler.t exercises it.
+Referenz korrigiert: die Testdatei heisst t/59-env-format-handler.t (t/58 war zeitgleich von karr #144 belegt).
