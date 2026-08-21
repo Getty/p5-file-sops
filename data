@@ -1,0 +1,30 @@
+---
+class: standard
+created: 2026-08-21T05:48:46Z
+id: 132
+priority: medium
+status: backlog
+tags:
+- yaml
+- parser
+- interop
+- multidoc
+title: go-yaml carries the anchor table across --- and both Perl parsers do not
+updated: 2026-08-21T05:48:46Z
+---
+
+Gefunden von der API-Lane beim Vermessen von karr #31 (ADR 0033), sops 3.13.3 in /tmp/sops. Vorbestehend, unabhaengig von der Multi-Doc-Entscheidung, und die einzige der sieben Neubefunde dort, die nicht in ADR 0033 geloest werden kann.
+
+  a: &x 1
+  ---
+  b: *x
+
+go-yaml traegt die Anchor-Tabelle ueber den Dokumenttrenner hinweg: sops -d dieses Streams gibt b: 1 aus. YAML::XS und YAML::PP lehnen BEIDE ab -- der Anchor ist fuer sie mit dem Dokument zu Ende.
+
+Also ein Stream, den sops schreibt und liest und den keiner unserer beiden Parser laden kann. Dieselbe Klasse wie karr #102, #105, #108 und #116, nur dass die Ursache diesmal nicht bei uns liegt, sondern in einer Spezifikationsluecke: YAML 1.2 sagt, Anchors seien dokumentlokal, und go-yaml haelt sich nicht daran.
+
+Nicht auf dieser Schicht loesbar. Ein Fix muesste die Anchor-Tabelle selbst fuehren, also den Parser ersetzen oder das Dokument vor dem Parsen umschreiben -- beides deutlich groesser als das, was karr #31 vorhat.
+
+Vor einer Entscheidung zu klaeren: wie oft entsteht so ein Stream ueberhaupt? sops selbst erzeugt ihn nur, wenn der Klartext schon so aussah. Denkbar ist auch, ihn ausdruecklich und mit klarer Meldung abzulehnen, statt die Meldung von YAML::XS durchzureichen -- das waere die karr-#116-Antwort auf ein Problem, das wir nicht loesen koennen.
+
+Blockiert karr #31 NICHT: ein Stream dieser Form scheitert heute schon am Parser und wuerde es auch nach der Multi-Doc-Umsetzung tun.
