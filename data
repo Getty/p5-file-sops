@@ -1,0 +1,47 @@
+---
+class: standard
+created: 2026-08-21T05:05:28Z
+id: 120
+priority: low
+status: backlog
+tags:
+- robustness
+- diagnostics
+title: Deep-recursion noise remains in the walks outside SOPS.pm
+updated: 2026-08-21T05:05:28Z
+---
+
+Handover from karr #117, which fixed only lib/File/SOPS.pm (Encrypted.pm and
+Format/YAML.pm were held by karr #116 at the time and were off limits).
+
+Every recursive tree walk in this distribution warns "Deep recursion on
+subroutine" once it passes perls fixed threshold of 100, on documents sops
+accepts. #117 gave the walks in SOPS.pm "no warnings recursion" plus a depth
+bound of its own ($File::SOPS::MAX_DEPTH, go-yamls 10000). Measured on a
+265-level alias chain (a document sops accepts): 505 warning lines and 63 KB
+of STDERR before, 168 lines and 24 KB after -- and every remaining line comes
+from File::SOPS::Encrypted::_canonical_floats, which runs inside every emit.
+
+What is left to do, in the files #117 could not touch:
+
+  lib/File/SOPS/Encrypted.pm   _canonical_floats
+  lib/File/SOPS/Format/YAML.pm _reject_comment_leaves, _restring_non_finite_leaves
+  lib/File/SOPS/Format/JSON.pm the same pair, if it carries them
+
+Two changes each, both mechanical and both already made in SOPS.pm:
+
+  1. "no warnings recursion" as the first statement of the walk. Per sub, not
+     per file, so nothing outside the walk loses the warning.
+  2. Carry the key path as ONE array pushed and popped, instead of building
+     [ @$path, $k ] per level. The copy is quadratic in depth: measured in
+     SOPS.pms _sorted_leaves, 4000 levels took 101s and 410 MB, and the same
+     walk with a shared path reaches 10000 levels in 17ms and 24 MB. Copy the
+     path only where a leaf keeps it.
+
+t/45-deep-document-is-quiet.t section 2 is a TODO block that pins exactly this:
+it asserts that a full File::SOPS->encrypt of a 265-level document writes no
+deep-recursion warning at all, and it is expected to fail until this lands.
+Turn the TODO off in the same commit.
+
+_canonical_floats does not need a depth bound of its own: SOPS.pms guards run
+ahead of every emit. It only needs the two lines above.
