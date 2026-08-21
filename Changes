@@ -1447,6 +1447,41 @@ Revision history for File-SOPS
     shares aliases exponentially hangs the same walks, which sops refuses
     separately with `yaml: document contains excessive aliasing`. See
     docs/adr/0025 and karr #110.
+  - BUG FIX: a YAML document that sops writes with a bare `.inf`, `-.inf` or
+    `.nan` in an unencrypted slot is now readable, where it used to fail MAC
+    verification with an error that named nothing. libyaml leaves those
+    spellings a STRING; gopkg.in/yaml.v3 resolves each to a float and sops
+    digests `+Inf` / `-Inf` / `NaN`, so our digest covered four characters and
+    Go's covered four different ones. Measured against sops 3.13.3, twelve
+    tokens in an unencrypted slot: 0 of 12 read before, 12 of 12 after, with
+    `sops -e` and `sops -d` at exit 0 on every one of them throughout.
+    decrypt_file now reproduces sops's own plaintext for such a document, byte
+    for byte. WHAT MADE THIS DIFFERENT from every other repair in this
+    distribution is that the missing fact is not in the scalar: a bare `.inf`
+    and a quoted `".inf"` have DIFFERENT sops digests (`+Inf` against `.inf`)
+    and YAML::XS hands back the same string for both - measured in one
+    document, sops writing `- .inf` and `- ".inf"` as adjacent list elements
+    and reading both back at exit 0. So the repair asks YAML::PP, already this
+    distribution's second parser, whether the document wrote the scalar PLAIN,
+    and only then replaces it - with a dualvar carrying the float go-yaml
+    resolves and the document's own token, so the value is right numerically
+    and the emitter writes the file back exactly as it read it. The value
+    still comes from the existing Go model and never from YAML::PP. NOTHING
+    THAT WORKED STOPS WORKING: a quoted token, the twelve near-miss spellings
+    (`.INf` `+.nan` `.infinity` `Inf` `NaN` and the rest), an encrypted
+    `type:float` whose plaintext is `+Inf`, and ADR 0023's overflow literals
+    are all byte-identical before and after. A plaintext document is not
+    touched either, so encrypt_file still gives ADR 0013's refusal, which
+    names the key path and both resolvers. STILL REFUSED, and deliberately:
+    such a document cannot be written back - rotate and edit croak from the
+    karr #59 non-finite guard, which is untouched, though it now names the
+    leaf where a MAC error named nothing. That guard turns out to be too wide
+    for this one scalar shape (measured: with it bypassed in a scratch
+    process, the document written is `sops -d` exit 0), and narrowing it is
+    karr #113 with its own corpus. Cost: a document that never mentions
+    `.inf` or `.nan` in its raw bytes pays nothing measurable, 0.096ms per
+    parse before and after; one that really holds a token pays a second
+    YAML::PP load. See docs/adr/0026 and karr #105.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

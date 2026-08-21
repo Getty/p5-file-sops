@@ -5,6 +5,7 @@ use Moo;
 use B ();
 use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar refaddr);
+use YAML::PP;
 use YAML::XS qw(Load Dump);
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
@@ -153,6 +154,14 @@ sub parse {
     # AFTER the split, so the sops section is never rewritten -- and after the
     # HashRef check, so there is a tree to walk. See _restring_non_finite_leaf.
     _restring_non_finite_leaves($data, {});
+
+    # AFTER _restring_non_finite_leaves, and that order is load-bearing: the
+    # walk above turns a leaf whose PUBLIC NOK and POK are both set and whose
+    # NV is non-finite back into its string half, which is exactly the shape of
+    # the dualvar the walk below produces. Second, it would undo this one leaf
+    # for leaf. See _restore_plain_infinities for why it runs only for a
+    # document that carried a sops section.
+    _restore_plain_infinities($data, $content) if $metadata;
 
     # Same placement, same reason: after the split, so the metadata's own
     # mac: ENC[...] is out of reach. See _reject_comment_leaves.
@@ -334,6 +343,217 @@ sub _restring_non_finite_leaf {
     return;
 }
 
+###############################################################################
+# A YAML infinity the DOCUMENT wrote plain (karr #105, docs/adr/0026)
+#
+# The mirror image of the walk above, and it needs a different authority.
+# libyaml leaves `.inf` a STRING; gopkg.in/yaml.v3 resolves it to the float
+# +Inf, and sops digests `+Inf`. So a document sops writes and `sops -d`
+# verifies failed its MAC here, naming nothing.
+#
+# What makes this repair unlike every other one in this distribution is that
+# the missing fact is NOT in the SV. Measured against sops 3.13.3, one
+# unencrypted slot per row:
+#
+#   v_unencrypted: .inf      Go: float +Inf,  digested `+Inf`   <- we digested `.inf`
+#   v_unencrypted: ".inf"    Go: string,      digested `.inf`   <- we agree, today
+#
+# and YAML::XS hands back the SAME POK-only scalar for both. Both spellings
+# also occur in ONE document as easily as in two -- measured, sops writes this
+# and reads it back at exit 0:
+#
+#   list_unencrypted:
+#       - .inf          <- digested `+Inf`
+#       - ".inf"        <- digested `.inf`
+#
+# So a repair keyed on the leaf's TEXT fixes the first row and silently breaks
+# the second, which works today. The question is not what the value is; it is
+# whether the document wrote the scalar PLAIN, and that is a fact about the
+# bytes.
+#
+# YAML::PP -- already this distribution's second parser (ADR 0001) -- answers
+# it. Its Core schema resolves a scalar to a non-finite number IFF the scalar
+# was written plain and its token is one of the twelve in %GO_CONSTANT.
+# Measured: 12 of 12 plain tokens yes; 0 of 24 quoted; 0 of 12 near misses
+# (`.INf` `.iNF` `.Nan` `.NAn` `+.nan` `-.nan` `-.NAN` `.infinity` `.Infinity`
+# `Inf` `inf` `NaN`), every one of which is a type:str to sops and reads
+# correctly here today. On the WIRE -- which is what this path sees -- sops has
+# already normalised `!!float .inf` and `&a .inf` to a bare `.inf` and
+# `!!str .inf` and `'.inf'` to a quoted `".inf"`, so only those two spellings
+# arrive, and the oracle separates them in all four cases.
+#
+# This is NOT the "ask YAML::PP instead of modelling Go" that ADR 0013 and
+# ADR 0023 rejected. There the question was what a value IS, and YAML::PP
+# answers it the way libyaml does -- `0755` is 755 to both and 493 to Go, so it
+# agrees with the side that is already wrong. Here it is asked whether a scalar
+# was written plain, which is syntax rather than resolution; the VALUE still
+# comes from %GO_CONSTANT, and the token has to be in %GO_CONSTANT before
+# YAML::PP is consulted at all.
+#
+# ONLY FOR A DOCUMENT THAT CARRIED A `sops:` SECTION. A plaintext document has
+# no MAC for a foreign reader to disagree with, and on the encrypt path
+# ADR 0013's guard already refuses this leaf with a message that names the key
+# path and both resolvers -- a better error than the non-finite guard's, whose
+# advice ("store the value as a string") leads straight back to that refusal,
+# because the string `.inf` is written bare in YAML.
+#
+# WHAT IS WRITTEN BACK is a dualvar, not a bare infinity, and that is measured
+# rather than tidy: YAML::XS writes a bare non-finite NV as `Inf` / `-Inf` /
+# `NaN`, tokens go-yaml resolves as STRINGS, and writes dualvar(+Inf, '.inf')
+# as `.inf`, the token sops itself writes. So decrypt_file reproduces sops's
+# own plaintext byte for byte instead of degrading the value on the first
+# round trip. Same shape as ADR 0011's carrier: a float leaf whose string half
+# is the text the document contains.
+#
+# The karr #59 non-finite guard is untouched, so such a document still cannot
+# be written back -- by that guard now, naming the leaf, rather than by a MAC
+# error naming nothing. Narrowing it is karr #113 and needs its own corpus.
+my $PLAIN_STYLE_LOADER = YAML::PP->new(schema => [qw( Core )]);
+
+sub _restore_plain_infinities {
+    my ($data, $content) = @_;
+
+    # The cheapest gate first, and a sound one: a PLAIN scalar is literal text,
+    # so a token this walk could repair is in the raw bytes or it is nowhere.
+    # The only way the string `.inf` reaches a leaf without those four bytes
+    # being in the document is an escape in a QUOTED scalar, which this walk
+    # does not repair anyway -- so the pre-filter can only be conservative in
+    # the direction that changes nothing. A document that never mentions one
+    # pays a single scan and no tree walk at all.
+    return unless _go_non_finite_in_text($content);
+
+    # Then the tree, because `config.info` and `.infrastructure` carry those
+    # bytes too: one flag per leaf and, for a leaf starting `.`, `+` or `-`,
+    # one hash lookup. YAML::PP parses nothing unless a candidate is really
+    # there.
+    return unless _has_plain_infinity_candidate($data, {});
+
+    # FAIL SAFE, deliberately: YAML::PP is a second parser and refuses things
+    # YAML::XS accepts. Measured, the one that really occurs is a recursive
+    # anchor -- `Found cyclic ref for alias 'a'` where YAML::XS hands back a
+    # real Perl cycle -- and such a document is refused downstream anyway
+    # (karr #110). Nothing is repaired then, which is exactly today's behaviour
+    # and today's MAC error, never a partially repaired tree whose digest would
+    # be wrong in a new way.
+    my $theirs = eval { $PLAIN_STYLE_LOADER->load_string($content) };
+    return unless ref $theirs eq 'HASH';
+    delete $theirs->{sops};
+
+    # Collected first and applied only if the two trees turned out structurally
+    # identical, for the same reason.
+    my @fix;
+    return unless _pair_plain_infinities($data, $theirs, \@fix, {});
+
+    for my $entry (@fix) {
+        my ($slot, $token) = @$entry;
+        $$slot = dualvar(_go_non_finite_double($token), $token);
+    }
+
+    return;
+}
+
+sub _has_plain_infinity_candidate {
+    my ($node, $seen) = @_;
+
+    if (ref $node eq 'HASH') {
+        return 0 if $seen->{refaddr($node)}++;
+        _has_plain_infinity_candidate($node->{$_}, $seen) and return 1
+            for keys %$node;
+        return 0;
+    }
+    if (ref $node eq 'ARRAY') {
+        return 0 if $seen->{refaddr($node)}++;
+        _has_plain_infinity_candidate($_, $seen) and return 1 for @$node;
+        return 0;
+    }
+    return 0 if ref $node;
+    return defined _plain_infinity_token($node);
+}
+
+# The two trees walked side by side, the way _document_leaves already pairs the
+# ordered reparse against the real one (ADR 0001). Any disagreement about shape
+# -- a container against a leaf, a different key set, a different length --
+# abandons the whole repair rather than guessing which side is right.
+sub _pair_plain_infinities {
+    my ($ours, $theirs, $fix, $seen) = @_;
+
+    if (ref $ours eq 'HASH') {
+        return 0 unless ref $theirs eq 'HASH';
+        return 1 if $seen->{refaddr($ours)}++;
+        return 0 unless keys %$ours == keys %$theirs;
+        for my $key (keys %$ours) {
+            return 0 unless exists $theirs->{$key};
+            return 0
+                unless _pair_plain_infinities($ours->{$key}, $theirs->{$key},
+                                              $fix, $seen);
+            my $token = _plain_infinity_leaf($ours->{$key}, $theirs->{$key});
+            push @$fix, [ \$ours->{$key}, $token ] if defined $token;
+        }
+        return 1;
+    }
+
+    if (ref $ours eq 'ARRAY') {
+        return 0 unless ref $theirs eq 'ARRAY';
+        return 1 if $seen->{refaddr($ours)}++;
+        return 0 unless @$ours == @$theirs;
+        for my $i (0 .. $#$ours) {
+            return 0
+                unless _pair_plain_infinities($ours->[$i], $theirs->[$i],
+                                              $fix, $seen);
+            my $token = _plain_infinity_leaf($ours->[$i], $theirs->[$i]);
+            push @$fix, [ \$ours->[$i], $token ] if defined $token;
+        }
+        return 1;
+    }
+
+    # A leaf on our side has to be a leaf on theirs, or the trees do not
+    # describe the same document and nothing here can be trusted.
+    return ref($theirs) ? 0 : 1;
+}
+
+# $_[0] is OUR leaf and $_[1] is YAML::PP's, both by alias: the flags come off
+# the SVs the trees hold rather than off copies, and B reads the NV and the PV
+# out of the SV's own slots. Nothing numifies anything, so this cannot retype a
+# scalar the way a numeric comparison on it would (karr #32).
+sub _plain_infinity_leaf {
+    return undef unless defined $_[0] && !ref $_[0];
+    return undef unless defined $_[1] && !ref $_[1];
+
+    # Ours has to be a plain string -- what YAML::XS returns for all twelve
+    # tokens. A leaf that already carries a number is not one of them.
+    my $ours = B::svref_2object(\$_[0]);
+    my $flags = $ours->FLAGS;
+    return undef unless $flags & B::SVf_POK();
+    return undef if $flags & (B::SVf_NOK() | B::SVf_IOK());
+
+    my $token = $ours->PV;
+    return undef unless defined _go_non_finite_double($token);
+
+    # And theirs has to be the non-finite number, which is how YAML::PP says
+    # `this scalar was written plain`.
+    my $theirs = B::svref_2object(\$_[1]);
+    return undef unless $theirs->FLAGS & B::SVf_NOK();
+    my $nv = $theirs->NV;
+    return undef unless $nv != $nv
+        || $nv == $POSITIVE_INFINITY
+        || $nv == -$POSITIVE_INFINITY;
+
+    return $token;
+}
+
+# The gate's own predicate, without a second tree to pair against.
+sub _plain_infinity_token {
+    return undef unless defined $_[0];
+
+    my $flags = B::svref_2object(\$_[0])->FLAGS;
+    return undef unless $flags & B::SVf_POK();
+    return undef if $flags & (B::SVf_NOK() | B::SVf_IOK());
+
+    my $token = B::svref_2object(\$_[0])->PV;
+    return undef unless $token =~ /\A[-+.]/;
+    return defined _go_non_finite_double($token) ? $token : undef;
+}
+
 =method parse
 
     my ($data, $metadata) = File::SOPS::Format::YAML->parse($yaml_string);
@@ -377,7 +597,9 @@ refusal in L<File::SOPS::Encrypted/assert_representable>).
 Three things this is B<not>. It does not touch the twelve spellings go-yaml
 really does resolve to a non-finite float -- C<.inf .Inf .INF +.inf +.Inf
 +.INF -.inf -.Inf -.INF .nan .NaN .NAN> -- because L<YAML::XS> returns every
-one of those as a plain string with no numeric half at all. It does not loosen
+one of those as a plain string with no numeric half at all; those have a
+repair of their own since 0.003, and a different one, described in
+L</A plain infinity comes back as the float go-yaml reads>. It does not loosen
 L<File::SOPS::Encrypted/assert_representable>: a caller who passes
 L<File::SOPS/encrypt> a real C<9**9**9> still gets the refusal, because what is
 repaired here is a parse result and not a rule about values. And it does not
@@ -388,6 +610,48 @@ The cost is that the leaf is written back B<quoted> -- C<v: '1e400'> where sops
 writes C<v: 1e400>. Both are a string to both parsers, so the digest is the same
 text either way. See
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
+
+=head3 A plain infinity comes back as the float go-yaml reads
+
+The mirror image of the section above, and it needs a different authority.
+L<YAML::XS> leaves C<.inf> a B<string>; go-yaml resolves it to the float
+C<+Inf>, and sops digests C<+Inf>. So a document sops writes and C<sops -d>
+verifies used to fail MAC verification here, with an error that named nothing.
+
+Since 0.003 a leaf the document wrote as a B<plain> scalar, and whose token is
+one of the twelve above, comes back as a L<Scalar::Util/dualvar>: the float
+go-yaml resolved, carrying the document's own token as its text. So
+L<File::SOPS::Encrypted/value_to_bytes> derives C<+Inf> / C<-Inf> / C<NaN> --
+the bytes sops put in the MAC -- while every emitter writes the file back
+exactly as it read it, and L<File::SOPS/decrypt_file> reproduces sops's own
+plaintext byte for byte.
+
+B<The word "plain" is the whole of it>, and it is why this repair is not the
+one above. Measured against sops 3.13.3, in one document:
+
+    list_unencrypted:
+        - .inf          # go-yaml: a float,  digested +Inf
+        - ".inf"        # go-yaml: a string, digested .inf
+
+Both spellings arrive here as the same L<YAML::XS> string, and the two have
+different digests. Anything that decided from the leaf's B<text> would fix the
+first element and silently break the second, which reads correctly today. So
+the document is asked instead: L<YAML::PP>, already this distribution's second
+parser, resolves such a scalar to a non-finite number exactly when it was
+written plain, and only a token that is already in this module's model of
+go-yaml is repaired at all. If L<YAML::PP> refuses the document, or the two
+parse trees disagree about its shape, B<nothing> is repaired.
+
+Two limits worth knowing. This runs only for a document that carried a
+C<sops:> section: a plaintext document has no MAC for a foreign reader to
+disagree with, and on the encrypt path L</emit>'s own guard already refuses
+such a leaf with a message that names the key path. And such a document still
+cannot be B<written> -- L<File::SOPS/rotate> and L<File::SOPS/edit> croak from
+the non-finite refusal in L<File::SOPS::Encrypted/assert_representable>, which
+is untouched, though it now names the leaf where a MAC error named nothing.
+
+See
+L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>.
 
 =head3 A comment inside a list is refused
 
@@ -730,6 +994,40 @@ my %GO_CONSTANT = (
     '-.inf' => '-Inf',  '-.Inf' => '-Inf',  '-.INF' => '-Inf',
     '.nan'  => 'NaN',   '.NaN'  => 'NaN',   '.NAN'  => 'NaN',
 );
+
+# The DOUBLE go-yaml resolves one of those tokens to, or undef for a token it
+# does not resolve to a number at all. Derived from %GO_CONSTANT's own byte
+# string rather than from a second list of spellings: there is one token list
+# in this module, and a copy of it is how a repair and the guard it depends on
+# drift apart (ADR 0002's defect class, and karr #89's shape one level down).
+#
+# It lives HERE rather than beside its caller because it reads %GO_CONSTANT,
+# and a `my` hash is not in scope above its own declaration. See
+# _restore_plain_infinities, karr #105 and docs/adr/0026.
+# The four bytes a repairable token cannot be written without. Built from the
+# same %GO_CONSTANT keys, so widening that table widens this with it.
+my $GO_NON_FINITE_TEXT = do {
+    my @token = grep { $GO_CONSTANT{$_} =~ /\A(?:[-+]Inf|NaN)\z/ } keys %GO_CONSTANT;
+    my %tail  = map  { (substr($_, -4) => 1) } @token;
+    my $alt   = join '|', map { quotemeta } sort keys %tail;
+    qr/(?:$alt)/;
+};
+
+sub _go_non_finite_in_text {
+    return $_[0] =~ $GO_NON_FINITE_TEXT ? 1 : 0;
+}
+
+sub _go_non_finite_double {
+    my ($token) = @_;
+
+    my $bytes = $GO_CONSTANT{$token};
+    return undef unless defined $bytes;
+
+    return  $bytes eq '+Inf' ?  $POSITIVE_INFINITY
+          : $bytes eq '-Inf' ? -$POSITIVE_INFINITY
+          : $bytes eq 'NaN'  ?  $POSITIVE_INFINITY - $POSITIVE_INFINITY
+          :                     undef;
+}
 
 # strconv.ParseInt/ParseUint with base 0, as a digit string. The magnitude is
 # accumulated in Perl's own integer space, guarded by a STRING comparison
