@@ -1,0 +1,75 @@
+---
+class: standard
+created: 2026-08-21T05:11:08Z
+id: 121
+priority: low
+status: backlog
+tags:
+- wire
+- yaml
+- json
+- interop
+- mac
+title: sops schreibt eine negative Null als bare -0 und liest sie als int zurueck
+  -- die Datei faellt durch ihren eigenen MAC
+updated: 2026-08-21T05:11:08Z
+---
+
+Gefunden von der Format-Lane beim Vermessen von karr #106, sops 3.13.3 in
+/tmp/sops. NICHT unser Fehler und von unserem Schreibpfad aus unerreichbar --
+aber eine Datei, die sops selbst schreibt und danach selbst ablehnt, und die
+wir folglich auch nicht lesen koennen.
+
+REPRODUKTION (YAML, unverschluesselter Slot; JSON verhaelt sich gleich):
+
+  plaintext   keep: x
+              v_unencrypted: -1e-400
+
+  sops -e     exit 0, schreibt  v_unencrypted: -0
+  sops -d     exit 51, "MAC mismatch. File has <A>, computed <B>"
+  sops rotate exit 51, dieselbe Ursache
+  unser decrypt derselben Datei: MAC verification failed -- richtig, die Datei
+              widerspricht ihrem eigenen MAC.
+
+URSACHE, BEWIESEN UND NICHT GERATEN:
+  1. sops rendert den float -0.0 als Token `-0` in den unverschluesselten Slot
+     (FormatFloat(-0,'f',-1,64) == "-0").
+  2. yaml.v3 loest `-0` beim Wiedereinlesen als INT auf, nicht als float.
+     Direkt gemessen, drei Leaves in einem Dokument:
+       a: -0    -> type:int
+       b: -0.0  -> type:float
+       c: -1e-400 -> type:float
+  3. Der Schreiblauf digestet also "-0", der Leselauf "0".
+  4. Gegenprobe, die es festnagelt: dieselbe von sops geschriebene Datei
+     haendisch von `v_unencrypted: -0` auf `v_unencrypted: -0.0` geaendert
+     -> sops -d exit 0. Nichts anderes veraendert.
+
+BETROFFENE LITERALE (gemessen, je beide Formate): -1e-400, -1e-500,
+-2.4e-324, -0.0. Also jeder Wert, den Go als negative Null aufloest.
+NICHT betroffen: -0 (ist auf beiden Seiten int), -1e3, -0.5.
+
+WIR SIND SAUBER, und das ist gemessen, nicht angenommen:
+  - Unser Emitter schreibt fuer ein Perl -0.0-Leaf `-0.0`, nicht `-0`
+    (ADR 0014). sops -d unserer Datei: exit 0.
+  - Ein aus `v: -1e-400` geparstes Leaf schreiben wir woertlich als
+    `-1e-400` zurueck. sops -d unserer Datei: exit 0.
+  In allen 6 Korpuszeilen mit negativer Null steht sd=0 fuer unsere Datei.
+  Der Fehler ist also ausschliesslich ueber ein von sops geschriebenes
+  Dokument erreichbar.
+
+WAS ZU TUN IST -- vermutlich nichts im Code, aber die Entscheidung gehoert
+der Wire- oder API-Lane:
+  (a) Nichts. Die Datei ist objektiv kaputt, unser Refusal ist korrekt, und
+      ignore_mac => 1 ist der vorhandene Rettungsweg.
+  (b) Die Fehlermeldung von "MAC verification failed" um einen Hinweis
+      erweitern, wenn das Dokument einen bare `-0` in einem unverschluesselten
+      Slot traegt -- das ist eine bekannte sops-Signatur und der Nutzer sucht
+      sonst bei sich. Kostet ein Textmuster ueber den ROHTEXT des Dokuments
+      (nicht ueber einen Wert), also ADR 0002 unberuehrt.
+  (c) Upstream melden. Es ist ein echter sops-Bug: sops -e gefolgt von
+      sops -d auf derselben Datei schlaegt fehl, ohne dass jemand die Datei
+      angefasst hat.
+
+Braucht die sops-Binary zum Beweis. Prioritaet niedrig: es kostet ein
+negatives, zu Null unterlaufendes Literal oder eine negative Null in einem
+unverschluesselten Slot, um ueberhaupt hinzukommen.
