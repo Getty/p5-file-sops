@@ -1,0 +1,53 @@
+---
+class: standard
+completed: 2026-08-21T04:43:41Z
+created: 2026-08-21T02:06:14Z
+depends_on:
+- 102
+id: 111
+priority: medium
+started: 2026-08-21T02:09:37Z
+status: done
+tags:
+- api
+- docs
+- pod
+- yaml
+title: 'File::SOPS POD: decrypt and extract return a string for a YAML non-finite
+  spelling since ADR 0023'
+updated: 2026-08-21T04:43:41Z
+---
+
+Uebergabe der Wire-Lane an die API-Lane, 2026-08-21, beim Abarbeiten von karr #102 / ADR 0023. Keine Messung noetig, die steht dort vollstaendig -- hier fehlt nur der Satz im oeffentlichen Vertrag.
+
+WAS SICH GEAENDERT HAT: karr #102 laesst File::SOPS::Format::YAML::parse ein Leaf als STRING zurueckgeben, das libyaml zu einem nicht-endlichen Float numifiziert hat -- 1e400, ein 401-stelliges Integer, und die baren Schreibweisen Inf inf INF Infinity NaN nan NAN -Inf +Inf. Das ist das Leaf, das go-yaml sieht, und der Grund, warum sops solche Dokumente schreiben und lesen kann und wir es bis dahin nicht konnten.
+
+WAS DAS FUER EINEN AUFRUFER BEDEUTET, und was in lib/File/SOPS.pm dokumentiert werden muss: decrypt und extract geben fuer einen UNVERSCHLUESSELTEN Slot, der eine dieser Schreibweisen traegt, jetzt einen String zurueck, wo vorher ein echter Perl-Inf bzw. -NaN zurueckkam. Das ist eine KORREKTUR und kein Bruch -- sops liest dort ebenfalls einen String, und der alte Rueckgabewert gehoerte zu einem Dokument, dessen MAC bei uns ohnehin scheiterte -- aber es ist eine Aenderung am dokumentierten Rueckgabeverhalten und gehoert deshalb in die POD von File::SOPS, nicht nur in die von Format::YAML.
+
+NICHT BETROFFEN, und der Unterschied gehoert in denselben Satz: ein VERSCHLUESSELTER type:float mit +Inf/-Inf/NaN entschluesselt weiterhin zu einem echten Perl-Nicht-Endlich-Float, byte-identisch (gemessen: 000000000000f07f / f0ff / f8ff vor und nach der Aenderung). Der Walk kann so ein Leaf konstruktionsbedingt nicht erreichen, weil zur Parse-Zeit jedes verschluesselte Leaf noch ein ENC[...]-STRING ist, POK-only.
+
+DIE VORLAGE STEHT SCHON DA: die Tabelle "What changes for existing callers" in docs/adr/0023 hat die Zeile, die gebraucht wird, und =head3 "A literal that overflows a double comes back as a string" unter =method parse in Format/YAML.pm sagt es fuer den Parser. Was fehlt, ist die Entsprechung auf der Ebene, auf der ein Aufrufer sie sucht.
+
+Die Wire-Lane hat lib/File/SOPS.pm bewusst nicht angefasst -- fremde Lane.
+
+Lane: api. Braucht kein sops-Binary. Reine POD-Arbeit, aber am oeffentlichen Vertrag.
+api-111, 2026-08-21: POD ergaenzt in lib/File/SOPS.pm, nur diese Datei, kein Code.
+
+Vier-Zellen-Messung an HEAD 2c9ee58 gegen sops 3.13.3 (/tmp/sops), Dokument von sops -e geschrieben, sops -d exit 0:
+  decrypt  unverschluesselter Slot -> POK-only String mit dem Text des Literals (1e400, 401 Ziffern, Inf inf INF Infinity NaN nan NAN -Inf +Inf), MAC verifiziert, 11 von 11
+  extract  unverschluesselter Slot -> derselbe String, KEIN dualvar (ein String ist kein Float)
+  decrypt  verschluesselter type:float (.inf/-.inf/.nan) -> echter Perl-Nicht-Endlich-Float, NOK-only, 000000000000f07f / f0ff / f8ff -- Behauptung der Wire-Lane aus Aufrufersicht bestaetigt
+  extract  verschluesselter type:float -> derselbe bare NV, ebenfalls KEIN dualvar (NO_AGREED_FORM deckt NaN/+-Inf ab)
+Zusatz: 0 + der Rueckgabewert liefert fuer alle Schreibweisen denselben Double wie vorher, ohne Warnung -- die Korrektur kostet keine Arithmetik, sie bewegt den SV-Typ.
+
+Ergaenzt: neuer =head3 'A YAML literal that overflows a double comes back as a string' unter =method decrypt, plus ein Absatz unter =method extract.
+
+FALSCHE ZUSAGE GEFUNDEN und korrigiert, ohne Codeaenderung: der Absatz 'A literal that overflows a double ... dies ... on every path that writes the value' unter =head3 'A number past Go int64 is a float' war seit 2c9ee58 messbar falsch. Gemessen: YAML encrypt_file mit 1e400 OK und sops -d exit 0; rotate auf so einem Dokument OK und sops -d exit 0; sops -e auf YAML exit 0 mit type:str in BEIDEN Slots. Der Croak bleibt nur, wo ein echter nicht-endlicher Double in den Baum kommt: 9**9**9 vom Aufrufer und JSON. Auch der Lesesatz war falsch: JSON liefert einen bare Inf OHNE die Ziffern, und decrypt stirbt vorher an MAC verification failed.
+
+Nebenbefund selbst nachgemessen, kein neues Ticket noetig: unverschluesseltes .inf von sops -> MAC verification failed hier, verschluesseltes .inf liest sich als Inf. Das ist karr #105, unveraendert.
+
+Kein Changes-Eintrag noetig: der Block unter NEXT nennt die Rueckgabeaenderung bereits woertlich.
+
+prove -lr t/: 41 Dateien 934/934 PASS (zu Beginn 40/923, t/40 kam vom parallelen Agenten dazu). SOPS_BIN=/tmp/sops prove -l t/04-interop.t: 32/32 PASS, LIEF, sops 3.13.3. dzil build plus podchecker ueber alle 7 gewobenen Module: 7x pod syntax OK, author-pod-links.t und author-pod-syntax.t gruen.
+POD ergaenzt bei decrypt und extract; zusaetzlich eine FALSCHE Zusage in =head3 'A number past Go's int64 is a float' korrigiert -- sie behauptete, encrypt_file/rotate stuerben an einem YAML-Overflow-Literal, was seit ADR 0023 nicht mehr stimmt, und schrieb JSONs exit-2-Unmarshal-Fehler beiden Formaten zu, was nie stimmte. Gewobene POD gegen podchecker geprueft, 7 Module, 0 tote Links.
+ABGENOMMEN 2026-08-21. Reine POD-Arbeit, und sie hat mehr geliefert als bestellt: eine FALSCHE Zusage in =head3 'A number past Go's int64 is a float' korrigiert, deren drei Haelften alle nicht mehr stimmten. Gewobene POD gegen podchecker geprueft, 7 Module, 0 tote Links -- der Check, den xt/author-pod-syntax.t laut #98 nicht leisten kann. Commit d8d2325.
