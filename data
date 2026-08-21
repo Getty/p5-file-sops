@@ -1,0 +1,105 @@
+---
+class: standard
+completed: 2026-08-21T04:43:36Z
+created: 2026-08-20T14:50:05Z
+id: 102
+priority: medium
+started: 2026-08-21T01:22:18Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- guards
+title: A YAML integer literal that overflows a double is refused where sops writes
+  it
+updated: 2026-08-21T04:43:36Z
+---
+
+Found while measuring karr #63 (sops 3.13.3 at /tmp/sops). Pre-existing, independent of #63 and of ADR 0020, and JSON does NOT have it.
+
+A bare YAML integer literal with more digits than a double can hold -- 1 followed by 400 zeros -- comes out of YAML::XS as NOK+POK with the NV +Inf. detect_type calls it float, value_to_bytes writes +Inf, and assert_representable refuses it with the karr #59 non-finite guard.
+
+sops writes that document. Measured:
+
+  keep: x
+  v_unencrypted: 1000...0   (401 chars)
+
+  sops -e   -> exit 0, the literal reaches the file verbatim
+  File::SOPS encrypt of the same tree -> CROAK, "value is a non-finite float (+Inf)"
+
+go-yaml appears to leave a literal that overflows float64 as a STRING rather than resolving it to a number, which is why sops can carry it and we cannot: our parser has already turned it into +Inf before any guard sees it.
+
+The JSON side is the opposite and needs nothing: sops REFUSES such a JSON document at unmarshal time ("strconv.ParseFloat: value out of range", exit 2), so a croak there is the reference behaviour. ADR 0020 notes this as the one place its change makes JSON croak where it used to write a string, and that is correct for JSON.
+
+Open question, and the reason this is low: whether the right answer is to read the literal as a str when Go would (which means modelling go-yaml resolution for the overflow case, next to _go_int and _go_float in Format::YAML), or to accept the divergence and document it. Do not fix by loosening the non-finite guard -- that guard is right about every value it was written for.
+
+Wire lane, with format lane for the resolution model. Needs the sops binary to prove.
+MESSUNG UND UEBERGABE, Format-Lane, 2026-08-21, sops 3.13.3 in /tmp/sops. Alles unten ist AUSGEFUEHRT, nicht abgeleitet. Nichts im Repository geaendert -- der Eingriff bewegt den Typ eines Leafs und damit den Digest, also gehoert er der Wire-Lane. Prototyp und Messharness liegen im Scratchpad unter m102/ (proto/ = gepatchte pristine Kopie von 3e5e6b0, base/ = ungepatcht).
+
+PRIORITAET VON low AUF medium GEHOBEN, und der Grund ist die Haelfte, die dieses Ticket nicht kannte: es ist nicht nur ein Schreib-, sondern ein LESEFEHLER. Zehn Dokumente, die sops schreibt UND selbst verifiziert, kann File::SOPS bei 3e5e6b0 nicht lesen -- 10 von 10 "MAC verification failed", mit dem Prototyp 10 von 10 verifiziert:
+  1e400  -1e400  1.5e400  1e309  1e310  1e4000  1+400 Nullen  -(dito)  +(dito)  2**1024-2**970
+Option (ii) des Bodys -- Divergenz dokumentieren -- hiesse also, dauerhaft festzuschreiben, dass gueltige sops-Ausgabe hier unlesbar ist.
+
+WO DAS VERHALTEN WIRKLICH KIPPT: nicht bei der Ziffernzahl und nicht bei uint64max, sondern exakt bei strconv.ParseFloat ErrRange.
+  1 + 18 Nullen (19 Ziffern)   sops -e exit 0    verschluesselt type:int    unverschluesselt woertlich
+  1 + 19 Nullen (20 Ziffern)   sops -e EXIT 23   "Cannot walk value, unknown type: uint64"
+  1e20 .. 1e308 (21-309 Z.)    sops -e exit 0    type:float                 unverschluesselt UMGESCHRIEBEN zu 1e+20 .. 1e+308
+  1e309, 1e400 (310+ Ziffern)  sops -e exit 0    type:str                   woertlich
+Auf das Bit genau an der Rundungsschwelle 2**1024-2**970, beide 309 Ziffern:
+  2**1024-2**970-1   sops type=float, Draht 1.7976931348623157e+308
+  2**1024-2**970     sops type=str,   Draht woertlich
+Perl kippt am SELBEN Token: NV=1.7976931348623157e+308, dann NV=+Inf. Gos ErrRange und Perls NV, das nicht-endlich wird, sind dieselbe IEEE-754-Bedingung. Die im Body vermutete Erklaerung ("go-yaml laesst es als String stehen") stimmt also, aber die Grenze ist eine andere als vermutet.
+
+UNTERLAUF TUT DAS NICHT: 1e-400 -> sops type:float, Draht 0, exit 0. Ein Praedikat auf ein nicht-endliches NV kann am kleinen Ende nicht feuern. Separat als karr #106 erfasst.
+
+VERSCHLUESSELTER SLOT, den der Body nicht nennt: sops schreibt type:str und sops -d gibt das Literal woertlich zurueck. File::SOPS croakt auch dort, weil assert_representable vor der Verschluesselung laeuft -- BEIDE Slots croaken. Der im Body zitierte croak ist tatsaechlich der verschluesselte v:-Slot.
+
+ZWEITE KLASSE, GLEICHER MECHANISMUS, GLEICHER FIX: Inf inf INF Infinity NaN nan NAN -Inf +Inf kommen aus YAML::XS ebenfalls als NOK+POK mit nicht-endlichem NV. sops laesst alle als type:str woertlich stehen, exit 0. Schreibseite heute: 6/6 croak. Leseseite heute: 4/6 scheitern am MAC -- NaN und -Inf verifizieren nur zufaellig, weil unsere Go-Rendering zufaellig dem Quelltoken gleicht.
+
+WARUM DAS PRAEDIKAT SICHER IST: die einzigen Tokens, die Go zu einem echten nicht-endlichen Float aufloest, sind .inf .Inf .INF +.inf -.inf .nan .NaN .NAN -- und YAML::XS gibt jedes davon POK-ONLY zurueck. Die beiden Mengen sind disjunkt. _go_scalar_bytes gibt fuer alle 19 betroffenen Schreibweisen bereits das Token zurueck: das Go-Modell in Format::YAML ist schon richtig, falsch ist nur unser eigenes Parse-Ergebnis.
+
+JSON BRAUCHT NICHTS, bestaetigt: sops -e auf eine ueberlaufende JSON-Zahl ist exit 2, strconv.ParseFloat: value out of range.
+
+EMPFEHLUNG: Option (i). Das Literal als str lesen, wo Go es als str liest. Das Modell muss nicht ERFUNDEN werden -- Perls NV, das nicht-endlich wird, IST Gos ErrRange, bitgenau an der Schwelle gemessen. Das ist ein festerer Boden als jedes Schreibweisenmodell in ADR 0013.
+
+DER EINGRIFF, praezise: in File::SOPS::Format::YAML::parse, nach dem Metadata-Split und vor dem return, $data durchlaufen und jedes Leaf ersetzen, das (a) keine Referenz ist, (b) SVf_NOK traegt, (c) SVf_POK traegt und (d) dessen NV NaN oder +-Inf ist -- durch eine schlichte Kopie seines PV. ~25 Zeilen plus use B (). NUR YAML. In parse, weil der Lesepfad es braucht und beide Pfade sich dort kreuzen. DER GUARD AUS KARR #59 BLEIBT UNANGETASTET: wer encrypt() ein echtes 9**9**9 uebergibt, bekommt weiterhin den croak. Der Fix entfernt ein Artefakt des Parsers, statt einen Guard zu lockern.
+
+PROTOTYP-ERGEBNIS (Scratch-Kopie von pristine 3e5e6b0 + Patch): 86-Zeilen-Korpus -> 19 Zeilen bewegen sich, jede einzelne eine, deren value_to_bytes heute +Inf/-Inf/NaN ist. Nichts, was funktioniert, bewegt sich. 10/10 und 6/6 schreiben mit sops -d exit 0 und type:str wie sops. Alle vier Round-Trip-Richtungen verifizieren. Ein VERSCHLUESSELTES type:float +Inf/NaN entschluesselt weiterhin zu einem echten Perl-Inf/NaN, byte-identisch. Testlaeufe auf beiden Kopien: SOPS_BIN=/tmp/sops prove -lr t/ 38 Dateien 860/860 PASS auf beiden, SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 PASS auf beiden und gelaufen, nicht geskippt. Kein bestehender Test wurde geaendert.
+
+KONSEQUENZEN, DIE INS ADR GEHOEREN: der unverschluesselte Slot kommt bei uns QUOTED heraus, wo sops ihn bar schreibt -- fuer beide Parser ein String, also NICHT das von ADR 0013 verworfene "quote the leaf on the way out", es wird nichts umtypisiert. `!!float 1e400` wird mit umtypisiert, weil YAML::XS das Tag abstreift -- Divergenz nur in die permissive Richtung, da sops diese Eingabe ohnehin ablehnt (exit 2). Und x_unencrypted: NaN bzw. -Inf aendern, was sie zurueckgeben -- eine KORREKTUR, denn sops liest dort einen String.
+
+DAS ADR IST BEWUSST NICHT GESCHRIEBEN: ein 'accepted' ADR fuer eine nicht umgesetzte Aenderung haelt eine Entscheidung fest, die niemand getroffen hat. Es gehoert in denselben Commit wie die Umsetzung.
+
+MITGEFUNDEN UND SEPARAT ERFASST: karr #105 (ein von sops geschriebenes .inf im unverschluesselten Slot scheitert an unserem MAC -- NICHT durch diesen Fix behoben, die Reparatur muesste in die andere Richtung gehen und kollidierte dann mit karr #59; genau diese Spannung ist dort die offene Frage) und karr #106 (1e-400 ist hier type:int und fuer sops type:float; Bytes stimmen ueberein, der MAC haelt, nichts warnt).
+UMGESETZT, wire lane, 2026-08-21, gegen c8eee80 (+ die zwischenzeitlich gelandeten 7eb85cb/06c5158). ADR 0023, Test t/39, Changes-Eintrag, alles im selben Commit. Nicht committet -- der Orchestrator committet.
+
+Die vier Pruefungen der Uebergabe, einzeln, alle gegen /tmp/sops 3.13.3 gemessen:
+
+1. DISJUNKTHEIT HAELT, mit der Binary als Zeugin. 80-Token-Sweep ueber jede Form, die libyaml numerisch aufloest; 29 feuern das Praedikat, und sops sagt zu allen 29 type:str mit dem Token woertlich. Die 12 %GO_CONSTANT-Tokens (.inf .Inf .INF +.inf +.Inf +.INF -.inf -.Inf -.INF .nan .NaN .NAN) kommen aus YAML::XS POK-ONLY und feuern 0 von 12; sops sagt zu allen 12 type:float. Zusaetzlich 9 weitere inf/nan-Schreibweisen ausserhalb der Tabelle geprueft (.INf .iNF .Nan .NAn +.nan -.nan -.NAN .infinity .Infinity): alle 9 type:str, die Tabelle ist also vollstaendig und nicht nur plausibel. Die Schwelle sitzt bitgenau: 2**1024-2**970-1 float, 2**1024-2**970 str, in beiden Implementierungen am selben Token.
+
+2. DER WALK SITZT RICHTIG. In parse, nach dem Metadata-Split, vor dem return -- Lese- und Schreibpfad kreuzen sich dort. Der order-preserving Reparse ist nicht betroffen und das wurde geprueft statt angenommen: _document_leaves nimmt die REIHENFOLGE aus dem YAML::PP-Baum und JEDEN WERT aus dem geparsten Baum, ein retypisiertes Leaf erreicht den Digest also ueber die bereits korrigierte Seite. YAML::PP laedt alle 29 feuernden Tokens plus die 12 Konstanten und liefert ueberall dort ein Skalar, wo YAML::XS eines liefert: 0 strukturelle Abweichungen von 32.
+
+3. EIN VERSCHLUESSELTES type:float MIT +Inf/NaN BLEIBT UNVERAENDERT. sops -e auf .inf/-.inf/.nan im verschluesselten Slot, dann File::SOPS->decrypt: byte-identische Doubles vor und nach dem Patch (000000000000f07f / f0ff / f8ff). Der Walk kann es strukturell nicht erreichen -- zur Parse-Zeit ist jedes verschluesselte Leaf noch ein ENC[...]-STRING, also POK-only. Beides in t/39 gepinnt (Subtests 12 und 15), und beide Subtests bestehen VOR und NACH dem Patch.
+
+4. DER GUARD AUS KARR #59 IST UNANGETASTET. encrypt() mit echtem 9**9**9 / -9**9**9 / NaN, verschluesselter und unverschluesselter Slot: 6 von 6 croak, vorher wie nachher, identische Meldung. Der Fix entfernt ein Artefakt des Parsers, keine Regel ueber Werte. Kein Guard, kein Assert, keine Assertion gelockert.
+
+AM PROTOTYP GEAENDERT: kein unsetenv[0]-Kopieren mehr (Flags werden am SV des Baums gelesen, Ersatz wird in denselben Slot geschrieben, Muster von _sv_kind); eigener Visited-Set gegen rekursive YAML-Anker, die YAML::XS wirklich als Zyklus zurueckgibt; use B () an den Dateikopf statt inline; Benennung nach dem Praedikat (_restring_non_finite_leaves/_leaf) statt nach der Ursache.
+
+MESSUNGEN. Korpus 105 Zeilen: 27 bewegen sich, jede einzelne eine, deren value_to_bytes vorher +Inf/-Inf/NaN war. Nichts sonst -- die 12 Konstanten, "1e400" quoted, 1e-400, -0, 5e-324, DBL_MAX und der Nachbar ein Bit unter der Schwelle sind byte-identisch. Ende zu Ende ueber 20 Dokumente: Lesen 3/20 -> 20/20, Schreiben 0/20 -> 20/20 mit type:str wie sops.
+
+NETZTEST: t/39 gegen pristine c8eee80 (perl -I auf eine Scratch-Kopie, nicht prove -l): 88 fehlgeschlagene Assertions, 7 von 15 Subtests rot, Exit 7. Gegen den gepatchten Baum: 334 Assertions, 0 rot. Die 5 Subtests, die auf BEIDEN Seiten gruen sind, sind die Muss-sich-nicht-bewegen-Pins.
+
+TESTLAEUFE: SOPS_BIN=/tmp/sops prove -lr t/  40 Dateien 923/923 PASS. SOPS_BIN=/tmp/sops prove -lv t/04-interop.t  32/32 PASS, GELAUFEN und nicht geskippt ("Using sops: sops 3.13.3"). Kein bestehender Test geaendert.
+
+MITGEFUNDEN: karr #110 -- ein rekursiver YAML-Anker haengt encrypt und decrypt auf, vorbestehend, nicht von hier. #105 und #106 unberuehrt und in ADR 0023 als bewusst offen genannt.
+2026-08-21 02:03 Umsetzung fertig: lib/File/SOPS/Format/YAML.pm, docs/adr/0023, t/39, Changes. Interop gelaufen, 32/32. Nicht committet.
+NACHTRAG, wire lane: use B () fehlte tatsaechlich. Der Bericht behauptete es, die Datei hatte es nicht -- Befund des Koordinators, bestaetigt und behoben.
+
+GEMESSEN statt angenommen, woher B vorher kam: keines der Module in YAML.pms Kopf laedt es. Moo nein, Carp nein, Scalar::Util nein, YAML::XS nein, namespace::clean nein, alle fuenf zusammen nein, File::SOPS::Metadata nein. Nur File::SOPS::Encrypted laedt es (dort Zeile 5). Beweis in einer Scratch-Kopie mit auskommentiertem 'use File::SOPS::Encrypted;': parse('v: 1e400') stirbt mit 'Undefined subroutine &B::svref_2object called at .../Format/YAML.pm line 228'. Es war also genau die implizite Abhaengigkeit auf das Ladeverhalten eines anderen Moduls, die die Hausregel ausschliesst -- kein anderer Grund.
+
+BEHOBEN: use B (); an Position 5, direkt nach use Moo; und vor use Carp -- dieselbe Stelle wie Encrypted.pm:5 und Format/JSON.pm:5. Dieselbe Scratch-Probe danach: B steht in %INC aus YAML.pm selbst, der Walk laeuft, .inf bleibt unveraendert.
+
+Eine Zeile, sonst nichts angefasst. Testlaeufe danach: SOPS_BIN=/tmp/sops prove -lr t/  40 Dateien 923/923 PASS. SOPS_BIN=/tmp/sops prove -l t/04-interop.t  32/32 PASS, gelaufen und nicht geskippt. POD-Fehler 13, unveraendert vorbestehend (=method ist Pod::Weaver).
+Implementiert und committet. Lesen 3/20 -> 20/20, Schreiben 0/20 -> 20/20 gegen sops 3.13.3. ADR 0023, t/39 (334 Assertions, als Netz gegen c8eee80 verifiziert: 88 fallen). Folgetickets: #110 (rekursiver Anchor haengt encrypt/decrypt), #111 (SOPS.pm POD, api-Lane).
+ABGENOMMEN 2026-08-21. BEHAVIOUR CHANGE bestaetigt. Der Grund fuer die Abnahme ist die Leseseite: Lesen 3/20 -> 20/20, Schreiben 0/20 -> 20/20 gegen sops 3.13.3. Die Disjunktheit, auf der alles ruht, ist gegen das Binary belegt (29 feuernde Tokens alle type:str, die 12 %GO_CONSTANT feuern 0 von 12), ADR 0001 haelt, der karr-#59-Guard ist unangetastet (6 von 6 croaken weiter). Commit 2c9ee58, ADR 0023.
