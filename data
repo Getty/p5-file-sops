@@ -1,0 +1,54 @@
+---
+class: standard
+completed: 2026-08-21T07:12:52Z
+created: 2026-08-21T05:38:27Z
+id: 128
+priority: medium
+started: 2026-08-21T06:48:17Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- types
+title: Ein Timestamp ist type:time bei sops und type:str hier, mit normalisierter
+  Schreibweise dort
+updated: 2026-08-21T07:18:15Z
+---
+
+Gefunden beim Abarbeiten von karr #118 (sops 3.13.3 in /tmp/sops). Nicht tag-bedingt: gemessen geben `!!timestamp X` und das untagged X bei sops das identische Ergebnis.
+
+  plaintext                        sops -e                              File::SOPS
+  2026-08-21T04:35:49Z             type:time  2026-08-21T04:35:49Z      type:str  2026-08-21T04:35:49Z
+  2026-08-21                       type:time  2026-08-21T00:00:00Z      type:str  2026-08-21
+  2001-12-14t21:59:43.10-05:00     type:time  2001-12-14T21:59:43.1-05:00  type:str  2001-12-14t21:59:43.10-05:00
+  "2026-08-21T04:35:49Z" (quoted)  type:str   2026-08-21T04:35:49Z      type:str  2026-08-21T04:35:49Z
+
+go-yaml loest den Skalar zu time.Time auf und sops rendert ihn in RFC3339 zurueck; das ist der Klartext, den sein MAC deckt. libyaml loest gar nichts auf und wir schreiben die Quellschreibweise als String. Beide Dokumente verifizieren ihren eigenen MAC, `sops -d` exit 0 auf beiden Seiten -- Wertdivergenz, keine Stoerung. Nur der VERSCHLUESSELTE Slot ist offen: den unverschluesselten verweigert der Foreign-Resolution-Guard (ADR 0013/0017) schon heute laut, gemessen.
+
+Die Leseseite ist nicht betroffen: File::SOPS::Encrypted deserialisiert type:time bereits als RFC3339-String (Encrypted.pm, Kommentar bei `str, time and comment`).
+
+Eine Loesung muesste Gos Zeit-Parsing und -Rendering nachbauen, um dieselben Digest-Bytes zu treffen -- Wire-Lane. Selbe Familie wie karr #114 (.inf) und #127 (0755). docs/adr/0032 nennt es unter Limits.
+CLOSED -- docs/adr/0038, measured jointly with #127, #131, #135 (50 scalars x 3 slot configurations, sops 3.13.3, each sops_mac decrypted and the digest SOLVED per row).
+
+The ticket is NOT one question, and splitting it is the finding.
+
+  * EXACTLY-RFC3339 spelling (2026-08-21T04:35:49Z): sops type:time, we type:str, and
+    the plaintext is BYTE-IDENTICAL on both sides, in both slots, both sops -d exit 0,
+    both MACs covering the same bytes. A pure label divergence -- karr #131's class, and
+    it gets karr #131's answer: recorded, not fixed. Reproducing type:time means
+    implementing Go's time parsing AND its RFC3339-Nano rendering to hit the same digest
+    bytes: a new value transformation on the wire path, for a type Perl does not have.
+
+  * EVERY OTHER spelling: the VALUE differs, measured --
+      2026-08-21                    sops time 2026-08-21T00:00:00Z    | ours str 2026-08-21
+      2001-12-14t21:59:43.10-05:00  sops time 2001-12-14T21:59:43.1-05:00 | ours str source spelling
+    In the UNENCRYPTED slot the foreign-resolution guard refuses it, and that refusal is
+    RIGHT: sops writes the normalised form and never the source spelling, so we refuse a
+    spelling sops does not emit. In the ENCRYPTED slot it is written silently and both
+    documents are sops -d exit 0. That half is karr #127's class exactly -- same
+    mechanism, same slot behaviour, same fix -- and is FOLDED INTO karr #127 rather than
+    tracked twice.
+
+ADR 0032's 'Limits' bullet for the untagged timestamp is now decided rather than open.
+GESCHLOSSEN 2026-08-21, Commit 4802621, ADR 0038 -- und dabei GETEILT, weil es nie eine Frage war. Die RFC3339-exakte Schreibweise ist die Klasse von karr #131 (Klartext byte-identisch, nur das Label bewegt sich) und bekommt dessen Antwort. Jede ANDERE Schreibweise ist eine WERT-Divergenz, also die Klasse von karr #127, und ist dort eingegliedert statt zweimal verfolgt zu werden. Fuer den unverschluesselten Slot ist unsere Ablehnung dabei RICHTIG: sops schreibt nie die Quellschreibweise, sondern immer die aufgeloeste Form.
