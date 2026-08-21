@@ -1,0 +1,69 @@
+---
+class: standard
+created: 2026-08-20T08:23:33Z
+id: 99
+priority: low
+status: backlog
+tags:
+- wire
+- yaml
+- interop
+title: 'Quoting a True/False string on the way out would remove the karr #92 divergence,
+  and needs a real emitter'
+updated: 2026-08-21T07:41:45Z
+---
+
+Recorded while landing karr #92 / ADR 0019, which warns about this rather than
+fixing it.
+
+A `True` STRING in an unencrypted YAML slot is written bare, because libyaml
+does not quote a spelling its own resolver does not know. Go reads a boolean
+out of it. The divergence disappears entirely if the token is QUOTED, and the
+measurement says that is what sops itself writes for the same value:
+
+  plaintext leaf         sops -e writes            we read it back
+  x_unencrypted: True    x_unencrypted: true       bool
+  x_unencrypted: "True"  x_unencrypted: "True"     str
+
+So `"True"` is not a retyping - it is the document sops produces for the string
+the caller has, the MAC is unchanged (the digest text is `True` either way),
+and both implementations then read a string. ADR 0013 rejected "quote the leaf
+on the way out" for `mode: 0755`, where quoting turns an INT into a string;
+that reason does not apply to a leaf that is already a string.
+
+Two things stop it from being ADR 0019 decision:
+
+  - It moves wire bytes for documents that are accepted today. That is a change
+    to what this distribution writes, not a diagnostic, and wants its own ADR
+    and its own corpus.
+  - YAML::XS has no per-scalar style control. No tag, no forced-quote hook, and
+    the dualvar carrier ADR 0011 uses writes its PV as a PLAIN scalar (measured:
+    dualvar(0.3, "hello") emits `v: hello`). The only route is text surgery on
+    the finished document, which _quote_sops_timestamp can do safely only
+    because it targets one known key inside one known block. For an arbitrary
+    key path at arbitrary nesting that is a new mechanism whose failure mode -
+    a corrupted document - is worse than the divergence it fixes.
+
+Anything here would have to prove itself against a corpus the size of ADR 0019
+(91 leaves x 2 slots x both handlers) and show that no other leaf class gets
+quoted by accident. Wire lane. Measured with sops 3.13.3.
+MEASURED FROM karr #135 (docs/adr/0039): this ticket is now the gate on a second,
+larger class, and the measurement says what "a real emitter" has to buy.
+
+The same missing capability -- one quoted scalar -- blocks 22 measured spellings
+that are a STRING on both sides, that sops writes double-quoted and reads back at
+exit 0, and that File::SOPS refuses to produce (ADR 0038's corpus; a 23rd row,
+"0xffffffffffffffff", found in #135). That is a refusal of documents sops writes,
+not a divergence like this ticket's own True/False row.
+
+Three routes were probed and all three are dead, so the emitter really is the
+gate: (a) $YAML::XS::QuoteNumericStrings is a boolean and quotes exactly what
+Perl's looks_like_number accepts, at every setting; (b) NO SV shape makes
+YAML::XS quote a given text -- and a dualvar carrier makes it WORSE, writing even
+'0755' bare, because the emitter's rule reads the SV; (c) reject_scalar cannot
+replace a leaf (its return value is discarded), so surgery needs a second full
+tree walk in emit.
+
+WITH THIS TICKET ALONE, 7 of the 22 become writable (the non-finite tokens --
+the only family where a bare and a quoted source do not arrive as the same Perl
+string, thanks to ADR 0026/0034). The other 15 need karr #127 as well.
