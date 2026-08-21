@@ -1,0 +1,35 @@
+---
+class: standard
+completed: 2026-08-21T07:11:49Z
+created: 2026-08-21T05:39:00Z
+id: 131
+priority: low
+started: 2026-08-21T06:48:23Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- types
+title: '!!float 1 ist type:float bei sops und type:int hier -- gleiche Digest-Bytes,
+  anderes Label'
+updated: 2026-08-21T07:18:09Z
+---
+
+Gefunden beim Abarbeiten von karr #118 (sops 3.13.3 in /tmp/sops). Der mildeste Fund der Messung, und der einzige unter den Tags, die YAML::XS ANNIMMT.
+
+  plaintext v: !!float 1
+  sops -e   v: ENC[...,type:float]  Klartext 1
+  File::SOPS v: ENC[...,type:int]   Klartext 1
+
+YAML::XS ignoriert das !!float-Tag auf einem Ganzzahlliteral und liefert ein Skalar mit IOK; der Typ kommt bei uns vom Skalar (ADR 0002), also int. Die Klartext-Bytes sind auf beiden Seiten `1`, und Go leitet den Digest-Input aus dem deklarierten Typ ab (ToBytes(int 1) == ToBytes(float 1) == "1"), also verifiziert die Datei in beide Richtungen -- gemessen, `sops -d` exit 0.
+
+Reine Label-Divergenz ohne Wire-Folge. Ein Fix hiesse, den Typ aus dem TAG statt aus dem Skalar zu nehmen, was genau die Regel von ADR 0002 umkehrt -- deshalb aufgeschrieben statt behoben. Ohne Tag gibt es die Divergenz nicht: ein bares `1` ist auf beiden Seiten int.
+
+docs/adr/0032 nennt es unter Limits.
+CLOSED -- docs/adr/0038, measured jointly with #127, #128, #135 (50 scalars x 3 slot configurations, sops 3.13.3, each document's sops_mac decrypted through our own modules and the digest SOLVED per row rather than derived).
+
+Confirmed exactly as filed, in BOTH slots: sops writes type:float, we write type:int, the plaintext is 1 on both sides, both documents sops -d exit 0, and both MACs cover the byte 1. Nothing fails and nothing is silent -- the label is the whole difference, because Go re-derives the digest input from the declared type, so ToBytes(int 1) == ToBytes(float 1) == '1'.
+
+Not fixed, deliberately: the only fix is to take the type from the TAG instead of from the scalar, which inverts ADR 0002. Same answer and same reasoning as karr #106 and karr #77. ADR 0032's 'Limits' bullet for this is now decided rather than open.
+GESCHLOSSEN 2026-08-21 als dokumentierte Divergenz, Commit 4802621, ADR 0038. Genau wie gemeldet bestaetigt: Klartext 1 auf beiden Seiten, exit 0 in beide Richtungen, der MAC deckt 1 in beiden. Der einzige Fix naehme den Typ aus dem TAG statt aus dem Skalar und invertierte damit ADR 0002 -- fuer ein Etikett ohne Digest-Folge. Dieselbe Antwort wie karr #106 und #77.
