@@ -1,0 +1,97 @@
+---
+class: standard
+completed: 2026-08-21T07:53:35Z
+created: 2026-08-21T06:04:17Z
+depends_on:
+- 122
+- 123
+id: 133
+priority: medium
+started: 2026-08-21T07:53:35Z
+status: done
+tags:
+- wire
+- yaml
+- float
+- editor
+- interop
+title: Ein verschluesseltes .inf verliert beim edit still seine Float-Natur, und decrypt_file
+  schreibt Inf statt .inf
+updated: 2026-08-21T08:01:01Z
+---
+
+Gefunden beim Messen von karr #122 / #114 (sops 3.13.3 in /tmp/sops). Weder
+von #113/ADR 0031 noch von #123 abgedeckt: die beiden reden vom UNVER-
+SCHLUESSELTEN Slot, das hier ist der verschluesselte, und es scheitert nicht,
+es faelscht still.
+
+MECHANISMUS: ein sops-geschriebener verschluesselter Slot traegt type:float mit
+dem Klartext +Inf. _deserialize_value gibt daraus eine NACKTE Perl-NV zurueck
+(gemessen: [NOK], kein POK) -- korrekt als Zahl, aber ohne Stringhaelfte.
+ADR 0026s dualvar-Reparatur greift nur im unverschluesselten Slot, wo der Token
+im Dokument steht. YAML::XS schreibt eine nackte non-finite NV als bare
+Inf / -Inf / NaN, und das liest go-yaml (wie libyaml) als STRING zurueck.
+
+BEFUND A -- decrypt_file weicht vom Klartext ab, den sops -d schreibt:
+  Dokument                    unser decrypt_file      sops -d
+  v: .inf  (verschluesselt)   v: Inf                  v: .inf
+  v: -.inf                    v: -Inf                 v: -.inf
+  v: .nan                     v: NaN                  v: .nan
+Beide exit 0. Unser Klartext sagt einen String, wo sops' Klartext einen Float
+sagt. Fuer den unverschluesselten Slot ist genau das seit ADR 0026
+byte-identisch -- hier nicht.
+
+BEFUND B -- edit typt den Wert STILL um, exit 0 auf beiden Seiten:
+  sops -e (v: .inf, verschluesselt) -> File::SOPS->edit mit einer Aenderung an
+  einem ANDEREN Schluessel -> die Leitung traegt danach type:str mit dem
+  Klartext Inf, und sops -d exit 0 gibt v: Inf.
+  Drei Schreibweisen probiert, drei Mal dasselbe: .inf/-.inf/.nan -> Inf/-Inf/NaN.
+Aus einem Float wird ein String, ohne Fehler, ohne Warnung, in einem Dokument,
+das sops selbst geschrieben hat. Das ist schlechter als karr #123, wo derselbe
+Rundlauf im unverschluesselten Slot wenigstens laut croakt (ADR 0013s Guard).
+Der Guard kann hier nicht greifen: das Blatt ist zur Emit-Zeit ein
+ENC[...]-String, und `Inf` faengt mit `I` an, das Gos Resolver ohnehin nicht
+anschaut.
+
+WAS ES NICHT IST: kein MAC-Fehler, keine unlesbare Datei. Beide
+Implementierungen lesen jedes Dokument in jeder Stufe. Verloren geht der TYP
+des Wertes, und zwar auf unserem eigenen Klartext-Rundlauf.
+
+KANDIDAT, ungeprueft: _deserialize_value koennte fuer type:float mit +Inf /
+-Inf / NaN dieselbe dualvar-Form liefern, die ADR 0026 fuer den
+unverschluesselten Slot herstellt -- numerisch der Float (ADR 0009 bleibt
+erfuellt, NOK ist gesetzt), als Text der Token. decrypt_file waere dann
+byte-identisch zu sops -d, und edit's Klartext truege den Token statt `Inf`.
+ACHTUNG, zwei offene Enden: (a) der Token ist YAML-Vokabular, waehrend
+_deserialize_value formatblind ist -- fuer ein JSON-Dokument mit type:float
++Inf (das sops selbst nie schreiben kann, sops -d exit 4) muesste geklaert
+werden, was der Emitter daraus macht; (b) edit bliebe auch dann kaputt, weil
+der Reparse des Klartexts ohne ADR 0026s Walk wieder einen String liefert --
+das ist karr #123s Entscheidung, und dieses Ticket haengt daran.
+
+Reihenfolge: nach karr #122 und zusammen mit karr #123 entscheiden. Wire-Lane
+fuer _deserialize_value, Format-Lane fuer den Rest. Braucht das Binary.
+BEIDE BEFUNDE GESCHLOSSEN, gemessen an 77e4fdc gegen den Baum mit
+docs/adr/0040. sops 3.13.3 /tmp/sops, drei Schreibweisen, ein Dokument je
+Zeile, verschluesselter Slot.
+
+BEFUND A -- decrypt_file weicht vom Klartext ab: bereits durch karr #134 /
+docs/adr/0037 geschlossen, hier nachgemessen. Unser decrypt_file schreibt
+`v: .inf` / `-.inf` / `.nan`, byte-identisch zu `sops -d`, 3 von 3, schon bei
+77e4fdc.
+
+BEFUND B -- edit typt still um: bei 77e4fdc croakte edit (ADR 0037s
+Zwischenschritt: aus der stillen Umtypung wurde eine laute Ablehnung), mit
+docs/adr/0040 SPEICHERT edit, und die Leitung traegt danach type:float,
+sops -d exit 0, `v: .inf` / `-.inf` / `.nan`. 3 von 3.
+
+DER "KANDIDAT, UNGEPRUEFT" AUS DEM TICKETKOERPER WURDE NICHT GEBAUT und ist
+nicht noetig: _deserialize_value gibt weiterhin eine NACKTE NV zurueck (NOK
+gesetzt, POK nicht -- gepinnt in t/54 Abschnitt 7), womit ADR 0009 und 0010
+unberuehrt bleiben und das formatblinde Problem (a) aus dem Ticketkoerper gar
+nicht erst entsteht. Der Token entsteht statt dessen beim EMIT, wo der Handler
+gefragt wird (ADR 0037), und (b) loest ADR 0034, dessen Reparse-Reparatur auf
+jedem Parse laeuft.
+
+Gepinnt: t/52 Abschnitt 11 (Befund A) und Abschnitt 12 (Befund B), t/49
+Abschnitt 16, t/54 Abschnitte 13 und 14.
