@@ -1,0 +1,109 @@
+---
+class: standard
+completed: 2026-08-21T05:47:37Z
+created: 2026-08-21T03:13:50Z
+id: 113
+priority: medium
+started: 2026-08-21T04:45:53Z
+status: done
+tags:
+- wire
+- yaml
+- guards
+- interop
+- float
+title: The non-finite guard is too wide for a float carrying a %GO_CONSTANT token
+updated: 2026-08-21T05:47:37Z
+---
+
+Found while implementing karr #105 / ADR 0026 (sops 3.13.3 at /tmp/sops).
+
+karr #59's guard in Encrypted::assert_representable refuses every non-finite
+float on the encrypt path. Its stated premise, from the ADR 0013 measurement:
+YAML::XS writes such a value as a bare `Inf` / `-Inf` / `NaN`, which go-yaml
+resolves as a STRING, so the document fails its own MAC (sops -d exit 51).
+
+That premise holds for a bare NV. It does NOT hold for a float whose string
+half is one of the twelve %GO_CONSTANT tokens -- the shape ADR 0026 now
+produces at parse time for a document sops wrote:
+
+  YAML::XS Dump of dualvar(+Inf,  ".inf")  -> `.inf`
+  YAML::XS Dump of dualvar(-Inf, "-.inf")  -> `-.inf`
+  YAML::XS Dump of dualvar(NaN,   ".nan")  -> `.nan`
+
+Go resolves each of those back to the same double and digests +Inf / -Inf /
+NaN, which is exactly what value_to_bytes derives from the numeric half. The
+document agrees with its own MAC.
+
+MEASURED, with the guard bypassed IN A SCRATCH PROCESS ONLY, no code changed:
+File::SOPS->encrypt of { keep => "x", v_unencrypted => dualvar($inf, $token) }
+writes the token bare and `sops -d` reads it back at exit 0 -- five tokens
+tried (.inf -.inf .nan .Inf +.INF), five exit 0, the value correct in each.
+ADR 0013's own emit-side guard never even sees such a leaf: canonical_float_tree
+returns a non-finite float unchecked, so nothing else is in the way.
+
+CONSEQUENCE TODAY: ADR 0026 made those documents READABLE, and they still
+cannot be written back. rotate and edit croak from this guard -- naming the key
+path now, which is better than the MAC error they used to give, but with advice
+("store the value as a string") that leads straight back to ADR 0013's
+refusal, because the string .inf is written bare in YAML.
+
+WHAT THIS TICKET IS NOT: a request to drop the guard. It is right about every
+value it was written for, and a caller's own 9**9**9 must keep croaking. The
+question is whether it should ask for a string half that a foreign reader
+resolves back to the same double before refusing -- and that is format-specific
+(the JSON emitter writes null for all three), so the answer may be that the
+check belongs beside ADR 0013's in Format::YAML rather than in the format-blind
+assert_representable.
+
+Needs its own corpus and its own ADR. karr #105 said in as many words not to
+take it there. Wire lane. Needs the sops binary to prove.
+2026-08-21 05:43 Implemented with ADR 0031, t/46, Changes. Interop executed 32/32. Two claims in t/42 replaced -- the two that were pinned for exactly this decision.
+IMPLEMENTED. docs/adr/0031, lib/File/SOPS/Encrypted.pm, new t/46-non-finite-token-is-written.t, Changes.
+
+ROUND-TRIP FINDING (verified first): confirmed for rotate, and NOT the whole
+story for edit. sops -e -> File::SOPS->decrypt reads it -> File::SOPS->rotate
+croaked. With the guard bypassed in a scratch copy of lib/, the same loop
+closes at sops -d exit 0 for all three spellings sops writes, wire
+byte-identical. edit fails for a DIFFERENT reason, before and after: it
+round-trips the leaf through a PLAINTEXT document, where ADR 0026's repair
+deliberately does not run, so the leaf comes back a string and ADR 0013's guard
+refuses it, correctly. Filed as karr #123.
+
+THE PREDICATE: a non-finite float is refused unless _has_public_pv says it
+carries its own string half AND _go_non_finite_token_bytes maps that half to
+the same bytes value_to_bytes derives from its number. dualvar(+Inf,'-.inf') is
+a contradiction and stays refused, as ADR 0012 does for an integer. It is a
+GATE: the verdict stays with ADR 0013's guard in Format::YAML, which compares
+the token the emitter really writes against _go_scalar_bytes -- measured
+directly, that guard accepts .inf/+Inf, refuses all three contradictions and
+.INf, and ACCEPTS dualvar(+Inf,'banana'), which is why the gate has to name the
+twelve tokens rather than just ask for a PV.
+
+JSON: measured, it fails in BOTH slots -- unencrypted sops -d exit 51 (Cpanel
+writes a quoted ".inf" while the digest covers +Inf), encrypted exit 4 (Go
+cannot marshal a non-finite float64). assert_representable cannot see the
+format, so the exemption is closed downstream: canonical_float_tree refuses a
+deferred leaf in a document that carries a MAC when the handler installed no
+reject_scalar, which is JSON and only JSON (the plaintext emitters install none
+and need none, so decrypt_file still writes .inf). MAC coverage is read off the
+tree's top-level sops key, the same fact ADR 0026's walk keys on. The encrypted
+slot keeps its refusal in encrypt_value, in both formats -- karr #122 for the
+YAML half it costs.
+
+NET: t/46 against the unpatched 5536313 with prove -I and no use lib -- 8 of 17
+subtests and 40 assertions FAIL (6 of the 40 are message assertions on a
+refusal that is itself unchanged). t/42's two replaced claims fall too: 2 of 18
+subtests, 13 assertions.
+
+SUITE: prove -lr t/ 1100/1100 PASS (49 files; 1062 -> 1080 for this change
+alone, the rest is other lanes landing in parallel). SOPS_BIN=/tmp/sops prove
+-l t/04-interop.t 32/32, EXECUTED not skipped, before and after. Cost: +4% on
+encrypt_value for a float leaf, 50.0 -> 52.0 ms per 2000 calls; the first draft
+cost +100% and the ADR says why.
+
+FILE BOUNDARY: Encrypted.pm, docs/adr/0031, t/46, Changes -- plus t/42, whose
+sections 6 and 8 pinned 'still refused' and said in as many words that they
+were pinned so this decision would be visible rather than silent. Untouched:
+lib/File/SOPS.pm, Format/YAML.pm, t/41. Drift filed: karr #122, #123, #129.
+ABGENOMMEN 2026-08-21. Commit a0ae01c, ADR 0031. Die Abnahme gilt zwei Dingen. Erstens dem Kopf des Tickets, der dort noch nicht stand und vor der Aenderung gegen die ungepatchte Bibliothek bestaetigt wurde: seit ADR 0026 liest diese Bibliothek eine Dokumentklasse, die sie nicht zurueckschreiben kann -- sops -e exit 0, wir lesen, rotate croakt, und mit umgangenem Guard schliesst der Rundlauf byte-identisch. Zweitens der Trennung von Gate und Verdikt: das Verdikt bleibt in ADR 0013s Guard, dem einzigen Exemplar von Gos Aufloesungsmodell. Das ist keine Ordnungsliebe -- direkt gemessen akzeptiert jener Guard dualvar(+Inf,'banana'), weil sein eigenes Gate nie auf ein 'b' schaut, und ein Banana-Leaf schreibt ein Dokument mit sops -d exit 51. Dass das Gate die zwoelf Tokens NAMENTLICH prueft statt nur nach einem public PV zu fragen, ist genau der Unterschied. Der karr-#59-Guard ist praeziser geworden, nicht schwaecher: jede widerspruechliche Paarung bleibt refused.
