@@ -1,6 +1,30 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BUG FIX: the refusal for a YAML leaf whose spelling Go's parser resolves
+    differently stopped giving an int leaf's answer for a leaf that is a
+    STRING. It ended with "sops itself resolves such a spelling when it
+    writes: a plaintext `mode: 0755` becomes the integer 493 in its output,
+    and that decimal is what to pass here" - true for `mode: 0755`, false for
+    a quoted `".inf"`, `"1_000"` or `"2015-01-01"`. Measured against sops
+    3.13.3: given the string, sops resolves nothing - it writes it
+    double-quoted and reads it back at exit 0, for all 22 spellings of this
+    class, and this library reads all 22 of those documents with the MAC
+    verified. There is no decimal to pass either, because the value is not a
+    number. The message now says what is true of a string leaf - that this
+    emitter has no way to write it quoted, which is why the leaf is refused at
+    all - and names the two remedies measured to work for every one of the 22:
+    encrypt the leaf, or write the document as JSON. The `mac_only_encrypted`
+    warning had the same sentence and got the same correction. NOTHING ELSE
+    MOVES: an int leaf's message is unchanged word for word, no document is
+    written differently, and the 22 spellings are still refused. Quoting them
+    instead is NOT the fix, and the reason is measured: a bare `2015-01-01`
+    and a quoted `"2015-01-01"` arrive here as the same Perl string while sops
+    writes `2015-01-01T00:00:00Z` for the first and `"2015-01-01"` for the
+    second, so quoting would replace a loud refusal with a silent divergence
+    for 15 of the 22. See docs/adr/0039 and karr #135, which stays open on the
+    emitter that could quote a scalar (karr #99) and the parse that would tell
+    the two sources apart (karr #127).
   - BUG FIX and BEHAVIOUR CHANGE: a non-finite float in an ENCRYPTED slot no
     longer loses its float-ness, silently, on a plaintext round trip. `sops -e`
     stores a `.inf` as a `type:float` whose plaintext is `+Inf`; decrypting

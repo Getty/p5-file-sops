@@ -1366,6 +1366,25 @@ else. C<007>, C<08>, C<1e3>, C<True>, C<null>, C<yes>, C<1:30> and
 C<2015-01-01T12:00:00Z> are B<not> refused: measured, the two resolvers derive
 the same digest bytes from each of them.
 
+B<Where the refused leaf is already a string, the refusal is this
+distribution's limitation and the message says so.> sops does not resolve a
+string away: given the string C<".inf">, C<"1_000"> or C<"2015-01-01"> it writes
+it double-quoted and reads it back -- measured against sops 3.13.3, 22 such
+spellings, C<sops -d> exit 0 for every one, and this module reads all 22 of
+those documents correctly, in both slots, with the MAC verified. It cannot
+B<write> one: L<YAML::XS> has no per-scalar style control, so the only token
+this emitter produces for such a leaf is the bare one Go resolves into
+something else, and a document carrying it would fail its own MAC. The leaf is
+therefore refused rather than written, and the message names the two remedies
+that are measured to work for all 22 -- encrypt the leaf, or write the document
+as JSON. Quoting it here regardless is B<not> the fix, and the reason is
+measured: a bare C<2015-01-01> and a quoted C<"2015-01-01"> arrive as the same
+Perl string, while sops writes C<2015-01-01T00:00:00Z> for the first and
+C<"2015-01-01"> for the second, so quoting would turn a loud refusal into a
+silent divergence for 15 of the 22. See
+L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>
+and karr #135.
+
 B<A C<True> or C<False> string is warned about instead, in both MAC modes.>
 The digest bytes agree -- sops renders a boolean Title-cased, which is the same
 text this module derives from the string -- so the MAC holds and C<sops -d>
@@ -1964,6 +1983,52 @@ sub _carp_foreign_retyping {
         . "or write the document as JSON, where every string is quoted";
 }
 
+# WHAT TO DO ABOUT IT depends on what the leaf IS, and until karr #135 the
+# message answered for an `int` leaf whatever it was handed.
+#
+# For a NUMERIC leaf the sentence is right and re-measured against sops 3.13.3:
+# a plaintext `mode: 0755` really does leave `sops -e` as the integer 493, the
+# spelling does not survive in any form, and passing the decimal produces the
+# document sops itself would have written.
+#
+# For a leaf that is ALREADY A STRING it was wrong in both halves. Given the
+# string, sops resolves nothing -- measured, one document per spelling: a
+# plaintext `v_unencrypted: "1_000"` leaves `sops -e` as `v_unencrypted:
+# "1_000"`, double-quoted and intact, and `sops -d` reads it back at exit 0 for
+# all 22 spellings of this class. And there is no decimal to pass, because the
+# value is not a number: what is missing is a way to write a string as anything
+# but this bare token, which YAML::XS does not have (no tag, no forced-quote
+# hook -- probed over every SV shape and every setting of
+# $YAML::XS::QuoteNumericStrings; a dualvar carrier makes it WORSE, writing even
+# `0755` bare). So the leaf stays refused, per docs/adr/0008, until the emitter
+# can write it -- and the message says what is true of it and names the two
+# remedies that are measured to work: encrypt it (22 of 22 sops -d exit 0) or
+# write the document as JSON (22 of 22). See docs/adr/0039 and karr #135, and
+# karr #99 for the emitter that would end the refusal.
+#
+# detect_type is the ladder the digest already goes through, not a second
+# opinion about what the leaf is -- and not a pattern on its text.
+sub _foreign_resolution_remedy {
+    my ($leaf) = @_;
+
+    return "This leaf is already a STRING here, and sops does not resolve a "
+        . "string away: it writes one double-quoted and reads it back "
+        . "(measured, sops -d exit 0). What this emitter cannot do is write it "
+        . "that way -- YAML::XS has no per-scalar style control, so the only "
+        . "token it produces for this leaf is the bare one Go resolves into "
+        . "something else, and there is no other spelling of the same string to "
+        . "pass instead. Encrypt the leaf -- an ENC[...] string carries it "
+        . "verbatim and is unaffected by this rule -- or write the document as "
+        . "JSON, where every string is quoted"
+        if File::SOPS::Encrypted->detect_type($leaf) eq 'str';
+
+    return "sops itself resolves such a spelling when it writes: a plaintext "
+        . "`mode: 0755` becomes the integer 493 in its output, and that decimal "
+        . "is what to pass here. To keep the spelling as text, encrypt the leaf "
+        . "-- an ENC[...] string carries it verbatim and is unaffected by this "
+        . "rule";
+}
+
 # The document carries a MAC that covers this leaf, so the disagreement is with
 # the file's own verification and there is nothing to write.
 sub _reject_foreign_resolution {
@@ -1978,11 +2043,7 @@ sub _reject_foreign_resolution {
         . "the value this module resolves, while sops re-reads the document with "
         . "Go's yaml.v3 and resolves a different one, so the file would fail its "
         . "own MAC and neither sops nor this module could read it back (measured, "
-        . "sops -d exit 51). sops itself resolves such a spelling when it writes: "
-        . "a plaintext `mode: 0755` becomes the integer 493 in its output, and "
-        . "that decimal is what to pass here. To keep the spelling as text, "
-        . "encrypt the leaf -- an ENC[...] string carries it verbatim and is "
-        . "unaffected by this rule";
+        . "sops -d exit 51). " . _foreign_resolution_remedy($leaf);
 }
 
 # mac_only_encrypted: the digest covers encrypted values only, so this leaf
@@ -2004,12 +2065,27 @@ sub _warn_foreign_resolution {
     return _carp_foreign_retyping($where) if $kind eq 'type';
 
     carp "$where: this leaf's spelling is " . _foreign_resolution_reason($token)
-        . ", so sops resolves a different value from the one this module reads "
-        . "(measured: a `mode: 0755` is 493 to sops and 755 here). With "
-        . "mac_only_encrypted set the MAC does not cover this leaf, so nothing "
-        . "will fail -- the document is written and sops reads it. Pass the "
-        . "value sops itself would write (the decimal for `0755` is 493), or "
-        . "encrypt the leaf, to make the two agree";
+        . ", so sops resolves a different value from the one this module reads. "
+        . "With mac_only_encrypted set the MAC does not cover this leaf, so "
+        . "nothing will fail -- the document is written and sops reads it. "
+        . _foreign_resolution_warning_remedy($leaf);
+}
+
+# The same split as the refusal's, and for the same measured reason: there is no
+# value to pass for a leaf that is already a string, because the string IS the
+# value and the emitter cannot write it quoted. See docs/adr/0039 and karr #135.
+sub _foreign_resolution_warning_remedy {
+    my ($leaf) = @_;
+
+    return "This leaf is already a string here, and sops writes such a string "
+        . "double-quoted rather than resolving it away -- this emitter cannot, "
+        . "because YAML::XS has no per-scalar style control, so there is no "
+        . "value to pass instead. Encrypt the leaf, or write the document as "
+        . "JSON where every string is quoted, to make the two agree"
+        if File::SOPS::Encrypted->detect_type($leaf) eq 'str';
+
+    return "Pass the value sops itself would write (measured: a `mode: 0755` is "
+        . "493 to sops and 755 here), or encrypt the leaf, to make the two agree";
 }
 
 ###############################################################################
