@@ -1,0 +1,58 @@
+---
+class: standard
+completed: 2026-08-21T04:43:47Z
+created: 2026-08-21T01:36:39Z
+id: 105
+priority: low
+started: 2026-08-21T02:38:56Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- mac
+title: A sops-written .inf in an unencrypted slot fails File::SOPS MAC verification
+updated: 2026-08-21T04:43:47Z
+---
+
+Found by the format lane while measuring karr #102 (sops 3.13.3 at /tmp/sops).
+Pre-existing, independent of #102, and NOT fixed by #102's candidate change.
+
+ADR 0013 records the WRITE side: a bare `.inf` is refused on the encrypt path,
+because libyaml leaves the spelling a string while Go resolves it to float +Inf,
+so the document would fail its own MAC (measured there, sops -d exit 51).
+
+The READ side is not covered and fails. sops itself writes such a document:
+
+  plaintext:  keep: x / v_unencrypted: .inf
+  sops -e     exit 0, wire holds `.inf` verbatim
+  sops -d     exit 0
+
+  File::SOPS->decrypt of that same document, 3e5e6b0:
+  MAC verification failed: the digest over 2 leaf values in document order
+  does not match the one stored in the sops section.
+
+Mechanism: YAML::XS returns `.inf` as a POK-ONLY scalar -- a plain string -- so
+our digest covers the four characters `.inf`, while Go resolved a float and
+digested `+Inf`. Same for .Inf .INF +.inf -.inf .nan .NaN .NAN (%GO_CONSTANT in
+Format::YAML already lists all eight and the bytes Go derives from each).
+
+Not fixable the way #102 is. #102 turns a leaf our parser wrongly made a FLOAT
+back into the string Go sees; here our parser already has a string and Go has the
+float, so the repair would have to go the other way -- manufacture a real Perl
++Inf on parse -- which assert_representable then refuses on any re-encrypt
+(karr #59). So the read fix and the write refusal would contradict each other,
+and that tension is the actual open question. Do not resolve it by loosening the
+non-finite guard.
+
+Reachability is why this is low: the document has to be written by sops (ours
+refuses to create one) and has to carry a bare `.inf` in an UNENCRYPTED slot.
+An encrypted `.inf` is fine and stays fine -- sops stores it as type:float with
+the plaintext `+Inf`, and File::SOPS decrypts it to a real Perl Inf today
+(measured, identical before and after #102's prototype).
+
+Wire lane. Needs the sops binary to prove.
+2026-08-21 03:19 Read path fixed, ADR 0026, t/42. Write half handed to #113. Interop ran: 32/32.
+IMPLEMENTED: docs/adr/0026, t/42-yaml-plain-infinity-is-a-float.t, lib/File/SOPS/Format/YAML.pm, Changes. Read fixed for all twelve tokens; write half is karr #113. Two ticket premises corrected: sops normalises nine of the twelve spellings away (only .inf -.inf .nan are reachable), and rotate ALREADY broke on such a document, so option (i) never had the cost this ticket assigned it. The real blocker was a quoted ".inf" -- a STRING to sops, digest '.inf', where a bare .inf is a float, digest '+Inf' -- indistinguishable in the YAML::XS parse result, and both spellings occur in ONE document (measured, adjacent list elements, sops -d exit 0). So the repair asks YAML::PP whether the scalar was written PLAIN and only then replaces it, with dualvar(float, token); the value still comes from %GO_CONSTANT, which this pass verified against twelve real mac: fields. Gated on the document carrying a sops: section, so ADR 0013 keeps the encrypt-path refusal. MEASURED: unencrypted slot sops -e -> decrypt 0 of 12 before, 12 of 12 after; encrypted slot 12 of 12 both; nothing else moves; 0.096ms/parse before and after for a document without such a token. NET: t/42 against unpatched f5d433d with perl -I: 7 of 17 subtests and 44 assertions fail, all ten passing ones are must-not-move sections. prove -lr t/ 974/974 (43 files); SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32, RAN not skipped, sops 3.13.3. PRIORITY: low is right for reachability -- three tokens, YAML only, unencrypted slot only, sops-written only -- recommend leaving it low. Filed alongside: #113, #114, #115.
+Implementiert und committet (ADR 0026). Zwei Ticketpraemissen widerlegt: rotate brach schon vorher am MAC, und der echte Blocker war ein quoted ".inf", das sops als STRING liest -- YAML::XS gibt fuer bare und quoted dasselbe POK-only-Skalar zurueck, also haetten alle drei im Ticket gelisteten Optionen die quoted-Zeile still kaputtgemacht. Loesung: das DOKUMENT fragen (YAML::PP-Resolver), Wert aus %GO_CONSTANT, Leaf als dualvar. 0/12 -> 12/12. Prioritaet bleibt low, gemessen und nicht angenommen.
+ABGENOMMEN 2026-08-21. 0/12 -> 12/12 im unverschluesselten Slot. Die Abnahme gilt ausdruecklich auch der ENTSCHEIDUNG, nicht nur dem Ergebnis: die drei im Ticket gelisteten Optionen haetten alle das quotierte ".inf" still kaputtgemacht, weil YAML::XS fuer bar und quotiert dasselbe POK-only-Skalar liefert. Die gewaehlte vierte -- das DOKUMENT fragen statt den Wert -- ist die einzige, die beide Zeilen haelt. Prioritaet bleibt low, gemessen. Commit 45a1751, ADR 0026.
