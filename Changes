@@ -1,6 +1,33 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE and BUG FIX: a YAML document carrying a sops comment as
+    a list element is now refused, naming the element, where it used to be
+    read as an ordinary value. sops attaches a comment to the node that
+    FOLLOWS it: above a mapping key it stays a `#ENC[...,type:comment]` line,
+    which YAML::XS discards and sops does not hash, so such a document always
+    read correctly here and still does. Above a SEQUENCE entry there is no
+    comment line to write, so sops emits the comment as a real element
+    (`- ENC[...,type:comment]`) and every parser keeps it. Measured against
+    sops 3.13.3 on three lines of plaintext (`list:` / `# only a sequence
+    comment` / `- one`): `sops -d` exit 0, File::SOPS->decrypt "MAC
+    verification failed", and with ignore_mac => 1 a list holding the comment
+    text as a silent extra string - which a decrypt+encrypt cycle then made a
+    PERMANENT value, with `sops -d` reporting success on the result. The same
+    defect turned `flow: [1, 2]  # after` into a list of two integers led by a
+    string. Comments are in NO format part of sops's MAC (four measurements,
+    correcting the premise recorded in karr #76), so there is no digest-only
+    fix that also removes the phantom element, and this tree model has no
+    place for a leaf without a key. Every read path refuses - decrypt,
+    decrypt_file, extract, rotate, edit - including ignore_mac => 1, which is
+    the path that produced the corruption; encrypt is untouched, since
+    plaintext has no ENC values in it. The cost is stated rather than hidden:
+    this is a document sops reads and File::SOPS now does not. Silently
+    dropping the comment instead was measured to work and rejected, because
+    every write path would then strip comments with no diagnostic at all;
+    preserving them is karr #76 and would make the refusal unnecessary. See
+    docs/adr/0024 and karr #108. New: File::SOPS::Encrypted->encrypted_type,
+    which reads an ENC value's type label without decoding its base64.
   - BEHAVIOUR CHANGE and BUG FIX: a YAML literal whose magnitude overflows a
     double is now the STRING sops reads there, where it used to be a float
     that had already become +Inf. `1e400`, a 401-digit integer and the bare

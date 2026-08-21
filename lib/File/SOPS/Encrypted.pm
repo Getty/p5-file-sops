@@ -116,9 +116,18 @@ it had been read.
 
 C<time> and C<comment> are read but never produced here. C<time> is Go's
 C<time.Time>, stored as RFC3339 and returned as that string, because Perl has
-no native date type. C<comment> is a YAML comment, which sops writes as
-C<#ENC[...]> on its own line -- L<YAML::XS> discards comments, so a document
-never carries one into this module.
+no native date type.
+
+C<comment> is a YAML comment. sops attaches one to the node that B<follows> it:
+above a mapping key it stays a C<#ENC[...]> line, which L<YAML::XS> discards,
+but above a B<sequence entry> sops writes it as a real sequence element
+(C<- ENC[...,type:comment]>) and every parser keeps it. A comment leaf is not a
+value, and this distribution has no place for a leaf without a key, so
+L<File::SOPS::Format::YAML/parse> refuses a document that carries one rather
+than reading it as an extra list element. See
+L<docs/adr/0024|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0024-a-sops-comment-leaf-is-refused-not-read-as-a-value.md>.
+L</decrypt_value> still answers for C<comment>, for a caller holding such a
+value directly.
 
 Defaults to C<str>.
 
@@ -200,6 +209,39 @@ sub is_encrypted {
 Class method to check if a string is in SOPS encrypted format.
 
 Returns true if the string matches the C<ENC[...]> pattern.
+
+=cut
+
+# The type LABEL, without decoding anything. The third sharer of $ENC_REGEX,
+# alongside is_encrypted and parse -- one anchored pattern, so a caller asking
+# "what kind of leaf is this" can never disagree with a caller asking "is this a
+# leaf at all".
+#
+# Deliberately not `parse($s)->type`: parse decodes all three base64 fields and
+# croaks on a damaged one, and the caller this exists for -- the comment guard
+# in File::SOPS::Format::YAML -- has to recognise a comment leaf whose
+# ciphertext is broken. Measured against sops 3.13.3: a comment whose ciphertext
+# was swapped for another value's is NOT fatal to sops (`sops -d` exit 0, with a
+# warning), so identifying it by the label alone is what matches the reference.
+sub encrypted_type {
+    my ($class, $string) = @_;
+
+    return unless defined $string && $string =~ $ENC_REGEX;
+    return $5;
+}
+
+=method encrypted_type
+
+    my $type = File::SOPS::Encrypted->encrypted_type($string);
+    # 'str', 'int', 'comment', ... or undef
+
+Class method. Returns the C<type:> label of an C<ENC[...]> string without
+decoding its base64 fields, or C<undef> if the string is not an encrypted value.
+
+It shares one anchored pattern with L</is_encrypted> and L</parse>, and it
+answers for a value whose ciphertext is damaged -- which L</parse> does not,
+because it decodes. That is the case it exists for: a C<type:comment> leaf has
+to be recognised as a comment before anyone tries to decrypt it.
 
 =cut
 
@@ -1639,9 +1681,18 @@ sub _deserialize_value {
     #              value. It is also what the YAML and JSON parsers give the
     #              caller for the same scalar when it is NOT encrypted, so the
     #              document reads consistently either way.
-    #   comment -- a YAML comment sops writes as `#ENC[...]` on its own line.
-    #              YAML::XS drops comments, so File::SOPS never meets one
-    #              through a document; this is here for a direct caller.
+    #   comment -- a YAML comment. sops attaches a comment to the node that
+    #              FOLLOWS it, so where that node is a MAPPING entry the comment
+    #              stays a `#ENC[...]` line, which YAML::XS drops before this
+    #              module sees it. Where it is a SEQUENCE entry there is no
+    #              comment line to write and sops emits the comment as a real
+    #              sequence element, `- ENC[...,type:comment]` -- so File::SOPS
+    #              very much does meet one through a document, and read it as an
+    #              ordinary value until karr #108. This branch is now reached
+    #              only by a direct caller: Format::YAML::parse refuses a
+    #              document carrying a comment leaf, because such a leaf is not
+    #              a value and this distribution has nowhere to put it. See
+    #              docs/adr/0024, and karr #76 for preserving it instead.
     #
     # utf8::decode leaves the scalar alone and returns false if the plaintext
     # is not valid UTF-8, which is the graceful direction -- such a value comes

@@ -154,7 +154,96 @@ sub parse {
     # HashRef check, so there is a tree to walk. See _restring_non_finite_leaf.
     _restring_non_finite_leaves($data, {});
 
+    # Same placement, same reason: after the split, so the metadata's own
+    # mac: ENC[...] is out of reach. See _reject_comment_leaves.
+    _reject_comment_leaves($data, [], {});
+
     return ($data, $metadata);
+}
+
+###############################################################################
+# A comment sops wrote as a list element (karr #108, docs/adr/0024)
+#
+# sops attaches a YAML comment to the node that FOLLOWS it. Above a mapping key
+# that is a `#ENC[...,type:comment]` line, which YAML::XS discards before this
+# module sees it -- and sops does not hash it either, so both sides agree by
+# accident and the document reads correctly. Above a SEQUENCE entry there is no
+# comment line to write, so sops emits the comment as a real element:
+#
+#     list:
+#         - ENC[AES256_GCM,...,type:comment]
+#         - ENC[AES256_GCM,...,type:str]
+#
+# and every parser keeps it. Measured against sops 3.13.3 on three lines of
+# plaintext (`list:` / `  # only a sequence comment` / `  - one`): `sops -d`
+# exit 0, while File::SOPS->decrypt failed MAC verification and
+# `ignore_mac => 1` answered { list => [' only a sequence comment', 'one'] } --
+# a comment as a silent extra string. A decrypt+encrypt cycle then made it a
+# PERMANENT value, both sides exit 0, no warning from anyone.
+#
+# Comments are NOT in the MAC, in any format: deleting a comment leaf leaves
+# `sops -d` at exit 0 where deleting a real value gives exit 51, three documents
+# with identical values and different comments have byte-identical MAC
+# plaintext, and relabelling a type:str value to type:comment takes it OUT of
+# what sops digests (exit 51). So this leaf must be kept out of the digest --
+# and out of the tree, or the caller still gets the phantom element and still
+# writes it back.
+#
+# Refusing rather than dropping is the decision, not a limitation. Dropping was
+# measured to work -- with the same drop applied to the ordered reparse in
+# File::SOPS::_parse_in_document_order, which ADR 0001 requires to stay
+# structurally identical, the fixture verifies and returns { list => ['one'] }.
+# It is rejected because every write path (rotate, edit, encrypt_in_place) would
+# then emit the document without the comments, silently: a loud wrong read
+# traded for a silent lossy write. Preserving them is karr #76, and this guard
+# is shaped to become a straight removal when it lands.
+#
+# The predicate is the type: LABEL on the wire, never the position and never the
+# text (ADR 0002's discipline, and encrypted_type reads the one anchored regex
+# that is_encrypted and parse share). Every position is refused, not only
+# sequences: a comment leaf is never a value wherever it sits, the mapping
+# position cannot produce one, and a comment leaf in a mapping VALUE slot is a
+# document sops itself exits 51 on. No base64 is decoded and the comment is
+# never decrypted -- sops tolerates a comment whose ciphertext is damaged, so
+# the label alone has to be enough, and an error message is no place for
+# plaintext.
+sub _reject_comment_leaves {
+    my ($node, $path, $seen) = @_;
+
+    # A recursive YAML anchor really does come back from YAML::XS as a cycle;
+    # this walk carries its own visited set for the same reason
+    # _restring_non_finite_leaves does.
+    if (ref $node eq 'HASH') {
+        return if $seen->{refaddr($node)}++;
+        _reject_comment_leaves($node->{$_}, [ @$path, $_ ], $seen)
+            for keys %$node;
+        return;
+    }
+    elsif (ref $node eq 'ARRAY') {
+        return if $seen->{refaddr($node)}++;
+        # The INDEX is carried, where the MAC's own walk drops it -- that
+        # omission is the AAD rule, and this string is a diagnostic. It is the
+        # shape Encrypted::_leaf_location and _extract_path already use, and
+        # the index is the whole point here: the comment IS a list element.
+        _reject_comment_leaves($node->[$_], [ @$path, $_ ], $seen)
+            for 0 .. $#$node;
+        return;
+    }
+
+    return unless defined $node && !ref $node;
+    return unless (File::SOPS::Encrypted->encrypted_type($node) // '') eq 'comment';
+
+    my $where = @$path ? join(':', @$path) : '(document root)';
+    croak "$where: this document carries a sops comment (type:comment) where a "
+        . "value belongs, and File::SOPS has no place for a leaf that is not a "
+        . "value. sops attaches a comment to the node that follows it, so a "
+        . "comment written above a list entry becomes a list ENTRY of its own "
+        . "-- read as a value it is an extra element the file does not "
+        . "contain, it is counted into a digest sops does not count it into, "
+        . "and re-encrypting the document would make it a permanent value. "
+        . "Read this file with sops, or remove the comment from the plaintext "
+        . "and encrypt it again. Preserving comments is not implemented; see "
+        . "docs/adr/0024";
 }
 
 ###############################################################################
@@ -299,6 +388,38 @@ The cost is that the leaf is written back B<quoted> -- C<v: '1e400'> where sops
 writes C<v: 1e400>. Both are a string to both parsers, so the digest is the same
 text either way. See
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
+
+=head3 A comment inside a list is refused
+
+sops attaches a YAML comment to the node that B<follows> it. Above a mapping key
+the comment stays a comment -- C<#ENC[...,type:comment]> on a line of its own,
+which L<YAML::XS> discards and sops does not hash, so such a document reads
+correctly here and always has. Above an entry of a B<sequence> there is no
+comment line to write, so sops emits the comment as a real element:
+
+    list:
+        - ENC[AES256_GCM,...,type:comment]
+        - ENC[AES256_GCM,...,type:str]
+
+Since 0.003 this method B<dies> on a document that carries a C<type:comment>
+leaf, naming the path it sits at (C<list:0>). Before it, the comment was read as
+an ordinary list element: strict mode failed MAC verification, and
+C<ignore_mac =E<gt> 1> returned a list with the comment's text in it as a silent
+extra string -- which a C<decrypt> plus C<encrypt> cycle then made a permanent
+value, with C<sops -d> reporting success at every step.
+
+A comment is not a value and this distribution has no place for a leaf without a
+key, so there is nothing correct to hand back. Read such a file with C<sops>, or
+remove the comment from the plaintext and encrypt it again. Preserving comments
+through a read and putting them back on write is karr #76 and not implemented;
+until it is, this is a document sops can read and File::SOPS cannot. See
+L<docs/adr/0024|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0024-a-sops-comment-leaf-is-refused-not-read-as-a-value.md>,
+which records why dropping the leaf silently was rejected.
+
+The refusal is on the B<read> side only, and covers C<ignore_mac =E<gt> 1> with
+everything else: that flag means decrypted but not authenticated, never a tree
+holding a value the file does not contain. Plaintext input has no C<ENC[...]>
+strings in it, so nothing on the encrypt side can trip this.
 
 =cut
 
