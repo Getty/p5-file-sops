@@ -1,6 +1,39 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE and BUG FIX: a sops COMMENT is now preserved instead of
+    refused. sops attaches a comment to the node that follows it, and where
+    that node is a sequence entry it has nowhere to put a comment line, so it
+    writes the comment as a sequence entry of its own
+    (`- ENC[...,type:comment]`) - in YAML and, measured, in JSON written with
+    `--output-type json` too. Such an entry now comes back from `decrypt` as a
+    `File::SOPS::Comment` holding the comment's text, at the index the file
+    puts it at, and `encrypt` and `rotate` write it out again as a
+    `type:comment` entry that `sops -d` restores as a real comment. Measured
+    against sops 3.13.3, six comments in five positions: `sops -e` ->
+    `decrypt` -> `encrypt` -> `sops -d` comes back byte-identical to sops's
+    OWN `-e`/`-d` round trip of the same file. It is an object and not the
+    text on purpose - a comment is not a value, and a string there is an
+    element the file does not contain. A comment leaf is NOT in the MAC, in
+    any format and in both MAC modes: measured four ways before, and once
+    more here, where the digest computed over four sops-written documents
+    matches the one they store exactly when the comments are dropped. 0.003
+    refused such a document at parse (never released, docs/adr/0024) and
+    0.002 read the comment as an ordinary list element, which failed MAC
+    verification and, with `ignore_mac => 1`, handed back a list with the
+    comment's text in it as a silent extra string that a re-encrypt made
+    permanent. THE JSON SIDE was never covered by that refusal and carried
+    the whole defect until now, `ignore_mac => 1` and all. STILL REFUSED,
+    both naming the path: a comment in a MAPPING VALUE slot, which no SOPS
+    store writes and which sops reads back as a dump of Go's comment struct
+    at exit 0 (measured, with the guard lifted); and writing a comment into
+    PLAINTEXT, so `decrypt_file` and `edit` refuse a document with one -
+    YAML::XS cannot emit a comment, and a comment line handed to an editor
+    would be dropped on the way back in. UNCHANGED: a comment above a mapping
+    key, which YAML::XS discards on the way in and no emitter here can write,
+    and which sops itself drops when it writes JSON - the open half of
+    karr #76. See docs/adr/0041, which supersedes docs/adr/0024, and karr
+    #108.
   - BUG FIX and BEHAVIOUR CHANGE: `File::SOPS::Metadata->from_hash` now reads
     the two `sops`-section fields that are not strings the way sops reads
     them, out of text. `mac_only_encrypted: "false"` in a document - quoted in

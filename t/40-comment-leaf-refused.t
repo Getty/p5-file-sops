@@ -11,7 +11,7 @@ use File::SOPS::Format::YAML;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# karr #108 / docs/adr/0024: a sops comment leaf is refused, not read as a value.
+# karr #108 / docs/adr/0024, FLIPPED by karr #76 / docs/adr/0041.
 #
 # sops attaches a YAML comment to the node that FOLLOWS it. Above a mapping key
 # that stays a `#ENC[...,type:comment]` line, which YAML::XS discards and sops
@@ -23,8 +23,7 @@ use Crypt::Age;
 #         - ENC[AES256_GCM,...,type:comment]
 #         - ENC[AES256_GCM,...,type:str]
 #
-# Measured against sops 3.13.3 on three lines of plaintext
-# (`list:` / `  # only a sequence comment` / `  - one`):
+# karr #108 measured what that did (sops 3.13.3, three lines of plaintext):
 #
 #   sops -d                                exit 0
 #   File::SOPS->decrypt                    MAC verification failed
@@ -33,15 +32,27 @@ use Crypt::Age;
 #
 # The last line is the defect: the comment is a silent extra string, and a
 # decrypt+encrypt cycle made it PERMANENT with `sops -d` exit 0 at every step.
-# Comments are not in sops's MAC in any format, so there is no digest fix that
-# also removes the phantom element -- and there is no place in this tree model
-# for a leaf without a key. Parse therefore refuses, naming the path.
+# ADR 0024 closed it by REFUSING the document at parse, deliberately as an
+# intermediate step. ADR 0041 replaces that refusal with the thing it was an
+# intermediate step towards: the leaf is PRESERVED. It decrypts to a
+# File::SOPS::Comment, stays at its index, stays OUT of the digest (which is
+# what sops does with it, measured four ways) and is written back as a
+# type:comment element.
 #
-# Sections 1 to 5 need no binary: the guard is textual and structural, it fires
-# before anything is decrypted, so a comment leaf can be constructed here.
-# Section 6 is the compatibility claim -- that sops really writes this shape and
-# that a document whose comments are all in mapping position still reads -- and
-# is skipped without a binary.
+# THIS FILE THEREFORE PINS TWO THINGS AT ONCE, and the sections say which:
+#
+#   * the pins that FLIPPED -- a comment leaf in a sequence is read and kept
+#     where it used to be refused. The full round trip against the binary is
+#     t/56; here it is the tree, the digest and the message.
+#   * the refusals that REMAIN, which are the whole of what is left of ADR 0024:
+#     a comment as a MAPPING VALUE (a shape no SOPS store writes -- sops reads
+#     it back as a dump of Go's comment struct), and a comment this emitter is
+#     asked to write as PLAIN TEXT (decrypt_file, edit).
+#
+# Sections 1 to 5 need no binary: the guards are structural and fire before
+# anything is decrypted, so a comment leaf can be constructed here. Section 6 is
+# the compatibility claim -- that sops really writes this shape -- and is
+# skipped without a binary.
 # ----------------------------------------------------------------------------
 
 sub _find_on_path {
@@ -89,50 +100,61 @@ my $COMMENT_LEAF = enc_string('comment', ' only a sequence comment');
 my $STR_LEAF     = enc_string('str',     'one');
 
 ###############################################################################
-# 1. THE REFUSAL. A comment leaf in a parsed tree is not a value, and parse
-#    says so at the path it sits at rather than handing it on.
+# 1. WHAT FLIPPED. A comment leaf in a SEQUENCE is a leaf the document really
+#    has, so parse hands it on and the tree keeps it. Every assertion in this
+#    section was a refusal under docs/adr/0024.
 ###############################################################################
 
-subtest 'a comment leaf in a sequence is refused, naming the path' => sub {
+subtest 'a comment leaf in a sequence is handed on by parse' => sub {
     my $doc = "list:\n    - $COMMENT_LEAF\n    - $STR_LEAF\n";
 
-    my $data = eval { scalar File::SOPS::Format::YAML->parse($doc) };
-    ok(!defined $data, 'parse refuses the document');
-    like($@, qr/\Alist:0: /,
-        'the message names the element, not just the list');
-    like($@, qr/type:comment/, 'and says what the leaf is');
-    like($@, qr/adr\/0024/, 'and points at the decision');
+    # FLIPPED (docs/adr/0041): parse used to croak `list:0: ... type:comment`.
+    my ($data) = File::SOPS::Format::YAML->parse($doc);
+    is_deeply($data, { list => [ $COMMENT_LEAF, $STR_LEAF ] },
+        'the element is in the tree, at its index, untouched');
 
-    unlike($@, qr/only a sequence comment/,
-        'the comment text is never decrypted and never printed');
+    ok(File::SOPS::Encrypted->is_encrypted($data->{list}[0]),
+        'and it is still just the ENC[...] string the file holds');
+    is(File::SOPS::Encrypted->encrypted_type($data->{list}[0]), 'comment',
+        'which says what it is without decoding anything');
 };
 
-subtest 'the path is the full path, at any depth' => sub {
-    my %at = (
-        'a:b:1'         => "a:\n    b:\n        - $STR_LEAF\n        - $COMMENT_LEAF\n",
-        'k'             => "k: $COMMENT_LEAF\n",
-        'outer:0:inner' => "outer:\n    - inner: $COMMENT_LEAF\n",
+subtest 'a comment leaf is kept at every depth a sequence reaches' => sub {
+    # FLIPPED (docs/adr/0041): all three of these were refusals at parse. The
+    # two SEQUENCE positions are now read; the MAPPING VALUE one is refused,
+    # one layer further in -- see section 4.
+    my %doc = (
+        'a:b:1' => "a:\n    b:\n        - $STR_LEAF\n        - $COMMENT_LEAF\n",
+        'deep'  => "outer:\n    - inner:\n        - $COMMENT_LEAF\n",
     );
 
-    for my $where (sort keys %at) {
-        eval { File::SOPS::Format::YAML->parse($at{$where}) };
-        like($@, qr/\A\Q$where\E: /, "refused at $where");
-    }
+    my ($a) = File::SOPS::Format::YAML->parse($doc{'a:b:1'});
+    is_deeply($a, { a => { b => [ $STR_LEAF, $COMMENT_LEAF ] } },
+        'nested list, comment last');
+
+    my ($d) = File::SOPS::Format::YAML->parse($doc{deep});
+    is_deeply($d, { outer => [ { inner => [ $COMMENT_LEAF ] } ] },
+        'a list under a key under a list');
 };
 
-subtest 'a damaged comment leaf is still recognised as a comment' => sub {
+subtest 'a damaged comment leaf is recognised without being decoded' => sub {
     # sops tolerates a comment whose ciphertext will not decrypt -- measured, it
-    # warns and leaves the text alone. So the guard has to answer from the label
-    # alone, without decoding anything, or a damaged comment would be reported
-    # as a base64 problem and the real shape would stay hidden.
+    # warns and leaves the text alone. The label alone therefore has to be
+    # enough to keep such a leaf out of the digest, which is what
+    # encrypted_type is for. Decrypting it is a different matter: that croaks,
+    # naming the path, which is one place this distribution is stricter than
+    # the reference.
     my $damaged = 'ENC[AES256_GCM,data:!!!!,iv:!!!!,tag:!!!!,type:comment]';
 
     eval { File::SOPS::Encrypted->parse($damaged) };
     like($@, qr/Invalid base64/, 'parse of the value itself still croaks');
 
-    eval { File::SOPS::Format::YAML->parse("list:\n    - $damaged\n") };
-    like($@, qr/\Alist:0: .*type:comment/s,
-        'but the document is refused as a comment leaf, not as bad base64');
+    is(File::SOPS::Encrypted->encrypted_type($damaged), 'comment',
+        'but the label is readable, so the digest can skip it');
+
+    # FLIPPED (docs/adr/0041): the document used to be refused at parse.
+    my ($data) = File::SOPS::Format::YAML->parse("list:\n    - $damaged\n");
+    is_deeply($data, { list => [$damaged] }, 'and the document parses');
 };
 
 ###############################################################################
@@ -193,37 +215,33 @@ subtest 'encrypted_type reads the label and nothing else' => sub {
 };
 
 ###############################################################################
-# 4. THE PUBLIC API. Every read path goes through parse, so every read path
-#    refuses -- including ignore_mac, which is the one that used to produce the
-#    corrupted tree.
+# 4. THE PUBLIC API. Every read path goes through _decrypt_tree, so every read
+#    path keeps the comment -- and the two shapes that still cannot be written
+#    are refused there and at the emitter, naming the path.
 ###############################################################################
 
-# The document this section reads is a CONSTRUCTION, and knowing that is part of
-# reading the failures it produces. File::SOPS encrypts
-# [' only a sequence comment', 'one'], and the first element is then relabelled
-# type:comment. The leaf is a genuine one -- same data key, and the same AAD,
-# because SOPS gives every element of an array its parent's path and adds no
-# index -- so it decrypts exactly as a sops-written comment does, and before this
-# change it came back as an ordinary string.
-#
-# Its MAC is not sops's, though. Relabelling does not move the stored digest (it
-# covers the authenticated plaintext, and only a bool is normalised by type), so
-# here the MAC covers the comment: the unpatched library VERIFIES this document
-# and hands back the phantom element from the strict path. A sops-written
-# document is the other way round -- sops leaves comments out of the digest, so
-# the unpatched library fails MAC verification and only ignore_mac => 1 reaches
-# the corrupted tree. That is what karr #108 reports, and it holds for every sops
-# document measured: the minimal reproducer, the flow-sequence one, and comments
-# of `#x`, `#   ` and a bare tab, all five dead on the MAC. The two shapes that
-# could make the two digests agree are both closed -- a bare `#` in a list makes
-# sops write an empty string ELEMENT and no comment leaf at all, and in an
-# unencrypted subtree, with or without mac_only_encrypted, sops keeps the comment
-# as a real comment line that YAML::XS discards.
-#
-# The construction earns its place by what it isolates: with the MAC agreeing,
-# the refusal below can only be the guard firing at PARSE time, and not a side
-# effect of a digest mismatch. Subtest 9 asks the binary for the other half.
+# The document this section reads is written by File::SOPS itself, from a
+# File::SOPS::Comment, which is the shape ADR 0041 says it writes: the comment
+# encrypted as type:comment at its index, and NOT in the digest. Subtest 9 asks
+# the binary whether that is really sops's shape; this one asks whether the
+# library reads back what it wrote, which is the half a binary cannot answer for
+# a document the binary did not write.
 sub document_with_comment_leaf {
+    return File::SOPS->encrypt(
+        data       => { list => [
+            File::SOPS::Comment->new(text => ' only a sequence comment'),
+            'one',
+        ] },
+        recipients => [$public],
+        format     => 'yaml',
+    );
+}
+
+# The same document with the comment RELABELLED from a type:str value, so its
+# stored digest covers the comment's plaintext -- which sops's never does. It
+# exists to prove the exclusion from the other side: if the digest here still
+# covered comments, this document would verify.
+sub document_whose_mac_covers_the_comment {
     my $doc = File::SOPS->encrypt(
         data       => { list => [' only a sequence comment', 'one'] },
         recipients => [$public],
@@ -236,61 +254,153 @@ sub document_with_comment_leaf {
     return $doc;
 }
 
-subtest 'decrypt refuses, in both MAC modes' => sub {
+subtest 'decrypt keeps the comment, in both MAC modes' => sub {
     my $doc = document_with_comment_leaf();
 
-    # THE CORRUPTION PATH. Both of these used to return
-    # { list => [' only a sequence comment', 'one'] } -- the comment as a silent
-    # extra string, which a re-encrypt then made permanent with `sops -d` exit 0
-    # on the result. Neither returns anything now.
+    like($doc, qr/^\s*- ENC\[AES256_GCM,.*,type:comment\]$/m,
+        'encrypt wrote the comment as a sequence element');
+
+    # FLIPPED (docs/adr/0041). Under ADR 0024 both of these croaked
+    # `list:0: ... type:comment`; before that they returned
+    # { list => [' only a sequence comment', 'one'] }, the comment as a silent
+    # extra STRING, which is the defect neither answer had to be.
+    for my $mode (['strict', ()], ['ignore_mac', (ignore_mac => 1)]) {
+        my ($name, %extra) = @$mode;
+        my $got = eval { File::SOPS->decrypt(
+            encrypted => $doc, identities => [$secret], format => 'yaml',
+            %extra) };
+        ok(defined $got, "$name decrypt reads the document") or diag($@);
+        isa_ok($got->{list}[0], 'File::SOPS::Comment',
+            "$name: element 0 is a comment leaf");
+        is($got->{list}[0]->text, ' only a sequence comment',
+            "$name: carrying its text");
+        is($got->{list}[1], 'one', "$name: and the value is where it was");
+    }
+
+    # And the tree goes back where it came from: the round trip is closed here,
+    # which is what makes the comment survive rotate and edit-free write-backs.
+    my $again = File::SOPS->encrypt(
+        data => File::SOPS->decrypt(
+            encrypted => $doc, identities => [$secret], format => 'yaml'),
+        recipients => [$public], format => 'yaml');
+    my $back = File::SOPS->decrypt(
+        encrypted => $again, identities => [$secret], format => 'yaml');
+    isa_ok($back->{list}[0], 'File::SOPS::Comment',
+        'a decrypt/encrypt cycle leaves it a comment');
+    is($back->{list}[0]->text, ' only a sequence comment', 'text and all');
+};
+
+subtest 'the digest does not cover a comment' => sub {
+    # The relabelled document's stored MAC covers the comment's plaintext. Ours
+    # does not -- because sops's does not -- so verification must FAIL here. If
+    # this ever passes, the exclusion has been lost and every sops-written
+    # document with a comment in it stops verifying.
+    my $doc = document_whose_mac_covers_the_comment();
+
     my $strict = eval { File::SOPS->decrypt(
         encrypted => $doc, identities => [$secret], format => 'yaml') };
-    ok(!defined $strict, 'strict decrypt refuses');
-    like($@, qr/\Alist:0: .*type:comment/s, 'at the element, as a comment leaf');
-    unlike($@, qr/MAC verification failed/,
-        'and not as a MAC failure blaming the file for being altered');
+    ok(!defined $strict, 'a MAC that covers the comment does not verify here');
+    like($@, qr/MAC verification failed/, 'and says so');
+    like($@, qr/digest over 1 leaf value\b/,
+        'over ONE leaf: the comment is not counted, and the count says so');
 
     my $lax = eval { File::SOPS->decrypt(
         encrypted => $doc, identities => [$secret], format => 'yaml',
         ignore_mac => 1) };
-    ok(!defined $lax, 'ignore_mac refuses too -- the corruption path is closed');
-    like($@, qr/\Alist:0: .*type:comment/s, 'with the same message');
-
-    # And nothing survived to be re-encrypted: there is no longer a route from
-    # this document to one holding the comment as a value.
-    ok(!defined(eval { File::SOPS->encrypt(
-        data => $lax, recipients => [$public], format => 'yaml') }),
-        'and there is nothing to hand back to encrypt');
+    isa_ok($lax->{list}[0], 'File::SOPS::Comment',
+        'and it is still read as a comment, not as a value');
 };
 
-subtest 'the file-based read paths refuse as well' => sub {
+subtest 'a comment as a mapping value is still refused, naming the path' => sub {
+    # THE REFUSAL THAT REMAINS, and the whole of what is left of ADR 0024. No
+    # SOPS store writes this shape: a comment is attached to the node that
+    # FOLLOWS it, so above a mapping key it is a comment LINE. Measured against
+    # sops 3.13.3 with this guard lifted, `sops -d` reads such a document at
+    # exit 0 and hands the key back holding a dump of Go's comment struct
+    # (`value:` / `inline:`), which is silent corruption in a file this library
+    # would have written.
+    my $doc = File::SOPS->encrypt(
+        data => { k => 'x' }, recipients => [$public], format => 'yaml');
+    $doc =~ s/^(k: ENC\[[^\]]*),type:str\]/$1,type:comment]/m
+        or die "test fixture: no encrypted mapping value found to relabel";
+
+    for my $mode (['strict', ()], ['ignore_mac', (ignore_mac => 1)]) {
+        my ($name, %extra) = @$mode;
+        my $got = eval { File::SOPS->decrypt(
+            encrypted => $doc, identities => [$secret], format => 'yaml',
+            %extra) };
+        ok(!defined $got, "$name decrypt refuses it");
+        like($@, qr/\Ak: .*type:comment.*mapping value/s,
+            "$name: at the key, as a comment in a mapping value slot");
+        unlike($@, qr/\bx\b/, "$name: and no plaintext in the message");
+    }
+
+    # The same shape on the WRITE side, which is where a caller can produce it.
+    my $written = eval { File::SOPS->encrypt(
+        data       => { k => File::SOPS::Comment->new(text => ' c') },
+        recipients => [$public], format => 'yaml') };
+    ok(!defined $written, 'and encrypt refuses to write one');
+    like($@, qr/\Ak: a comment cannot be a mapping value/,
+        'naming the key');
+};
+
+subtest 'a comment this emitter would have to write as text is refused' => sub {
+    # The second refusal that remains: YAML::XS cannot emit a comment at all, so
+    # a plaintext document cannot carry one -- and a comment line handed to an
+    # editor would be dropped by YAML::XS on the way back in, which would be a
+    # silent loss rather than a round trip. Same guard for the unencrypted slot,
+    # where sops leaves the comment as a plain `# ...` line (measured).
+    my $tree = { list => [ File::SOPS::Comment->new(text => ' c'), 'one' ] };
+
+    ok(!defined(eval { File::SOPS::Format::YAML->emit($tree) }),
+        'the plaintext emitter refuses');
+    like($@, qr/\Alist:0: cannot write a sops comment/, 'naming the element');
+    like($@, qr/File::SOPS::Comment/, 'and saying what to use instead');
+
+    my $unencrypted = eval { File::SOPS->encrypt(
+        data       => { list_unencrypted => [
+            File::SOPS::Comment->new(text => ' c') ] },
+        recipients => [$public], format => 'yaml') };
+    ok(!defined $unencrypted, 'and so does an unencrypted slot');
+    like($@, qr/cannot write a sops comment/, 'with the same message');
+};
+
+subtest 'the file-based read paths keep it too' => sub {
     my $file = "$tempdir/comment.enc.yaml";
     my $before = document_with_comment_leaf();
     write_file($file, $before);
 
-    for my $case (
-        ['decrypt_file' => sub { File::SOPS->decrypt_file(
-            input => $file, output => "$tempdir/out.yaml",
-            identities => [$secret]) }],
-        ['extract'      => sub { File::SOPS->extract(
-            file => $file, path => '["list"][1]',
-            identities => [$secret]) }],
-        ['rotate'       => sub { File::SOPS->rotate(
-            file => $file, identities => [$secret]) }],
-    ) {
-        my ($name, $code) = @$case;
-        eval { $code->() };
-        like($@, qr/\Alist:0: .*type:comment/s, "$name refuses");
-    }
+    # FLIPPED (docs/adr/0041): extract and rotate croaked `list:0: ...` here.
+    is(File::SOPS->extract(file => $file, path => '["list"][1]',
+        identities => [$secret]), 'one', 'extract reaches past the comment');
 
-    ok(!-e "$tempdir/out.yaml", 'and decrypt_file wrote nothing');
-    is(scalar read_file($file), $before,
-        'and rotate left the document on disk untouched');
+    my $comment = File::SOPS->extract(file => $file, path => '["list"][0]',
+        identities => [$secret]);
+    isa_ok($comment, 'File::SOPS::Comment', 'and extract of the comment itself');
+    is($comment->text, ' only a sequence comment', 'gives its text');
+
+    ok(File::SOPS->rotate(file => $file, identities => [$secret]),
+        'rotate re-keys the document');
+    isnt(scalar read_file($file), $before, 'writing a new one');
+    my $rotated = File::SOPS->decrypt(
+        encrypted => scalar read_file($file), identities => [$secret]);
+    isa_ok($rotated->{list}[0], 'File::SOPS::Comment',
+        'with the comment still a comment');
+    is($rotated->{list}[0]->text, ' only a sequence comment', 'and its text');
+
+    # NOT flipped: decrypt_file has to write PLAINTEXT, which cannot carry a
+    # comment. It refuses at the emitter and writes nothing.
+    eval { File::SOPS->decrypt_file(input => $file,
+        output => "$tempdir/out.yaml", identities => [$secret]) };
+    like($@, qr/\Alist:0: cannot write a sops comment/, 'decrypt_file refuses');
+    ok(!-e "$tempdir/out.yaml", 'and wrote nothing');
 };
 
 ###############################################################################
 # 5. THE SHAPE IS SOPS'S, NOT OURS. Without a binary the sections above prove
-#    the guard; they cannot prove that sops writes this shape. That is section 6.
+#    what this library does with the shape; they cannot prove that sops writes
+#    it. That is section 6. The full round trip -- our document read back by
+#    the binary -- is t/56.
 ###############################################################################
 
 SKIP: {
@@ -315,21 +425,22 @@ SKIP: {
         like($back, qr/# only a sequence comment/,
             'with the comment restored as a comment');
 
+        # FLIPPED (docs/adr/0041): this used to assert a refusal. The MAC
+        # verifying is the load-bearing half -- it is sops's own digest, and it
+        # only matches because the comment is left out of ours.
         my $got = eval { File::SOPS->decrypt(
             encrypted => scalar read_file("$tempdir/seq.enc.yaml"),
             identities => [$secret]) };
-        ok(!defined $got, 'File::SOPS refuses the document sops just wrote');
-        like($@, qr/\Alist:0: .*type:comment/s, 'naming the element');
-
-        my $lax = eval { File::SOPS->decrypt(
-            encrypted  => scalar read_file("$tempdir/seq.enc.yaml"),
-            identities => [$secret], ignore_mac => 1) };
-        ok(!defined $lax, 'and refuses it with ignore_mac as well');
+        ok(defined $got, 'File::SOPS reads the document sops just wrote')
+            or diag($@);
+        isa_ok($got->{list}[0], 'File::SOPS::Comment', 'element 0');
+        is($got->{list}[0]->text, ' only a sequence comment', 'with its text');
+        is($got->{list}[1], 'one', 'and the value after it');
     };
 
-    subtest 'a flow sequence with a trailing comment is the same defect' => sub {
+    subtest 'a flow sequence with a trailing comment reads as sops reads it' => sub {
         # sops rewrites `flow: [1, 2]  # after` into a BLOCK sequence with the
-        # comment as element 0, so a list of integers gains a leading string:
+        # comment as element 0, so a list of integers gained a leading string:
         # sops reads [1, 2], File::SOPS read [' after a flow seq', 1, 2].
         write_file("$tempdir/flow.plain.yaml", "flow: [1, 2]  # after a flow seq\n");
         my $out = `$sops_bin -e --age $public --input-type yaml --output-type yaml $tempdir/flow.plain.yaml 2>&1`;
@@ -338,11 +449,17 @@ SKIP: {
             'the flow sequence became a block sequence led by the comment');
 
         write_file("$tempdir/flow.enc.yaml", $out);
+        # FLIPPED (docs/adr/0041): a refusal at flow:0 before. sops reads
+        # [1, 2] with a comment; so do we now, where we used to read
+        # [' after a flow seq', 1, 2].
         my $got = eval { File::SOPS->decrypt(
             encrypted => scalar read_file("$tempdir/flow.enc.yaml"),
             identities => [$secret]) };
-        ok(!defined $got, 'File::SOPS refuses it');
-        like($@, qr/\Aflow:0: .*type:comment/s, 'at flow:0');
+        ok(defined $got, 'File::SOPS reads it, MAC and all') or diag($@);
+        isa_ok($got->{flow}[0], 'File::SOPS::Comment', 'element 0');
+        is($got->{flow}[0]->text, ' after a flow seq', 'is the comment');
+        is_deeply([ @{$got->{flow}}[1, 2] ], [1, 2],
+            'and the integers are the integers');
     };
 
     subtest 'a document whose comments are all in mapping position still reads' => sub {

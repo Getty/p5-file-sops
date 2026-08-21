@@ -62,11 +62,21 @@ my $KEY = "\3" x 32;
     is($enc->decrypt_bytes(key => $KEY, aad => 'ts:'), $ts,
         'and the digest input is the same bytes');
 
+    # FLIPPED for karr #76 / docs/adr/0041: this asserted that a type:comment
+    # value decrypts to its TEXT. It decrypts to a File::SOPS::Comment now,
+    # because a comment is not a value and a string here is an element of the
+    # document that the file does not contain (karr #108). The text is still
+    # exactly what it was, and decrypt_bytes -- what the digest would see, if
+    # the digest covered a comment -- is unchanged.
     my $c = File::SOPS::Encrypted->encrypt_value(
         value => ' a comment', key => $KEY, aad => '', type => 'comment',
     );
-    is($c->decrypt_value(key => $KEY, aad => ''), ' a comment',
-        'a type:comment value decrypts to its text');
+    my $comment = $c->decrypt_value(key => $KEY, aad => '');
+    isa_ok($comment, 'File::SOPS::Comment',
+        'a type:comment value decrypts to a comment leaf');
+    is($comment->text, ' a comment', 'carrying its text');
+    is($c->decrypt_bytes(key => $KEY, aad => ''), ' a comment',
+        'and the wire plaintext is that text');
 }
 
 # ----------------------------------------------------------------------------

@@ -718,6 +718,13 @@ file too, with exit code 203, and its advice applies here: rename the entry.
 
 Supported formats: C<yaml>, C<yml>, C<json>.
 
+A C<File::SOPS::Comment> in C<data> is written as a sops comment
+(C<type:comment>) and is left out of the MAC, which is what sops does with one.
+It has to sit in a B<list>, and in a slot the encryption rules encrypt: those
+are the only places a SOPS document holds a comment as a leaf, and anywhere else
+it is refused, naming the path. See L</A comment in a list comes back as a
+File::SOPS::Comment>.
+
 C<mac_only_encrypted> is the equivalent of the reference implementation's
 C<--mac-only-encrypted>: it restricts the MAC to the values that are actually
 encrypted, and records that choice in the C<sops> section so a reader knows
@@ -1056,6 +1063,33 @@ authenticated> -- the AAD binding on each individual value still holds, but
 nothing detects a value that was deleted, duplicated, moved to another key, or
 replaced with one taken from elsewhere in the same document. Use it to recover
 data, not to consume it.
+
+=head3 A comment in a list comes back as a C<File::SOPS::Comment>
+
+B<New in 0.003.> sops attaches a comment to the node that B<follows> it, and
+where that node is a sequence entry it writes the comment as a sequence entry of
+its own (C<- ENC[...,type:comment]>) -- in YAML and, measured, in JSON written
+with C<--output-type json> as well. Such an entry comes back as a
+C<File::SOPS::Comment> object holding the comment's text, sitting at the index
+the file puts it at. Hand the same tree back to L</encrypt> or use L</rotate>
+and it is written out again as a C<type:comment> entry; C<sops -d> then restores
+it as a real comment, on the node it was attached to.
+
+It is deliberately an B<object> and not the text: a comment is not a value, and
+a string here would be an extra element the file does not contain. That is what
+this used to return, and a C<decrypt> plus C<encrypt> cycle made it a permanent
+value with C<sops -d> reporting success at every step (karr #108). A comment
+leaf is B<not covered by the MAC>, which is what sops does with one.
+
+Two shapes are still refused, both naming the path: a comment in a B<mapping
+value> slot, which no SOPS store writes and which sops reads back as a dump of
+Go's comment struct; and writing a comment into B<plaintext>, so
+L</decrypt_file> and L</edit> refuse a document that has one --
+L<YAML::XS> cannot emit a comment, and a comment line handed to an editor would
+be dropped on the way back in. A comment above a B<mapping key> never reaches
+this library at all: it stays a comment line, which L<YAML::XS> discards on the
+way in and cannot write on the way out. See
+L<docs/adr/0041|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0041-a-sops-comment-is-a-leaf-of-its-own-not-a-value-and-not-a-refusal.md>.
 
 =head3 A YAML literal that overflows a double comes back as a string
 
@@ -3099,6 +3133,24 @@ sub _encrypt_tree {
             # --encrypted-suffix _enc: everything under a `top_enc:` block is
             # encrypted, and a `nested_enc:` under a plain parent is too.
             push @$path, $k;
+            # A comment is a SEQUENCE entry or nothing. sops attaches a comment
+            # to the node that follows it, so above a mapping key it stays a
+            # comment LINE and no store writes one into a mapping value slot.
+            # Measured against sops 3.13.3 with this guard lifted: the document
+            # is read at exit 0 and the key comes back holding Go's yaml.Comment
+            # struct -- `value:` and `inline:` under the key, where the caller
+            # meant a comment. Silent, and in a file this library wrote. The
+            # twin of the check in _decrypt_tree; see docs/adr/0041.
+            croak _at_path($path, "a comment cannot be a mapping value. sops "
+                . "attaches a comment to the node that FOLLOWS it, so the only "
+                . "place a SOPS document holds one as a leaf is a sequence "
+                . "entry -- above a mapping key it is a comment LINE, which no "
+                . "emitter here can write. Written into this slot the document "
+                . "would still be read by sops at exit 0, with the key holding "
+                . "a dump of Go's comment struct instead of a value (measured "
+                . "against sops 3.13.3). Put the comment in a list, or leave it "
+                . "out")
+                if File::SOPS::Encrypted->is_comment($node->{$k});
             $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, $path,
                 $depth);
             pop @$path;
@@ -3170,6 +3222,25 @@ sub _decrypt_tree {
         my %result;
         for my $k (keys %$node) {
             push @$path, $k;
+            # The read-side twin of _encrypt_tree's guard, and the whole of what
+            # is left of docs/adr/0024's refusal. A comment leaf in a SEQUENCE
+            # is read and kept (that is the only shape any sops store writes);
+            # one in a mapping VALUE slot is a document no store produces, and
+            # sops reads it as a dump of Go's comment struct rather than as a
+            # value. Refused here rather than in a format handler because it is
+            # not a format's rule -- the same document is read through the JSON
+            # handler, which had no such guard at all. docs/adr/0041.
+            croak _at_path($path, "this document holds a sops comment "
+                . "(type:comment) as a mapping value, which is not a shape any "
+                . "SOPS store writes: a comment is attached to the node that "
+                . "FOLLOWS it, so above a mapping key it stays a comment LINE "
+                . "and only a comment above a SEQUENCE entry becomes a leaf. "
+                . "Read with sops this leaf does not come back as a value "
+                . "either -- it comes back as a dump of Go's comment struct. "
+                . "Remove it from the document, or read the file with sops")
+                if !ref $node->{$k}
+                && (File::SOPS::Encrypted->encrypted_type($node->{$k}) // '')
+                   eq 'comment';
             $result{$k} = _decrypt_tree($node->{$k}, $key, $metadata, $path,
                 $depth);
             pop @$path;
@@ -3245,10 +3316,53 @@ our $MAC_ONLY_ENCRYPTED_INIT = pack 'C*',
     0x0b, 0x97, 0x5b, 0x3b, 0xf4, 0x4f, 0x72, 0xc6,
     0xfd, 0xad, 0xec, 0x81, 0x76, 0xf2, 0x7d, 0x69;
 
+# The leaves the digest covers, which is not every leaf: a COMMENT is not a
+# value, and sops hashes none of them. Measured against sops 3.13.3 in seven
+# ways -- deleting a comment leaf from an encrypted file leaves `sops -d` at
+# exit 0 in YAML, INI and ENV where deleting a value gives exit 51; three
+# documents with identical values and different comments have byte-identical
+# MAC plaintext; relabelling a type:str value to type:comment takes it OUT of
+# what sops digests; and the digest taken here over four sops-written documents
+# matches the one they store EXACTLY when the comment leaves are dropped, with
+# --mac-only-encrypted and beside an _unencrypted subtree included.
+#
+# Applied to the collected leaves rather than inside _mac_digest, so that the
+# representability sweep in _compute_mac and the leaf COUNT in the MAC error
+# message speak about the same list the digest was taken over. See
+# docs/adr/0041.
+sub _digested_leaves {
+    my ($leaves, $data_key) = @_;
+    return [ grep { !_is_comment_leaf($_->[1], $data_key) } @$leaves ];
+}
+
+# A comment wears two shapes and they are NOT one question. In a plaintext tree
+# it is a File::SOPS::Comment; in the tree the FILE holds it is an
+# ENC[...,type:comment] string. The wire half is read only where the tree really
+# is the file's -- $data_key defined, which is the same discriminator _mac_bytes
+# already decrypts under, and the decrypt side is the only side that has one.
+#
+# The gate is load-bearing rather than tidy. Without it, a caller's plain string
+# that happens to spell ENC[...,type:comment] would be dropped from the digest
+# here while _encrypt_tree writes it into the document as an ordinary type:str
+# value -- a document that fails its own MAC, produced by this library, which is
+# the exact defect class the one-conversion rule exists to prevent.
+#
+# The wire half decodes nothing (encrypted_type reads the one anchored regex),
+# so a comment whose ciphertext is damaged still stays out of the digest --
+# which is what sops does with one, measured.
+sub _is_comment_leaf {
+    my ($value, $data_key) = @_;
+
+    return 1 if File::SOPS::Encrypted->is_comment($value);
+    return 0 unless defined $data_key;
+    return (File::SOPS::Encrypted->encrypted_type($value) // '') eq 'comment'
+        ? 1 : 0;
+}
+
 sub _compute_mac {
     my ($data, $key, $metadata) = @_;
 
-    my $leaves = _sorted_leaves($data, [], []);
+    my $leaves = _digested_leaves(_sorted_leaves($data, [], []));
 
     # Every leaf this document will contain has to be one both implementations
     # can write and read back. Checked HERE, before anything is emitted,
@@ -3326,9 +3440,9 @@ sub _verify_mac {
     # than guessed, so the order and the values can never come from two
     # different readings of the same text.
     my $ordered = _parse_in_document_order($args{document}, $args{format_class});
-    my $leaves  = $ordered
+    my $leaves  = _digested_leaves(($ordered
         ? _document_leaves($ordered, $args{data}, [], [])
-        : _sorted_leaves($args{data}, [], []);
+        : _sorted_leaves($args{data}, [], [])), $data_key);
 
     my $computed = _mac_digest(
         leaves   => $leaves,
