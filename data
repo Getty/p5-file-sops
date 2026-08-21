@@ -1,0 +1,46 @@
+---
+class: standard
+completed: 2026-08-21T04:45:19Z
+created: 2026-08-21T03:14:28Z
+id: 115
+priority: low
+started: 2026-08-21T03:22:00Z
+status: done
+tags:
+- tests
+- docs
+- yaml
+title: t/39 section 2 pins a claim ADR 0026 narrowed
+updated: 2026-08-21T04:45:19Z
+---
+
+Housekeeping, found while implementing karr #105 / ADR 0026 and deliberately
+not taken there (the ticket's file boundary allowed a NEW file under t/ only).
+
+t/39-yaml-overflow-literal-becomes-a-string.t, section 2, says:
+
+    # The twelve go-yaml really does resolve to a non-finite float. These must
+    # NOT move: they are POK-only here, they are type:float to sops, and the
+    # gap between the two is karr #105, which this change deliberately does
+    # not touch.
+
+and asserts, per token:
+
+    "[$source] still digested as the token -- karr #105, unchanged"
+
+Every assertion in that subtest still PASSES and still means what it says: its
+helper yaml_leaf() parses "v: $source\n", a PLAINTEXT document with no sops
+section, and ADR 0026 deliberately does not run its walk there. Nothing is
+broken and nothing needs to change for the suite to stay green (973/973).
+
+What is stale is the COMMENT. Since ADR 0026 those twelve tokens DO move for a
+document that carries a sops section -- they become a float whose digest input
+is +Inf / -Inf / NaN -- and a reader of t/39 would take "karr #105, unchanged"
+at face value and conclude the opposite. The new pin for both halves is
+t/42-yaml-plain-infinity-is-a-float.t, sections 1 and 7.
+
+Suggested: reword the section-2 comment to say that the disjointness it pins is
+the PLAINTEXT parse, and point at ADR 0026 and t/42 for what happens with a
+sops section. No assertion needs to change. Test lane.
+2026-08-21 03:27 Reworded t/39 section-2 comment (the @GO_RESOLVES block and the section banner): it now says the disjointness it pins is the PLAINTEXT parse (yaml_leaf() has no sops: section), that ADR 0026/karr #105 (resolved) moves the same twelve tokens to a float once a sops: section is present, and points at t/42 sections 1 and 7 for that half -- completing the cross-reference t/42 already had pointing back at t/39 section 2. No assertion changed (message text on line ~145 left as-is, per the ticket's own note that it still means what it says for the plaintext-parse frame). prove -lv t/39: 15/15 (sops 3.13.3 at /tmp/sops found). Full suite: prove -lr t/ 43 files 974/974 PASS; SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 PASS -- both counts unchanged from baseline. Step 4: grepped t/ for karr #105/#102/#108 (and #110, #104, #113 while at it) treated as still-open; only t/39 section 2 was stale. #104 (t/37) is genuinely still backlog, #110/#108 dedicated pin files (t/41/t/40) and #113 (t/42) already describe current, accurate state. No new ticket needed.
+ABGENOMMEN 2026-08-21. Reine Kommentarkorrektur, verifiziert kommentar-only. Schritt 4 wurde geprueft statt behauptet: jede verbliebene karr-Referenz in t/ gegen das Board gelesen, #104 und #113 sind tatsaechlich noch offen und blieben unangetastet. Commit a19d789.
