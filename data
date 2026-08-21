@@ -1,0 +1,34 @@
+---
+class: standard
+completed: 2026-08-21T11:05:10Z
+created: 2026-08-21T10:59:20Z
+id: 167
+priority: medium
+started: 2026-08-21T11:05:10Z
+status: done
+tags:
+- adr
+- docs
+- ini
+- aad
+title: ADR 0047 and Changes justify the moving AAD shape with a claim that measurement
+  contradicts
+updated: 2026-08-21T11:05:10Z
+---
+
+docs/adr/0047 (decision 1 and "What changes for existing callers") and the matching Changes bullet say of the one shape whose AAD moves -- a mapping key '' below the top level holding a list of nothing but comments -- that "sops itself writes it as the branch's path, and the change therefore makes that document agree with sops where it did not before".
+
+Measured against sops 3.13.3, that is the wrong way round. A YAML document
+
+    db:
+        "":
+            # a comment in a list under an empty key
+            - one
+
+encrypted with sops authenticates the comment leaf under `db::`, not `db:`. The empty key is an ordinary key and DOES contribute a path component; only the comment itself contributes none. So for that shape the change moves us away from sops, not towards it.
+
+The rule is still right, for a different reason, and that reason is the one the ADR should carry: sops cannot write a sequence of nothing but comments. A comment leaf exists only where a node follows it in the same sequence -- measured over head, trailing, consecutive and lone comments, every sequence sops wrote held at least one non-comment element, and a comment with no node to attach to was hoisted to the parent branch or dropped. The all-comments guard is therefore exactly the discriminator that no sops-written document trips, and where a genuine empty key does hold a comment beside a value the guard correctly does not fire (verified: that shape keeps `db::` before and after).
+
+The banner comment in lib/File/SOPS.pm has been corrected already (karr #37 review). This ticket is the ADR and the Changes bullet, which are the format lane's and the maintainer's to edit. No code change.
+
+ERLEDIGT 2026-08-21 im Commit 610ec6c, vom Orchestrator. ADR 0047 und der Changes-Bullet tragen jetzt die gemessene Begruendung: ein echter Leerschluessel traegt eine Pfadkomponente bei, nur der KOMMENTAR tut es nicht -- fuer die eine bewegte Form ist die Aenderung also ein bewusster Trade und keine Angleichung an sops. Ebenfalls korrigiert: die Ablehnung des benannten Buckets stand im ADR mit einem falschen Argument ('changes the AAD and the leaf stops decrypting' -- mit derselben Walk-Regel taete er das nicht); der echte Grund ist der Verlust der Parallele zu Format::ENV und ein reservierter Schluesselname, mit dem eine echte INI-Zeile kollidieren kann.
