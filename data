@@ -1,0 +1,21 @@
+---
+class: standard
+created: 2026-08-21T11:54:11Z
+id: 172
+priority: low
+status: backlog
+tags:
+- wire
+- ini
+- mac
+title: An INI comment bucket at an excluded path loses its shape on a re-encryption
+updated: 2026-08-21T11:54:11Z
+---
+
+Found while landing karr #160 (docs/adr/0049), recorded rather than fixed.
+
+_adds_no_path_component recognises a comment BUCKET -- a "" key holding nothing but comments -- and gives it no path component (docs/adr/0047). Since karr #160 a leaf the rule EXCLUDES is returned as its own ENC[...] text rather than decrypted, so at an excluded path the bucket comes back holding plain STRINGS instead of File::SOPS::Comment objects. _is_comment_bucket is then asked on the plaintext side, where it reads is_comment and answers no, so the bucket key ADDS a path component on the way back in -- and the ini emitter is handed a "" key holding a list of strings.
+
+Reachable only through ignore_mac => 1 plus rotate or edit, on an ini document whose rule excludes a section that has comments in it: without ignore_mac such a document fails its MAC in decrypt and nothing is written.
+
+sops keeps such a comment as a Comment node holding the ENC[...] text, because its ini store reads a "; ..." line as a comment before any rule is consulted. Note the digest is already right (docs/adr/0049, _wire_comment_reads_as_a_comment): a bucket entry is never digested. This is the SHAPE of the returned tree, not the MAC.
