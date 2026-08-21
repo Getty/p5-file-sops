@@ -1,0 +1,23 @@
+---
+class: standard
+created: 2026-08-21T11:54:18Z
+id: 173
+priority: low
+status: backlog
+tags:
+- wire
+- comments
+- interop
+title: sops warns about a plaintext comment in an encrypted slot and we say nothing
+updated: 2026-08-21T11:54:18Z
+---
+
+Measured while landing karr #160 (docs/adr/0049).
+
+A PLAINTEXT comment at a path the encryption rule SELECTS is not refused by sops -- it is kept, at exit 0, with a warning:
+
+    level=warning msg="Found possibly unencrypted comment in file. This is to be expected if the file being decrypted was created with an older version of SOPS." comment=" note"
+
+Measured in yaml; the same shape exists in ini and dotenv. docs/adr/0049 reproduces the OUTCOME (the comment is kept, not refused -- it is one of the four exceptions) and deliberately does not reproduce the warning, because every OTHER bare shape in a selected slot is a hard refusal there and a warning is a third answer.
+
+Worth deciding: is a plaintext comment in an encrypted slot worth a carp? It can hold a secret, and this distribution has a carp precedent (File::SOPS::Format::YAML, docs/adr/0018). Against: it is advisory rather than a divergence, and File::SOPS.pm carps nowhere today.
