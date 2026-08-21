@@ -1,6 +1,32 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Diagnostics only, no document moves: the refusal for an integer above
+    int64 now offers BOTH answers a caller has, where it offered one. It
+    closed with "Pass it as a string to store it exactly", which was the whole
+    truth until ADR 0021: past int64 a JSON number is a float64 to Go, sops
+    writes type:float and the double's canonical decimal for those digits, and
+    a caller who wants the leaf sops would have written wants that and not a
+    string. The message now names both - the string for the digits exactly,
+    and unpack('d', pack('d', $value)) for what sops writes - and says the
+    second one is conditional, because it is. Measured against sops 3.13.3,
+    12 literals across the window in both formats and both slots: the string
+    answer is `sops -d` exit 0 with the digits verbatim in 48 of 48 cells,
+    the float answer exit 0 in 41 and refused here in the other 7 - all of
+    them an UNENCRYPTED YAML slot, where the decimal the emitter has to write
+    is one yaml.v3 resolves as a uint64 and the YAML guard refuses it
+    (docs/adr/0013). Neither answer writes a file sops rejects in any cell.
+    unpack/pack is named rather than "make it a float" because the obvious
+    spellings do not work: $value + 0.0 and $value * 1.0 on a Perl UV come
+    back integers and land on the same croak. Recorded with it, because it is
+    the half karr #101's lanes left open: this refusal can only ever be about
+    a POSITIVE value. SVf_IOK means the SV holds an IV or a UV, an IV bottoms
+    out at exactly int64min and a UV cannot be negative, so no integer SV
+    exists below the range - measured across 14 negative decimals bracketing
+    int64min and uint64max, 13 construction routes each, 182 rows, 36 of them
+    int, not one below int64min and zero croaks. ADR 0021 stated that as a
+    premise; it is now proved. Nothing about what is refused changed. See
+    karr #104.
   - BEHAVIOUR CHANGE and BUG FIX: `rotate` no longer refuses a JSON document
     that `sops -e` wrote and `sops -d` reads. A bare JSON number between 2**63
     and 2**64-1 is an integer to Perl and a float64 to Go: sops normalises

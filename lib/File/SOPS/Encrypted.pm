@@ -781,13 +781,51 @@ sub assert_representable {
     # to read.
     return 1 if _decimal_fits_int64('' . (0 + $value));
 
+    # Only the POSITIVE window [2**63 .. 2**64-1] can reach this croak, and
+    # that is structural rather than lucky: SVf_IOK means the SV carries an IV
+    # or a UV, an IV bottoms out at exactly int64min and a UV cannot be
+    # negative, so no integer SV exists below the range. Measured for karr
+    # #104 -- 14 negative decimals bracketing int64min, uint64max and beyond,
+    # through 13 construction routes each (Perl literals, arithmetic,
+    # sprintf/int clamps, dualvar, a numerically-read PV, and the JSON and
+    # YAML parsers): 182 rows, 36 of them `int`, zero below int64min, zero
+    # croaks. Below the range a value arrives NOK or POK and takes the float
+    # rung instead (ADR 0020). This confirms the premise ADR 0021's decision
+    # rests on; the message below therefore never has to speak about a
+    # negative value.
+    #
+    # The two answers it offers were both measured against sops 3.13.3, 12
+    # literals across the window x 2 formats x 2 slots. The STRING answer:
+    # 48 of 48 `sops -d` exit 0, digits verbatim in every cell. The FLOAT
+    # answer: 41 of 48 exit 0 with sops's own normalisation, 7 refused HERE by
+    # ADR 0013's guard (all of them unencrypted YAML, where ADR 0011's repair
+    # has to write the canonical decimal bare and Go's resolver reads it as a
+    # uint64) -- and zero cells that put a file on disk sops rejects. That
+    # 7-of-48 is why the float is offered as an answer and not as a promise;
+    # note the split is NOT "canonical decimal past uint64max", which is only
+    # one of the two ways through.
+    #
+    # `unpack('d', pack('d', $value))` is named in the message because the
+    # obvious spellings do not work: measured, `$value + 0.0` and
+    # `$value * 1.0` on a UV come back IOK+IVisUV and land on this croak
+    # again, Perl having kept the integer.
     croak
         "value is an integer outside the range the SOPS int type can hold "
       . "($INT64_MIN .. $INT64_MAX, Go's int64). Perl's integers are wider "
       . "than Go's, and there is no SOPS wire form that preserves this one: "
       . "written as type:int, sops refuses the file with "
       . "\"strconv.Atoi: value out of range\"; written as type:float it would "
-      . "silently lose digits. Pass it as a string to store it exactly.";
+      . "silently lose digits. Two answers, and which one you want is yours "
+      . "to say: pass it as a string to store the digits exactly -- type:str, "
+      . "written verbatim, in both formats and both slots -- or as a float, "
+      . "which is unpack('d', pack('d', \$value)) and not \$value + 0.0, to "
+      . "get what sops itself writes for these digits: type:float and the "
+      . "double's canonical decimal, at the cost of the digits the double "
+      . "cannot hold. That second answer is the one a bare JSON number in "
+      . "this range already takes, because Go's own decoder reads it as a "
+      . "float64. It is not unconditional: in an unencrypted YAML slot the "
+      . "float may be refused again, by the guard that keeps this library's "
+      . "digest and Go's YAML resolver agreeing.";
 }
 
 =method assert_representable
@@ -863,6 +901,26 @@ truncated value. File::SOPS does not: a value silently losing digits on its way
 through a library whose job is to preserve it is the defect this method exists
 to prevent. Store the digits as a B<string> instead -- that is C<type:str>,
 written verbatim, and it round-trips exactly through both implementations.
+
+Since 0.003 the message offers a B<second> answer, because since ADR 0021 there
+is one: hand the guard the double instead, C<unpack('d', pack('d', $value))>,
+and the leaf takes the C<float> rung and gets exactly what sops writes for the
+same digits -- C<type:float> and the double's canonical decimal -- at the cost
+of the digits the double cannot hold. It is an answer and not a promise: 12
+literals across the window in both formats and both slots gave 41 of 48 cells
+C<sops -d> exit 0, and 7 -- all of them B<unencrypted YAML> -- refused here by
+ADR 0013's guard instead, because the decimal L</value_to_bytes> makes the
+emitter write there is one C<yaml.v3> resolves as a C<uint64>. C<$value + 0.0>
+is B<not> that conversion: Perl keeps the integer and the value lands back on
+this croak.
+
+The window is positive-only, and structurally so: C<SVf_IOK> means the SV
+carries an C<IV> or a C<UV>, an C<IV> bottoms out at exactly C<int64min> and a
+C<UV> cannot be negative, so B<no integer SV exists below the range>. Measured
+for karr #104 across 14 negative decimals bracketing C<int64min> and
+C<uint64max> and 13 construction routes each: 182 rows, 36 of them C<int>, and
+not one below C<int64min>. Below the range a value arrives as a C<float> (or a
+string) and takes the C<float> rung instead (ADR 0020).
 
 =back
 
