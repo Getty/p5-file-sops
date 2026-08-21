@@ -1,6 +1,40 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BUG FIX and BEHAVIOUR CHANGE: the metadata MAC's AAD is now the timestamp
+    Go re-formats, not the text the document holds. `lastmodified` is a Go
+    string only where mapstructure decodes it; everything in sops after that
+    holds a `time.Time` and reads `LastModified.Format(time.RFC3339)` from it,
+    the AAD included. A document spelling the same instant any other legal
+    RFC 3339 way therefore verifies at sops and died here with "Cannot decrypt
+    MAC - refusing to return unverified data".
+    `File::SOPS::Metadata->from_hash` now stores Go's rendering, so 14 of 26
+    measured spellings that `sops -d` reads at exit 0 and this library
+    refused are read: a zero offset written
+    `+00:00` or `-00:00`, any fractional-second field at any length and after a
+    comma as well as a period, and an hour written with one digit - alone or
+    combined, with any offset. Proved directly rather than inferred, by
+    building documents whose `lastmodified` text is one thing and whose `mac`
+    was encrypted under a chosen AAD: text `+00:00` with the MAC under the `Z`
+    form is `sops -d` exit 0, and under the literal text it is exit 51. The
+    round trip is purely lexical - the fraction is dropped, the hour is
+    zero-padded, and the zone is re-derived from the total offset and written
+    `Z` whenever that total is zero. A non-zero offset is KEPT and not shifted
+    to UTC: `+02:00` is a different AAD from the same instant in UTC, measured.
+    NOTHING MOVES for a document either implementation writes - measured over a
+    nine-document corpus before and after, the AAD, the decrypted MAC plaintext
+    and the decrypted values are byte-identical in all nine - because every
+    such document already carries the `Z` form, on which the decode is the
+    identity. This library has never written anything else: `encrypt` is the
+    only producer, `policy_args` does not carry `lastmodified` across a
+    re-encryption, and `update_lastmodified` writes that rendering directly.
+    A spelling Go's layout cannot parse keeps the document's own bytes rather
+    than being refused, for the reason karr #145 recorded one field over. STILL
+    DIVERGENT, permissive and recorded: an UNQUOTED timestamp, which go-yaml v3
+    resolves as `!!timestamp` and sops refuses at exit 1 where this library
+    reads it - a bare and a quoted scalar arrive here as the same Perl string,
+    so closing it needs the YAML handler and not this. See docs/adr/0044 and
+    karr #144.
   - BEHAVIOUR CHANGE and BUG FIX: a sops COMMENT is now preserved instead of
     refused. sops attaches a comment to the node that follows it, and where
     that node is a sequence entry it has nowhere to put a comment line, so it
@@ -1856,6 +1890,8 @@ Revision history for File-SOPS
     half of the same ticket is decided too: sops decodes its section weakly in
     EVERY format (a quoted `mac_only_encrypted: "false"` is the boolean false
     in nested YAML as well), so the coercion belongs in
+    File::SOPS::Metadata->from_hash and not in Metadata::Flat->unflatten, which
+    stays faithful to the untyped encoding. See docs/adr/0035 and karr #77.
   - NEW FORMAT: `format => 'env'` (`dotenv` is accepted as sops's own name for
     it), the dotenv handler CLAUDE.md has promised since 0.001. A `.env`
     document now goes through every method - `encrypt`, `decrypt`, the file
@@ -1892,8 +1928,6 @@ Revision history for File-SOPS
     - `42` comes back as `"42"`, a boolean as `"True"` - because the store has
     no syntax for one; an encrypted leaf keeps its type. Nothing about YAML or
     JSON moves. See docs/adr/0045 and karr #36.
-    File::SOPS::Metadata->from_hash and not in Metadata::Flat->unflatten, which
-    stays faithful to the untyped encoding. See docs/adr/0035 and karr #77.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0

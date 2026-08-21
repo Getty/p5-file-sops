@@ -173,7 +173,19 @@ has lastmodified => (is => 'rw');
 
 =attr lastmodified
 
-ISO 8601 timestamp of last modification. Example: C<2025-01-10T12:00:00Z>
+RFC 3339 timestamp of last modification, and B<the AAD the metadata MAC is
+authenticated with>. Example: C<2026-01-10T12:00:00Z>.
+
+Read out of a document by L</from_hash>, this holds Go's own rendering of the
+instant the document spells and not the document's text -- because that
+rendering is what sops feeds the MAC. A document saying
+C<2026-01-10T12:00:00+00:00>, C<2026-01-10T12:00:00.123Z> or
+C<2026-01-10T2:00:00Z> arrives here as the value above, the one that
+authenticates. See L</from_hash> for the rule and docs/adr/0044 for the
+measurement.
+
+L</update_lastmodified> writes that rendering directly, and it is the only
+thing every document this library produces ever carries.
 
 =cut
 
@@ -612,6 +624,69 @@ sub _decode_bool_field {
     return $PARSE_BOOL{$value} ? JSON->true : JSON->false;
 }
 
+# Go's RFC3339 grammar, as the layout `2006-01-02T15:04:05Z07:00` and Go's
+# fallback parser accept it. Deliberately lexical and deliberately without the
+# range checks: Go applies those AFTER lexing, so a month of 13 or an offset
+# hour of 25 only ever appears in a document sops refuses at exit 1, where the
+# AAD we would derive is unobservable. What the corners look like is measured
+# in docs/adr/0044 -- a one-digit HOUR is accepted where a one-digit month is
+# not, the fraction may be introduced by a comma, and `T` and `Z` are
+# case-sensitive.
+my $RFC3339 = qr{
+    \A
+    ( [0-9]{4} ) - ( [0-9]{2} ) - ( [0-9]{2} )   # year, month, day
+    T
+    ( [0-9]{1,2} ) : ( [0-9]{2} ) : ( [0-9]{2} ) # hour (one digit or two), minute, second
+    (?: [.,] [0-9]+ )?                           # fractional seconds, dropped
+    (?: Z | ( [+-] ) ( [0-9]{2} ) : ( [0-9]{2} ) )
+    \z
+}x;
+
+# `time.Parse(time.RFC3339, $text).Format(time.RFC3339)` -- the value sops
+# hands to the MAC as its AAD, and writes back into the document. Returns
+# undef exactly where the text does not parse, which is where from_hash keeps
+# the document's own bytes.
+#
+# The round trip is purely lexical because the location Go builds is a fixed
+# zone carrying the offset it just read: the wall-clock fields it formats back
+# are the ones it parsed, so nothing is converted and no calendar is involved.
+# The zone is the one part that IS recomputed, from the TOTAL offset -- +00:60
+# comes back out as +01:00 -- and it is written `Z` whenever that total is
+# zero, whichever sign the document spelled it with. See docs/adr/0044.
+sub _go_rfc3339_form {
+    my ($text) = @_;
+
+    my ($year, $month, $day, $hour, $minute, $second, $sign, $zone_hour,
+        $zone_minute) = $text =~ $RFC3339
+        or return undef;
+
+    my $zone = 'Z';
+    if (defined $sign) {
+        my $offset = $zone_hour * 60 + $zone_minute;
+        $zone = sprintf '%s%02d:%02d', $sign, int($offset / 60), $offset % 60
+            if $offset;
+    }
+
+    return sprintf '%s-%s-%sT%02d:%s:%s%s',
+        $year, $month, $day, $hour, $minute, $second, $zone;
+}
+
+# `lastmodified` is a Go string where mapstructure decodes it and a
+# `time.Time` everywhere after that, and the AAD of the metadata MAC is taken
+# from the second one. A document is therefore free to spell the instant in
+# any RFC3339 form -- sops reads it and authenticates the MAC with its own
+# rendering -- so the value this class holds has to be that rendering rather
+# than the document's text. Measured 45 spellings deep in docs/adr/0044, which
+# also records why an unparseable one is passed through instead of refused.
+sub _decode_lastmodified {
+    my ($value) = @_;
+
+    return $value unless defined $value;
+    return $value unless _is_text($value);
+
+    return _go_rfc3339_form($value) // $value;
+}
+
 sub _decode_int_field {
     my ($field, $value) = @_;
 
@@ -806,7 +881,7 @@ sub from_hash {
         azure_kv           => $hash->{azure_kv}           // [],
         hc_vault           => $hash->{hc_vault}           // [],
         mac                => $hash->{mac},
-        lastmodified       => $hash->{lastmodified},
+        lastmodified       => _decode_lastmodified($hash->{lastmodified}),
         version            => $hash->{version}            // $SOPS_VERSION,
         unencrypted_suffix => $hash->{unencrypted_suffix},
         encrypted_suffix   => $hash->{encrypted_suffix},
@@ -982,6 +1057,44 @@ library writes back the scalar the parser gave it. So the divergence needs a
 hand-edited document to exist at all, and the first time sops touches such a
 document it is gone. docs/adr/0043 records the measurement.
 
+=head3 C<lastmodified> is re-formatted, because that is what becomes the AAD
+
+The one string field that is only a string to C<mapstructure>. Everything in
+sops after that decode holds a Go C<time.Time> and reads
+C<LastModified.Format(time.RFC3339)> from it -- B<the MAC's AAD included>. So a
+document is free to spell the instant in any RFC 3339 form: sops reads it and
+authenticates with its own rendering, and taking the document's text instead
+fails to decrypt a MAC C<sops -d> accepts.
+
+This method stores that rendering. The round trip is purely lexical, because Go
+parses into a fixed zone carrying the offset it just read:
+
+    "2026-08-21T09:05:08+00:00"    -> 2026-08-21T09:05:08Z
+    "2026-08-21T09:05:08-00:00"    -> 2026-08-21T09:05:08Z
+    "2026-08-21T09:05:08.123456Z"  -> 2026-08-21T09:05:08Z
+    "2026-08-21T09:05:08,5Z"       -> 2026-08-21T09:05:08Z
+    "2026-08-21T9:05:08Z"          -> 2026-08-21T09:05:08Z
+    "2026-08-21T11:05:08+02:00"    -> 2026-08-21T11:05:08+02:00   (NOT UTC)
+    "2026-08-21T09:05:08+00:60"    -> 2026-08-21T09:05:08+01:00
+
+The fraction is dropped -- C<time.RFC3339> has no fractional field -- the hour
+is zero-padded, and the zone is re-derived from the B<total> offset and written
+C<Z> whenever that total is zero, whichever sign the document used. A non-zero
+offset is B<kept>: C<+02:00> is not the same AAD as the same instant in UTC,
+measured.
+
+A spelling Go's layout cannot parse is B<passed through unchanged> rather than
+refused. sops stops at exit 1 on every one of them -- a lower-case C<t> or
+C<z>, a one-digit month, C<+0000> without the colon, a five-digit year, a
+leading or trailing space -- so nothing is silently mis-read; and this grammar
+is a reimplementation of Go's parser, where being narrower than Go somewhere
+unmeasured would refuse a document sops reads. That is the trade karr #145
+recorded for L</version>, one field over. docs/adr/0044 carries the 45 measured
+spellings.
+
+B<Nothing moves for a document either implementation writes>: every one of
+them carries the C<Z> form already, and the decode is the identity on it.
+
 =head3 What is deliberately not done: L</version> is not parsed
 
 sops does not merely stringify that field, it B<semver-parses> it and stops on
@@ -1074,7 +1187,11 @@ sub update_lastmodified {
 
     $meta->update_lastmodified;
 
-Sets C<lastmodified> to the current time in ISO 8601 format (UTC).
+Sets C<lastmodified> to the current time as C<%Y-%m-%dT%H:%M:%SZ> in UTC --
+Go's own C<time.RFC3339> rendering, which is what makes it usable as the MAC's
+AAD unchanged. L<File::SOPS/encrypt> is the only caller, and
+L</policy_args> deliberately does not carry a document's own value across a
+re-encryption, so this is the only spelling this library writes.
 
 Returns C<$self> for chaining.
 
