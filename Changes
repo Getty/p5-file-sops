@@ -28,6 +28,33 @@ Revision history for File-SOPS
     preserving them is karr #76 and would make the refusal unnecessary. See
     docs/adr/0024 and karr #108. New: File::SOPS::Encrypted->encrypted_type,
     which reads an ENC value's type label without decoding its base64.
+  - BUG FIX: a YAML document whose aliases are ACYCLIC but exponentially
+    shared is now refused instead of hanging the process. `l1: &l1` holding
+    `a: *l0` and `b: *l0`, repeated 25 times, is 727 bytes that expand to a
+    tree with 2**25 leaves; measured before the fix, encrypt took 0.06s at 9
+    levels, 4.3s at 15 and never returned at 25, climbing about a gigabyte of
+    RSS every three seconds. This is the half of the recursive-anchor defect
+    that the ADR 0025 guard deliberately does not catch, because such a
+    document really is acyclic. All eight entry points were affected in both
+    directions, and so is a caller who hands `encrypt` one hash reference held
+    in several places, with no YAML involved - `format => 'json'` included.
+    The blowup is NOT in the parser: YAML::XS resolves an alias to the same
+    reference rather than to a copy, so Load returns a linear DAG (200 levels
+    in 0.7ms) and only the tree walks expand it, which is why the guard sits
+    at the API boundary next to the cycle guard rather than at parse time.
+    The threshold is not this distribution's: it is go-yaml's, reproduced on
+    go-yaml's own counters, because an independently chosen one would refuse
+    documents sops accepts. What sops budgets is a RATIO - how far the
+    expansion exceeds the document as written, about 100x, tightening to about
+    1.1x past four million values - and not a size: measured, it accepts a
+    206,104-value expansion and refuses an 8,146-value one. Bisected against
+    sops 3.13.3 in four differently shaped families, the accept/refuse
+    boundary is now the same document on both sides, and the verdict matched
+    the binary on 400 of 400 randomly shaped documents. A document that shares
+    nothing is unaffected however large it is, and an ordinary reused anchor
+    still expands to independent values as before. Cost: one extra pass over
+    the distinct nodes, 3.3% of an encrypt call on a 45,000-node document. See
+    docs/adr/0027 and karr #112.
   - BEHAVIOUR CHANGE and BUG FIX: a YAML literal whose magnitude overflows a
     double is now the STRING sops reads there, where it used to be a float
     that had already become +Inf. `1e400`, a 401-digit integer and the bare

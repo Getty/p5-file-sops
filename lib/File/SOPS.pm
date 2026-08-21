@@ -631,8 +631,10 @@ sub encrypt {
 
     # Before anything is generated or wrapped: a tree that contains itself has
     # no document to write, and every walk below this point would recurse until
-    # the process died.
+    # the process died. The expansion guard runs second and depends on it --
+    # its census memo is filled on the way out, so a cycle would hang it.
     _assert_acyclic($data, [], {}, {});
+    _assert_expansion_bounded($data);
 
     # Generate random 256-bit data key. The one CSPRNG in this distribution
     # lives next to the per-value nonce that shares its failure mode; see the
@@ -810,13 +812,62 @@ subtree is ordinary YAML, sops accepts it and expands it -- C<base: &b> with
 C<other: *b> encrypts to two independent C<ENC[...]> values -- and so does this.
 Only a container that is its own ancestor is refused.
 
-Still B<not> guarded, and open as karr #112: a document that is acyclic but
-shares aliases exponentially expands into a tree with C<2**N> leaves and hangs
-the same walks. sops refuses that one too, separately
-(C<yaml: document contains excessive aliasing>).
+A document that is acyclic but shares its aliases exponentially is a separate
+exposure with a separate guard, described under
+L</A document that expands far beyond what it contains is refused>.
 
 See karr #110 and
 L<docs/adr/0025|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0025-a-document-that-contains-itself-is-refused-not-walked.md>.
+
+=head3 A document that expands far beyond what it contains is refused
+
+B<New in 0.003.> Sharing an anchor is ordinary YAML and is expanded, here and
+by sops alike. Sharing it B<exponentially> is not: aliases that are perfectly
+acyclic still double the document at every level, so
+
+    l0: &l0
+      v: 1
+    l1: &l1
+      a: *l0
+      b: *l0
+    ... 25 levels
+
+is 727 bytes that expand to a tree with C<2**25> leaves. B<This used to hang>,
+in the same eight entry points and for the same practical reason as
+L</A structure that contains itself is refused> -- and it is not caught by that
+guard, because the document really is acyclic. Measured before the guard:
+9 levels encrypted in 0.06s, 12 in 0.5s, 15 in 4.3s, and 25 never came back.
+
+Such a document is now refused, naming how far out of proportion it is:
+
+    # dies: this document expands to 8146 values from the 60 it holds, which
+    #       is the alias bomb sops refuses: "yaml: document contains
+    #       excessive aliasing". ...
+
+The threshold is B<not> this library's. It is go-yaml's, reproduced on
+go-yaml's own counters, because an independently chosen one would refuse
+documents sops accepts. What it budgets is a B<ratio> -- roughly how far the
+expanded document exceeds the document as written, up to about 100 times,
+tightening to about 1.1 times as the expansion approaches four million values
+-- and B<not> a size. sops accepts a 206,104-value expansion and refuses an
+8,146-value one, and so does this. Bisected against sops 3.13.3 in four
+differently shaped families, the accept/refuse boundary is the same document
+on both sides.
+
+There is no size at which a document is refused for being large: one that
+shares nothing amplifies nothing and is accepted however big it gets.
+
+A caller's own structure reaches the same guard by the other road. One hash
+reference held in many places is the same blowup with no YAML involved, and
+C<format =E<gt> 'json'> is exposed to it exactly as YAML is.
+
+Refusing is what the reference implementation does, in both directions --
+C<Error unmarshalling file: yaml: document contains excessive aliasing>
+(exit 2) from C<sops -e>, and C<yaml: document contains excessive aliasing>
+(exit 1) from C<sops -d>.
+
+See karr #112 and
+L<docs/adr/0027|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0027-the-alias-budget-is-a-ratio-and-it-is-go-yamls-ratio.md>.
 
 =cut
 
@@ -839,8 +890,11 @@ sub decrypt {
     # Asked here, ahead of both the metadata check and the data key, because
     # that is the order sops answers in: its unmarshalling error precedes
     # everything, and a cyclic document with no usable identity reports the
-    # cycle rather than the missing key.
+    # cycle rather than the missing key. Measured, the same holds for the
+    # alias bomb: sops -d reports the aliasing, not the key. The order of the
+    # two is load-bearing, see _expansion_census.
     _assert_acyclic($data, [], {}, {});
+    _assert_expansion_bounded($data);
 
     croak "No SOPS metadata found" unless $metadata;
 
@@ -972,6 +1026,15 @@ failure to get the data key.
 
 C<ignore_mac> does not get past this. It suppresses verification, not the
 document's shape.
+
+The same holds, at the same place and in the same order, for a document whose
+aliases are acyclic but exponentially shared -- see
+L</A document that expands far beyond what it contains is refused>. Measured,
+C<sops -d> on such a file with no age identity available reports
+C<yaml: document contains excessive aliasing> rather than a failure to get the
+data key, so this reports it there too. Before the guard, C<decrypt> at 15
+levels walked 65,535 leaves before it could report anything at all, and with
+C<ignore_mac =E<gt> 1> it walked the same tree with nothing to report.
 
 =cut
 
@@ -2670,6 +2733,143 @@ sub _assert_acyclic {
     $clean->{$addr} = 1;
 
     return 1;
+}
+
+# An acyclic document can still have no finite walk to it. Aliases that are
+# merely SHARED, not recursive, expand into a tree with 2**N leaves, so
+# _assert_acyclic above correctly does not fire -- the document really is
+# acyclic -- and every walk below it explodes anyway. Measured at 25 levels,
+# 727 bytes of YAML: encrypt_file did not return, and the walk climbs about a
+# gigabyte of RSS every three seconds. See karr #112 and docs/adr/0027.
+#
+# The blowup is entirely ours. YAML::XS resolves an alias to the SAME Perl
+# reference rather than to a copy, so Load returns a linear DAG -- 200 levels
+# in 0.7ms -- and only _sorted_leaves, _encrypt_tree and _decrypt_tree expand
+# it. There is therefore nothing to catch at parse time and nothing to
+# pre-filter on the raw bytes; the guard belongs here, next to the other one,
+# where it also covers the origin that has no parser at all: a caller handing
+# encrypt the same hash reference from several places.
+#
+# Refusing is what the reference implementation does, in BOTH directions.
+# Measured against sops 3.13.3:
+#
+#   sops -e -> Error unmarshalling file: yaml: document contains excessive
+#              aliasing                                            (exit 2)
+#   sops -d -> yaml: document contains excessive aliasing          (exit 1)
+#
+# and, as with the cycle, the -d refusal comes out ahead of the key error.
+#
+# go-yaml's budget is a RATIO, not a count, and that distinction is the whole
+# guard. Bisected against the binary in four differently shaped families, it
+# accepts a 206,104-node expansion and refuses an 8,146-node one: what it
+# measures is how far the expansion exceeds the document that produced it.
+# A cap on expanded nodes would therefore refuse files sops accepts, which is
+# the one error this layer must not make. So the counters below are go-yaml's
+# counters, in go-yaml's units, and the constants are its constants.
+my $ALIAS_RATIO_RANGE_LOW  = 400_000;
+my $ALIAS_RATIO_RANGE_HIGH = 4_000_000;
+
+# The expansion is exponential, so its count overflows a double long before it
+# overflows patience. Saturating keeps the arithmetic exact where it matters:
+# past the high range the allowance is a flat 0.10 and nothing above the
+# ceiling can change an answer.
+my $EXPANSION_CEILING = 1_000_000_000;
+
+sub _allowed_alias_ratio {
+    my ($decoded) = @_;
+
+    return 0.99 if $decoded <= $ALIAS_RATIO_RANGE_LOW;
+    return 0.10 if $decoded >= $ALIAS_RATIO_RANGE_HIGH;
+    return 0.99 - 0.89 * (($decoded - $ALIAS_RATIO_RANGE_LOW)
+        / ($ALIAS_RATIO_RANGE_HIGH - $ALIAS_RATIO_RANGE_LOW));
+}
+
+# Returns the expanded node count and the expanded CONTAINER count for $node,
+# and accumulates the written document's own shape in $written. Memoised on
+# refaddr, which is what makes it O(distinct nodes) on a DAG whose expansion is
+# exponential -- the same reason _assert_acyclic keeps a $clean set. The memo
+# is not a cycle guard: it is filled on the way OUT, so a cycle would recurse
+# forever here. _assert_acyclic runs first and that ordering is load-bearing.
+sub _expansion_census {
+    my ($node, $memo, $written) = @_;
+
+    return (1, 0) unless ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
+    my $addr = refaddr($node);
+    return @{$memo->{$addr}} if $memo->{$addr};
+
+    $written->{containers}++;
+
+    my ($nodes, $containers) = (1, 1);
+    my @children;
+    if (ref $node eq 'HASH') {
+        # go-yaml decodes a mapping key as a node in its own right, so this
+        # counts one too. The units have to be its units or the ratio is not
+        # its ratio. A sequence has no keys and gains nothing here.
+        my $keys = scalar keys %$node;
+        $written->{keys} += $keys;
+        $nodes += $keys;
+        @children = values %$node;
+    }
+    else {
+        @children = @$node;
+    }
+
+    for my $child (@children) {
+        if (ref $child eq 'HASH' || ref $child eq 'ARRAY') {
+            $written->{edges}++;
+        }
+        else {
+            $written->{leaves}++;
+        }
+        my ($child_nodes, $child_containers)
+            = _expansion_census($child, $memo, $written);
+        $nodes      += $child_nodes;
+        $containers += $child_containers;
+        $nodes      = $EXPANSION_CEILING if $nodes > $EXPANSION_CEILING;
+        $containers = $EXPANSION_CEILING if $containers > $EXPANSION_CEILING;
+    }
+
+    $memo->{$addr} = [$nodes, $containers];
+    return ($nodes, $containers);
+}
+
+sub _assert_expansion_bounded {
+    my ($node) = @_;
+
+    my %written = (containers => 0, keys => 0, leaves => 0, edges => 0);
+    my ($nodes, $containers) = _expansion_census($node, {}, \%written);
+
+    # go-yaml's decodeCount: every node of the EXPANDED tree, plus the alias
+    # node it passes through on the way into each repeated container. Every
+    # expanded container but the root arrives through exactly one edge, and
+    # exactly $written{containers} - 1 of those edges are anchor definitions
+    # rather than aliases. Plus one for the document node itself.
+    my $decoded = $nodes + $containers - $written{containers} + 1;
+    $decoded = $EXPANSION_CEILING if $decoded > $EXPANSION_CEILING;
+
+    # go-yaml's non-alias count: the document as WRITTEN -- the document node,
+    # every distinct container, its keys and its scalar values, and one alias
+    # node for each reference beyond a container's own definition.
+    my $as_written = 1 + $written{containers} + $written{keys}
+        + $written{leaves} + ($written{edges} - ($written{containers} - 1));
+
+    my $aliased = $decoded - $as_written;
+
+    return 1 unless $aliased > 100
+        && $decoded > 1000
+        && $aliased / $decoded > _allowed_alias_ratio($decoded);
+
+    croak "this document expands to " . $decoded . " values from the "
+        . $as_written . " it holds, which is the alias bomb sops refuses: "
+        . "\"yaml: document contains excessive aliasing\". A YAML anchor "
+        . "referenced from inside another anchor's value doubles the document "
+        . "at every level, and a structure passed to encrypt that holds one "
+        . "reference in several places does the same with no YAML involved. "
+        . "Reusing an anchor is ordinary and is not this: sops allows an "
+        . "expansion of up to 100 times what the document holds -- less as "
+        . "the expansion itself grows past 400000 values -- and refuses this "
+        . "one at " . sprintf('%.0f', $decoded / $as_written) . " times.";
 }
 
 sub _encryption_options {
