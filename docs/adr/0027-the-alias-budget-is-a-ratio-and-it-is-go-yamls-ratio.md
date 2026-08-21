@@ -216,10 +216,20 @@ Two places where our census and go-yaml's decoder can disagree, neither
 affecting any measured document:
 
 - **Merge keys.** `YAML::XS` does not expand `<<: *base`; it hands back a
-  literal `<<` key whose value is the shared hash. go-yaml expands the merge.
-  The sharing is visible to the census either way, so a merge-key bomb is still
-  refused, but the two node counts differ slightly on such a document. The
-  underlying `<<` handling is a pre-existing parser question, not this guard's.
+  literal `<<` key whose value is the shared hash. **Neither does sops**, so
+  this is a smaller disagreement than first written here, and possibly none at
+  all. *Corrected 2026-08-21, karr #119.* The original note said "go-yaml
+  expands the merge", which is true only when go-yaml decodes into a Go map or
+  struct; sops decodes into a `yaml.Node` tree, where it does not. Measured
+  while landing karr #116: `sops -e` on `derived:` / `<<: *b` writes
+  `!!merge <<:` carrying its own leaf, encrypted under the AAD path
+  `derived:<<:x:` and digested in document order — so `<<` is an ordinary key
+  to sops, not an expansion (ADR 0028 has the measurement). The sharing is
+  visible to the census either way and a merge-key bomb is still refused; what
+  changes is that the two node counts likely agree here rather than differing.
+  Anyone touching the census should measure the ratio on a merge-key document
+  against the binary rather than deriving it. The underlying `<<` handling is a
+  parser question and belongs to ADR 0028, not to this guard.
 - **Anchored scalars** are shared by `YAML::XS` (measured), so they are counted
   as one node where go-yaml counts an anchor and an alias. A scalar has no
   subtree and cannot amplify anything, so this moves the ratio by a term that
