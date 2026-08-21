@@ -1,0 +1,78 @@
+---
+class: standard
+completed: 2026-08-21T04:55:57Z
+created: 2026-08-21T04:03:29Z
+id: 116
+priority: high
+started: 2026-08-21T04:06:12Z
+status: done
+tags:
+- yaml
+- parser
+- interop
+- format
+title: File::SOPS cannot read a sops document whose source used a YAML merge key
+updated: 2026-08-21T04:55:57Z
+---
+
+Gefunden beim Abarbeiten von karr #112 (Alias-Budget), beim Nachmessen, wie YAML::XS Merge-Keys behandelt. NICHT von #112 eingefuehrt -- vorbestehend.
+
+Quelle:
+
+  base: &b
+    x: 1
+  derived:
+    <<: *b
+    y: 2
+
+sops 3.13.3 expandiert den Merge NICHT, sondern haelt << als Schluessel und
+taggt ihn:
+
+  derived:
+      !!merge <<:
+          x: ENC[...]
+      "y": ENC[...]
+
+File::SOPS->decrypt auf genau dieses von sops geschriebene Dokument:
+
+  DIE: YAML::XS Error: bad tag found for scalar: tag:yaml.org,2002:merge
+       at lib/File/SOPS/Format/YAML.pm line 138
+
+sops -d auf dasselbe Dokument: exit 0, liest es vollstaendig. Also ein
+Dokument, das sops schreibt und liest und das diese Bibliothek gar nicht
+oeffnen kann -- kein MAC-Fehler, ein Parse-Fehler.
+
+Die Gegenrichtung geht: File::SOPS->encrypt schreibt << ohne !!merge-Tag,
+und sops -d liest das (gemessen, exit 0, Klartext korrekt). go-yaml
+ergaenzt das Tag beim Lesen selbst. Der MAC laeuft ueber Werte, nicht ueber
+Schluessel, also ist der Digest von beidem nicht betroffen.
+
+Zu klaeren waere ausserdem, ob YAML::XS <<: *b ueberhaupt als Merge
+aufloesen sollte -- es tut es nicht, es liefert einen literalen
+Schluessel << mit der geteilten Hash-Referenz als Wert. Das ist fuer
+Rundlauf mit sops offenbar das richtige Verhalten, aber ein Aufrufer, der
+Merge-Semantik erwartet, bekommt sie nicht.
+
+Format-Lane. Beruehrt Emitter (Tag schreiben) und Parser (Tag lesen);
+weil der Emitter und der MAC ein Mechanismus sind (ADR 0001), vor einer
+Aenderung pruefen, ob sich am Digest etwas bewegt.
+GELOEST. docs/adr/0028, t/44-yaml-merge-key-tag.t, Changes unter {{$NEXT}}. Geaenderte Datei: lib/File/SOPS/Format/YAML.pm.
+
+MESSUNG ZUERST, und die Annahme im Ticketkoerper haelt -- aber sie wurde gemessen, nicht abgeleitet: der gespeicherte mac: wurde aus fuenf sops-geschriebenen Dokumenten entschluesselt und Blatt fuer Blatt reproduziert. Der Schluessel << ist auf beiden Seiten der Leitung ein ganz gewoehnlicher Schluessel: AAD-Pfadkomponente (das Blatt authentifiziert unter derived:<<:x: und unter derived:x: NICHT -- GCM authentifiziert die AAD, also eine direkte Messung) und Digest-Mitglied mit seinem ganzen Teilbaum, in Dokumentordnung. Kein AAD-Pfad, kein Digest-Byte, kein emittiertes Byte bewegt sich -- Format-Lane, nicht Wire-Lane.
+
+Positionen, in denen sops das Tag schreibt (alle gemessen, alle fuenf MACs reproduziert): Mapping-Schluessel unterhalb der Wurzel, Mapping-Schluessel AN der Wurzel, erster Schluessel eines Sequenz-Eintrags, Schluessel mit SEQUENZ-Wert (<<: [*a, *b] wird zu einer Liste unter <<), und ein !!merge-Schluessel INNERHALB eines !!merge-Schluessels. Eine der fuenf hat eine Dokumentordnung, die nicht der sortierten entspricht, und reproduziert nur in Dokumentordnung -- das ist der ordnungserhaltende Reparse aus ADR 0001, der einen Merge-Key wie jeden anderen laeuft (YAML::PP liest das Tag klaglos).
+
+SCHAERFERE FASSUNG DES BEFUNDS als im Ticketkoerper: es waren nie nur sops-eigene Dokumente. Gemessen -- ein sops rotate -i auf ein Dokument, das File::SOPS mit einem <<-Schluessel geschrieben hat, fuegt das Tag hinzu, und File::SOPS konnte danach seine EIGENE Ausgabe nicht mehr lesen.
+
+ENTSCHEIDUNG: Tag aus dem Text entfernen und neu parsen -- aber erst, nachdem YAML::XS das Dokument schon abgelehnt hat, und nur wenn YAML::PPs PARSER (nur Events, kein Baum, kein Resolver) bestaetigt, dass die Substitution genau so viele merge-getaggte Skalare entfernt hat, wie das Dokument wirklich hat. Sonst wird nichts wiederholt und libyamls eigene Meldung bleibt stehen. Der Zaehlerabgleich macht die Textchirurgie strukturell sicher, nicht nur eng: ein uebersehenes echtes Tag steht noch im Text und YAML::XS lehnt erneut ab, also beweist ein geglueckter Retry mit passenden Zaehlern, dass jede Entfernung ein echtes Tag getroffen hat.
+
+Gegen die Alternativen: YAML::PP als Parser fuer den Fall verworfen (Typen kommen vom Parser, ADR 0002 -- ein Dokument waere danach getypt worden nach dem Tag, das es zufaellig traegt); YAML::XS-Hook existiert nicht (die drei angenommenen Skalar-Tags sind !!str, !!int, !!float; LoadBlessed aendert in beiden Stellungen nichts, gemessen); Refuse verworfen, weil es -- anders als bei #108 / ADR 0024 -- keinen Korruptionspfad schliesst und ein Dokument unlesbar liesse, ueber dessen Baum wir mit sops byteweise schon einig sind. Warum diese Chirurgie und nicht die von ADR 0019 verworfene: dort beliebiger Schluesselpfad in beliebiger Verschachtelung auf dem SCHREIBPFAD an einem fertigen Dokument, hier ein fester Token in einer festen lexikalischen Position auf dem LESEPFAD, mit Zaehlerabgleich davor.
+
+NEBENFRAGE aus dem Ticketkoerper, beantwortet: YAML::XS loest <<: *b weiterhin NICHT auf, und die Aenderung ruehrt daran nicht. Ein Aufrufer bekommt derived => { << => { x => 1 }, y => 2 } -- kein x im Elternteil. Getaggte und ungetaggte Schreibweise geben jetzt denselben Baum, das ist die ganze Aenderung. Aufloesen waere falsch: sops loest auch nicht auf, und ein gefalteter Baum haette andere Pfade und einen anderen Digest als die Datei auf der Platte.
+
+NETZ: t/44 hat 12 Subtests. Gegen die UNGEPATCHTE Bibliothek (prove -I auf eine unberuehrte lib-Kopie, kein use lib in der Datei) fallen 6 davon -- 1, 3, 7, 8, 10, 12. Die 6, die auch ungepatcht gruen sind, sind genau die, die festhalten, was sich NICHT bewegen darf.
+
+TESTS: prove -lr t/ -> 45 Dateien, 1025 Tests, PASS (Baseline 44/1013). SOPS_BIN=/tmp/sops prove -l t/04-interop.t -> 32/32 PASS, GELAUFEN und nicht geskippt. t/44 selbst laeuft in beiden Richtungen live gegen sops 3.13.3 und wurde nicht geskippt.
+
+DRIFT als eigene Tickets abgelegt statt mitgenommen: #118 (die uebrigen Tags, die YAML::XS ablehnt -- reiner Encrypt-Pfad, sops schreibt keines davon in ein verschluesseltes Dokument) und #119 (ADR 0027 Nebensatz "go-yaml expands the merge" ist ungenau, sops dekodiert in yaml.Node und faltet nicht).
+2026-08-21 04:45 Umsetzung fertig, Netz verifiziert, Interop-Test gelaufen. Zur Durchsicht: lib/File/SOPS/Format/YAML.pm, t/44-yaml-merge-key-tag.t, docs/adr/0028, Changes.
