@@ -1,0 +1,47 @@
+---
+class: standard
+created: 2026-08-21T07:36:40Z
+id: 142
+priority: low
+status: backlog
+tags:
+- performance
+- metadata
+title: should_encrypt_path costs 1.87us a call and the encrypt path now makes two
+  per leaf
+updated: 2026-08-21T07:36:40Z
+---
+
+Found while measuring karr #122 / ADR 0040, which adds one
+should_encrypt_path call per leaf to File::SOPS::_compute_macs sweep. It is
+not that changes fault -- the call is the cheapest correct way to ask which
+slot a leaf is going into -- but it doubles a cost that was already there.
+
+MEASURED (perl 5.40.1, best of seven, this machine):
+
+  File::SOPS::Metadata->should_encrypt_path([qw(database password)])
+  with the default unencrypted_suffix          1.87 us per call
+
+  File::SOPS->encrypt, 1000 string leaves      41.4 ms -> 43.0 ms  (+4%)
+  File::SOPS->encrypt, 2000 leaves             98   ms -> 100  ms  (+2%)
+
+_encrypt_tree already calls it once per leaf, and _mac_digest calls it once
+per leaf again for a mac_only_encrypted document. So a 1000-leaf document now
+pays 2-3 ms in this one predicate.
+
+WHERE THE TIME GOES, measured separately: it is NOT mainly the regex
+recompile. `grep { /\Q$self->{unencrypted_suffix}\E$/ } @$path` against a
+precompiled qr// over the same two-element path is 0.84 us vs 0.72 us per
+call, so ~0.12 us of the 1.87. The rest is the method call plus four
+`defined ... && length ...` Moo accessor pairs, three of which are almost
+always undef.
+
+CANDIDATES, none measured yet: cache a per-metadata closure built once from
+whichever of the four rules is actually configured (the common case is one
+suffix and nothing else, i.e. one qr// and one grep); or have the walks share
+one answer per leaf instead of asking twice.
+
+NOT URGENT: a real secrets file has tens of leaves, where this is tens of
+microseconds. It shows up on synthetic thousand-leaf documents.
+
+API lane -- lib/File/SOPS/Metadata.pm.
