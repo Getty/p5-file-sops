@@ -24,19 +24,27 @@ use Crypt::Age;
 # instead of hanging the suite. Three things hold it, because one is not
 # enough:
 #
-#   1. The child dies on the first "Deep recursion" warning. That is the FAST
-#      net and the only one that bounds MEMORY: perl raises it at depth 100, so
-#      a runaway walk is caught before it has allocated anything, in
-#      milliseconds. Without it the walk climbs about 1 GB of RSS every three
+#   1. The child lowers $File::SOPS::MAX_DEPTH to 200, so a runaway walk hits
+#      the library's own depth bound instead of running. That is the FAST net
+#      and the only one that bounds MEMORY: every walk in File::SOPS refuses
+#      to go deeper than that variable, so a regression is refused in about
+#      2ms with no allocation to speak of (measured, all three cycle shapes in
+#      this file). Without it the walk climbs about 1 GB of RSS every three
 #      seconds (measured), and long before any timeout the machine is
-#      thrashing -- a regression took 130s per case to be reported that way,
-#      against 400ms with this. Perl's threshold of 100 is fixed and not
-#      configurable, which is why the deepest fixture in this file is 40.
+#      thrashing -- a regression took 130s per case to be reported that way.
+#
+#      This USED to be perl's own "Deep recursion" warning, which it raises at
+#      a fixed depth of 100. karr #117 silenced that warning in the walks: it
+#      fires on documents sops accepts, once per crossing, and turned a correct
+#      encrypt of a 265-level document into 505 warning lines on STDERR. The
+#      bound that replaced it is this library's, and unlike perl's it can be
+#      moved -- which is what this file does. The fixtures stay far below it
+#      either way; the deepest here is 40.
 #   2. An alarm, as the backstop for a runaway that somehow does not recurse.
 #   3. The fork itself, so whatever the child did allocate dies with it.
 #
 # On the passing path none of the three ever fires: the guard croaks
-# immediately and no document here is anywhere near 100 levels deep.
+# immediately and no document here is anywhere near 200 levels deep.
 
 plan skip_all => 'this test forks to bound a regression, and fork is not '
     . 'available here'
@@ -57,13 +65,12 @@ sub guarded {
 
     if (!$pid) {
         close $read;
-        # The fast net. A runaway walk trips this at depth 100, before it has
-        # allocated anything worth worrying about; every other warning is
-        # dropped, since a regression emits thousands of them and they drown
-        # the finding.
-        local $SIG{__WARN__} = sub {
-            die "RUNAWAY: $_[0]" if $_[0] =~ /\ADeep recursion/;
-        };
+        # The fast net. A runaway walk trips the library's depth bound here
+        # rather than at 10000, before it has allocated anything worth
+        # worrying about. refuses() below tells that death apart from the
+        # refusal being asserted, so a regression reads as a regression and
+        # not as a wrong message.
+        local $File::SOPS::MAX_DEPTH = 200;
         local $SIG{ALRM} = sub {
             print {$write} "HANG\n";
             close $write;
@@ -95,11 +102,12 @@ sub guarded {
 sub refuses {
     my ($name, $code) = @_;
     my $got = guarded($code);
-    if ($got eq 'HANG' || $got =~ /\ADIE RUNAWAY/) {
+    if ($got eq 'HANG' || $got =~ /nests containers more than/) {
         fail("$name refuses a document that contains itself");
         diag($got eq 'HANG'
             ? "HUNG -- did not return within ${TIMEOUT}s."
-            : "RAN AWAY -- recursed past depth 100 instead of refusing.");
+            : "RAN AWAY -- walked the cycle until the depth bound stopped it, "
+              . "instead of refusing it as a cycle.");
         diag("This is karr #110 back again; see docs/adr/0025.");
         return;
     }

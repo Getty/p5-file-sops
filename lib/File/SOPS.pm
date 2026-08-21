@@ -869,6 +869,35 @@ C<Error unmarshalling file: yaml: document contains excessive aliasing>
 See karr #112 and
 L<docs/adr/0027|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0027-the-alias-budget-is-a-ratio-and-it-is-go-yamls-ratio.md>.
 
+=head3 A document nested deeper than sops can carry is refused
+
+B<New in 0.003.> A document is walked at most C<$File::SOPS::MAX_DEPTH>
+containers deep, 10000 by default, and one nested deeper is refused rather than
+walked:
+
+    # dies: this document nests containers more than 10000 deep, which is as
+    #       deep as this library walks. sops stops as well: ...
+
+The number is sops's, not this library's. Measured against sops 3.13.3,
+counting containers from the document's own root mapping: go-yaml accepts
+10001 and refuses 10002 with C<yaml: exceeded max depth of 10000>, in both
+directions and B<ahead> of the data key; Go's JSON encoder accepts 10000 and
+refuses 10001 with C<exceeded max depth>. 10000 is therefore the deepest a
+document can be and still be readable in both formats. It is one level tighter
+than go-yaml alone would be, deliberately: the alternative is writing a JSON
+file sops cannot read back.
+
+Nothing that came from a sops-written document can reach this. It exists for
+what a caller can build in Perl and for what a hand-written file can carry, and
+because a walk that cannot say no has only a hang to offer -- before this,
+4000 levels took 101s and 410 MB in the MAC's walk alone.
+
+C<$File::SOPS::MAX_DEPTH> is writable and is what a caller processing
+untrusted documents can lower to refuse deep documents earlier. Raising it
+above 10000 produces documents sops will refuse to read.
+
+See karr #117.
+
 =cut
 
 sub decrypt {
@@ -1035,6 +1064,12 @@ C<yaml: document contains excessive aliasing> rather than a failure to get the
 data key, so this reports it there too. Before the guard, C<decrypt> at 15
 levels walked 65,535 leaves before it could report anything at all, and with
 C<ignore_mac =E<gt> 1> it walked the same tree with nothing to report.
+
+And for a document nested deeper than this library walks -- see
+L</A document nested deeper than sops can carry is refused>. Measured the same
+way: C<sops -d> on an over-deep encrypted file reports
+C<yaml: exceeded max depth of 10000> whether or not an age identity is
+available, so the depth is reported here ahead of the key as well.
 
 =cut
 
@@ -2665,6 +2700,74 @@ sub _assert_rekeyable {
         . "what you want, say so explicitly with decrypt followed by encrypt.";
 }
 
+# --- how deep a document may be -----------------------------------------
+#
+# Every walk in this file recurses, and each of them carries the two lines
+# below: `no warnings 'recursion'` and a depth it refuses to pass. The two
+# belong together and neither works alone.
+#
+# Perl warns "Deep recursion on subroutine" once a sub is 100 frames deep. That
+# threshold is fixed and is about perl, not about the document: a 265-level
+# document sops accepts is ordinary input here, and it produced 505 warning
+# lines and 63 KB on STDERR for a correct encrypt (measured, karr #117) -- a
+# successful operation that reads like a crash. The warning is silenced where
+# it is noise, per walk rather than per file, so nothing outside these walks
+# loses it.
+#
+# What the warning was also doing -- being the only thing that ever said a walk
+# had lost its footing -- is replaced here by a bound that is part of the
+# contract instead of a side effect of perl's stack accounting.
+#
+# The number is sops's, not ours, measured against sops 3.13.3 on documents
+# built as `a: {a: {a: ... }}` and `a: [[[ ... ]]]`, counting CONTAINERS from
+# the document's own root mapping:
+#
+#   go-yaml (sops -e, sops -d)  10001 accepted, 10002 refused
+#                               "yaml: exceeded max depth of 10000"
+#   encoding/json (sops -e)     10000 accepted, 10001 refused
+#                               "invalid character '{' exceeded max depth"
+#
+# and, as with the cycle and the alias bomb, the -d refusal comes out AHEAD of
+# the key: the same over-deep encrypted file with no age identity available
+# still reports the depth.
+#
+# 10000 is therefore the deepest a document can be and still be readable in
+# BOTH formats, and that is the number here. It is one level tighter than
+# go-yaml alone on the YAML side, deliberately: the alternative is writing a
+# JSON file that sops cannot read back, and refusing loudly is the cheaper of
+# the two errors. It is the same shape of decision as docs/adr/0027 -- take the
+# reference's own limit rather than invent one -- and the same reason.
+#
+# The bound is only a bound if reaching it is affordable, which is why the
+# walks below carry the path as ONE array that is pushed and popped rather than
+# copying it per level. Copying made a walk quadratic in depth: 4000 levels
+# took 101s and 410 MB in _sorted_leaves alone, so a refusal at 10000 would
+# have arrived minutes and gigabytes later -- a hang with a message attached.
+# Shared and unwound, the same walk reaches 10000 in 17ms and 24 MB (measured).
+#
+# It is a variable and not a constant on purpose, and t/41 is the reason. That
+# file bounds a runaway walk -- karr #110's, a document that contains itself --
+# by dying at a depth no fixture of its own reaches, and until now it borrowed
+# perl's fixed threshold of 100 for that. It cannot borrow it any more, because
+# the line above silences it. So the bound it borrows instead is this one, and
+# a caller reading untrusted documents can use it the same way. Lowering it
+# refuses deep documents earlier than sops does; raising it writes documents
+# sops will not read.
+our $MAX_DEPTH = 10_000;
+
+sub _assert_depth {
+    my ($depth) = @_;
+
+    return 1 if $depth <= $MAX_DEPTH;
+
+    croak "this document nests containers more than $MAX_DEPTH deep, which is "
+        . "as deep as this library walks. sops stops as well: go-yaml refuses "
+        . "past 10001 nested containers with \"yaml: exceeded max depth of "
+        . "10000\", and Go's JSON encoder past 10000 with \"exceeded max "
+        . "depth\" -- in both directions, and ahead of the data key. The path "
+        . "is not named here because it is thousands of keys long.";
+}
+
 # A container that is its own ancestor has no finite set of values, so there is
 # nothing to encrypt, nothing to hash and no document to write. Nothing
 # upstream of here stops one: the two YAML parsers this library uses disagree
@@ -2702,9 +2805,18 @@ sub _assert_rekeyable {
 # nodes already proven acyclic, so a diamond is walked once rather than once
 # per path through it.
 sub _assert_acyclic {
-    my ($node, $path, $active, $clean) = @_;
+    no warnings 'recursion';
+    my ($node, $path, $active, $clean, $depth) = @_;
 
     return 1 unless ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
+    # $clean makes this walk O(nodes) rather than O(paths), and that memo also
+    # means the depth counted here is the depth of the FIRST path to a shared
+    # subtree, not the deepest. It is not the only place the bound is asked:
+    # the walks that expand aliases rather than memoising them -- _sorted_leaves,
+    # _encrypt_tree, _decrypt_tree -- see the deeper path and refuse it there.
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth);
 
     my $addr = refaddr($node);
     return 1 if $clean->{$addr};
@@ -2720,13 +2832,18 @@ sub _assert_acyclic {
     $active->{$addr} = 1;
 
     if (ref $node eq 'HASH') {
-        _assert_acyclic($node->{$_}, [@$path, $_], $active, $clean)
-            for sort keys %$node;
+        # One path array, pushed and popped, not a copy per level: see the
+        # depth comment above for what the copy cost at depth.
+        for my $k (sort keys %$node) {
+            push @$path, $k;
+            _assert_acyclic($node->{$k}, $path, $active, $clean, $depth);
+            pop @$path;
+        }
     }
     else {
         # An array contributes no path component anywhere else in this library
         # and does not gain one here just because this path is a diagnostic.
-        _assert_acyclic($_, $path, $active, $clean) for @$node;
+        _assert_acyclic($_, $path, $active, $clean, $depth) for @$node;
     }
 
     delete $active->{$addr};
@@ -2791,9 +2908,13 @@ sub _allowed_alias_ratio {
 # is not a cycle guard: it is filled on the way OUT, so a cycle would recurse
 # forever here. _assert_acyclic runs first and that ordering is load-bearing.
 sub _expansion_census {
-    my ($node, $memo, $written) = @_;
+    no warnings 'recursion';
+    my ($node, $memo, $written, $depth) = @_;
 
     return (1, 0) unless ref $node eq 'HASH' || ref $node eq 'ARRAY';
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth);
 
     my $addr = refaddr($node);
     return @{$memo->{$addr}} if $memo->{$addr};
@@ -2823,7 +2944,7 @@ sub _expansion_census {
             $written->{leaves}++;
         }
         my ($child_nodes, $child_containers)
-            = _expansion_census($child, $memo, $written);
+            = _expansion_census($child, $memo, $written, $depth);
         $nodes      += $child_nodes;
         $containers += $child_containers;
         $nodes      = $EXPANSION_CEILING if $nodes > $EXPANSION_CEILING;
@@ -2879,7 +3000,11 @@ sub _encryption_options {
 }
 
 sub _encrypt_tree {
-    my ($node, $key, $metadata, $path) = @_;
+    no warnings 'recursion';
+    my ($node, $key, $metadata, $path, $depth) = @_;
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth) if ref $node eq 'HASH' || ref $node eq 'ARRAY';
 
     if (ref $node eq 'HASH') {
         my %result;
@@ -2893,7 +3018,10 @@ sub _encrypt_tree {
             # path matches. Measured against sops 3.13.3 with
             # --encrypted-suffix _enc: everything under a `top_enc:` block is
             # encrypted, and a `nested_enc:` under a plain parent is too.
-            $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, [@$path, $k]);
+            push @$path, $k;
+            $result{$k} = _encrypt_tree($node->{$k}, $key, $metadata, $path,
+                $depth);
+            pop @$path;
         }
         return \%result;
     }
@@ -2901,7 +3029,7 @@ sub _encrypt_tree {
         my @result;
         for my $item (@$node) {
             # SOPS does NOT add array index to path - all array elements share parent's path
-            push @result, _encrypt_tree($item, $key, $metadata, $path);
+            push @result, _encrypt_tree($item, $key, $metadata, $path, $depth);
         }
         return \@result;
     }
@@ -2952,13 +3080,19 @@ sub _encrypt_tree {
 }
 
 sub _decrypt_tree {
-    my ($node, $key, $metadata, $path) = @_;
+    no warnings 'recursion';
+    my ($node, $key, $metadata, $path, $depth) = @_;
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth) if ref $node eq 'HASH' || ref $node eq 'ARRAY';
 
     if (ref $node eq 'HASH') {
         my %result;
         for my $k (keys %$node) {
-            my $new_path = [@$path, $k];
-            $result{$k} = _decrypt_tree($node->{$k}, $key, $metadata, $new_path);
+            push @$path, $k;
+            $result{$k} = _decrypt_tree($node->{$k}, $key, $metadata, $path,
+                $depth);
+            pop @$path;
         }
         return \%result;
     }
@@ -2966,7 +3100,7 @@ sub _decrypt_tree {
         my @result;
         for my $item (@$node) {
             # SOPS does NOT add array index to path - all array elements share parent's path
-            push @result, _decrypt_tree($item, $key, $metadata, $path);
+            push @result, _decrypt_tree($item, $key, $metadata, $path, $depth);
         }
         return \@result;
     }
@@ -3190,17 +3324,28 @@ sub _mac_bytes {
 
 # Leaves in sorted-key order: [ [ \@path, $value ], ... ]
 sub _sorted_leaves {
-    my ($node, $path, $out) = @_;
+    no warnings 'recursion';
+    my ($node, $path, $out, $depth) = @_;
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth) if ref $node eq 'HASH' || ref $node eq 'ARRAY';
 
     if (ref $node eq 'HASH') {
-        _sorted_leaves($node->{$_}, [@$path, $_], $out) for sort keys %$node;
+        for my $k (sort keys %$node) {
+            push @$path, $k;
+            _sorted_leaves($node->{$k}, $path, $out, $depth);
+            pop @$path;
+        }
     }
     elsif (ref $node eq 'ARRAY') {
         # SOPS does NOT add array index to path - all elements share parent's
-        _sorted_leaves($_, $path, $out) for @$node;
+        _sorted_leaves($_, $path, $out, $depth) for @$node;
     }
     else {
-        push @$out, [ $path, $node ];
+        # The COPY is taken here and only here: $path is one array walked down
+        # and back up, so a leaf that kept the reference would end up holding
+        # whatever the walk was looking at when it finished.
+        push @$out, [ [@$path], $node ];
     }
 
     return $out;
@@ -3219,7 +3364,11 @@ sub _sorted_leaves {
 # a bare "MAC verification failed" with no hint that half the tree had been
 # dropped before the digest was taken.
 sub _document_leaves {
-    my ($ordered, $node, $path, $out) = @_;
+    no warnings 'recursion';
+    my ($ordered, $node, $path, $out, $depth) = @_;
+
+    $depth = ($depth // 0) + 1;
+    _assert_depth($depth) if ref $ordered eq 'HASH' || ref $ordered eq 'ARRAY';
 
     if (ref $ordered eq 'HASH') {
         croak _at_path($path, "the document has a mapping here but the parsed "
@@ -3231,7 +3380,9 @@ sub _document_leaves {
             croak _at_path([@$path, $k], "present in the document but not in "
                 . "the parsed tree")
                 unless exists $node->{$k};
-            _document_leaves($ordered->{$k}, $node->{$k}, [@$path, $k], $out);
+            push @$path, $k;
+            _document_leaves($ordered->{$k}, $node->{$k}, $path, $out, $depth);
+            pop @$path;
         }
     }
     elsif (ref $ordered eq 'ARRAY') {
@@ -3242,7 +3393,7 @@ sub _document_leaves {
             . "the parsed tree has %d", scalar @$ordered, scalar @$node))
             unless @$ordered == @$node;
 
-        _document_leaves($ordered->[$_], $node->[$_], $path, $out)
+        _document_leaves($ordered->[$_], $node->[$_], $path, $out, $depth)
             for 0 .. $#$ordered;
     }
     else {
@@ -3256,7 +3407,9 @@ sub _document_leaves {
             . "tree has a " . lc(ref $node))
             if ref $node eq 'HASH' || ref $node eq 'ARRAY';
 
-        push @$out, [ $path, $node ];
+        # A copy, for the same reason _sorted_leaves takes one: $path is shared
+        # and unwound.
+        push @$out, [ [@$path], $node ];
     }
 
     return $out;

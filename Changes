@@ -1537,6 +1537,29 @@ Revision history for File-SOPS
     `.inf` or `.nan` in its raw bytes pays nothing measurable, 0.096ms per
     parse before and after; one that really holds a token pays a second
     YAML::PP load. See docs/adr/0026 and karr #105.
+  - BUG FIX and NEW GUARD: a document nested deeper than 100 levels no
+    longer floods STDERR while succeeding, and one nested deeper than sops
+    can carry is refused instead of walked. Perl warns "Deep recursion on
+    subroutine" past a fixed depth of 100, which is about perl and not about
+    the document: measured on a 265-level alias chain sops accepts, a correct
+    encrypt wrote 505 warning lines and 63 KB to STDERR. The walks now say
+    `no warnings 'recursion'` - per walk, so nothing else loses the warning -
+    and carry a bound of their own instead: $File::SOPS::MAX_DEPTH, 10000
+    containers, refused in every walk and in both directions ahead of the
+    data key. The number is sops's, measured against 3.13.3: go-yaml accepts
+    10001 containers and refuses 10002 ("yaml: exceeded max depth of 10000"),
+    Go's JSON encoder accepts 10000 and refuses 10001, so 10000 is the
+    deepest a document can be and still be readable in both formats - one
+    level tighter than go-yaml alone, deliberately, because the alternative
+    is writing a JSON file sops cannot read back. The variable is writable:
+    lower it to refuse deep documents earlier, raise it and sops will refuse
+    what you write. Deep documents also got cheaper - the walks now push and
+    pop one key path instead of copying it per level, which was quadratic in
+    depth (4000 levels took 101s and 410 MB in the MAC's walk alone; 10000
+    levels now take 0.017s and 24 MB), and the 265-level fixture encrypts in
+    0.417s where it took 0.807s. Not fixed yet: the walks in Encrypted.pm and
+    Format/YAML.pm still warn, 168 of the original 505 lines, karr #120. See
+    docs/adr/0029 and karr #117.
 
 0.002     2026-02-22 02:10:34Z
   - Fix bool deserialization: return JSON::PP::Boolean instead of plain 1/0
