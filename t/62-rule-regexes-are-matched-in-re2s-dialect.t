@@ -172,14 +172,20 @@ my @REFUSED_DIFFERENT = (
     [ 'a\E'        => qr/the escape \\E/ ],
 );
 
-subtest 'a pattern RE2 cannot compile is refused, not matched with Perl' => sub {
+subtest 'a pattern RE2 cannot compile is refused for WRITING' => sub {
+    # This subtest asked should_encrypt_path until karr #171, because until
+    # then the refusal WAS the match. docs/adr/0051 splits the two: sops reads
+    # such a rule as matching nothing, which is reproducible, so the read path
+    # reproduces it and only the write path refuses. The refusal, its wording
+    # and every row below are unchanged -- what moved is which call raises it.
+    # The read half of the same split is t/66.
     for my $row (@REFUSED) {
         my ($pattern, $names, $re2) = @$row;
 
         for my $field (qw( unencrypted_regex encrypted_regex )) {
             my $err = exception {
                 File::SOPS::Metadata->new($field => $pattern)
-                    ->should_encrypt_path([ 'foo' ]);
+                    ->assert_rule_regexes_agree;
             };
 
             like $err, qr/\QCannot use '$pattern' as the $field\E/,

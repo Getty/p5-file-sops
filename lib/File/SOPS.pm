@@ -1132,6 +1132,20 @@ nothing else, so a document whose rule excludes an encrypted leaf comes back
 holding that leaf's C<ENC[...]> text -- decrypted values everywhere the rule
 selects, ciphertext everywhere it does not.
 
+B<A regex rule is read here in RE2's dialect too>, which is the one place this
+path is more permissive than the write path. sops does not report a pattern RE2
+cannot compile: it discards the compile error, so the rule matches B<nothing>
+and every value is classified as though the rule were not there. That is
+reproducible and it is reproduced, so
+C<< unencrypted_regex: "(?=foo)" >> -- which C<sops -e --unencrypted-regex> will
+write for you without a word -- is a document this method reads at exit 0,
+exactly as C<sops -d> reads it. L</encrypt> and L</rotate> still refuse to
+B<write> under such a rule. What stays refused on this path is a pattern the two
+dialects compile and read B<differently> (C<\v>, C<\Q>, C<\E>) or one Perl
+cannot compile at all (C<(?U)>): there is no sops answer to reproduce for those,
+so guessing at one would classify leaves wrongly and silently. See
+F<docs/adr/0051>.
+
 =head3 A comment in a list comes back as a C<File::SOPS::Comment>
 
 B<New in 0.003.> sops attaches a comment to the node that B<follows> it, and
@@ -1632,6 +1646,12 @@ sub rotate {
 
     _assert_rekeyable($metadata, $file, verb => 'rotate', noun => 'Rotation');
 
+    # Same question as edit's, and asked in the same place: the read below no
+    # longer refuses a rule RE2 cannot compile, so the refusal for writing
+    # under one belongs ahead of it rather than after the whole document has
+    # been decrypted. docs/adr/0051.
+    $metadata->assert_rule_regexes_agree;
+
     # Get current recipients if not specified
     unless ($recipients) {
         $recipients = [ map { $_->{recipient} } @{$metadata->age} ];
@@ -1740,6 +1760,17 @@ anything. Rotate such a file with the sops CLI, which can re-encrypt for every
 backend; or, if losing those recipients is the intention, say so by calling
 L</decrypt> and L</encrypt> yourself.
 
+The second refusal is the document's own encryption rule, where that rule is a
+regex Go RE2 and Perl do not read the same way. Rotation B<writes>, and this
+distribution does not write a document under a rule it cannot apply as sops
+applies it -- see
+L<File::SOPS::Metadata/The regex rules are matched in RE2's dialect>. Note the
+asymmetry, which is deliberate and is F<docs/adr/0051>: L</decrypt> and
+L</extract> B<do> read such a document where sops's own answer is reproducible,
+so a file this method refuses to rotate is still one you can read, and
+L</decrypt> followed by L</encrypt> under a rewritten pattern is the way
+through.
+
 =head3 A rule that does not cover what is encrypted stops on the MAC
 
 B<Changed in 0.003, and it changed twice.> A rotation re-encrypts the document
@@ -1791,6 +1822,13 @@ sub edit {
     # it inherits rotate's refusal: a document also wrapped for pgp or a KMS
     # would come back out with those recipients silently dropped.
     _assert_rekeyable($metadata, $file, verb => 'edit', noun => 'Editing');
+
+    # And the document's own rule has to be one we can write under, asked HERE
+    # rather than left to the re-encryption at the bottom. The read below now
+    # goes through for a rule RE2 cannot compile (docs/adr/0051), so without
+    # this the editor would open, the user would type, and the refusal would
+    # arrive afterwards -- with their edit in a temp file and nowhere else.
+    $metadata->assert_rule_regexes_agree;
 
     my $data = $class->decrypt(
         encrypted  => $content,
@@ -2883,11 +2921,15 @@ sub _metadata_for_encrypt {
     return $metadata;
 }
 
-# Refuse to WRITE a document under a rule we cannot apply. Reading one is fine
-# -- decryption is driven by which values look encrypted, not by the rule --
-# but writing under a rule we ignore would leave values in plaintext that the
-# rule says to encrypt, or the reverse, in a file that looks perfectly
-# well-formed.
+# Refuse to WRITE a document under a rule we cannot apply. Writing under a rule
+# we ignore would leave values in plaintext that the rule says to encrypt, or
+# the reverse, in a file that looks perfectly well-formed.
+#
+# Reading such a document is a SEPARATE question and is answered separately --
+# decryption has been rule-driven since docs/adr/0049, so the rule is consulted
+# there too, and where sops's own answer is reproducible the read path
+# reproduces it rather than refusing. docs/adr/0051 is why the regex half of
+# this lives behind a method of its own instead of inside the match.
 sub _assert_rules_supported {
     my ($metadata) = @_;
 
@@ -2899,6 +2941,14 @@ sub _assert_rules_supported {
             . "comments, so every value would be classified wrongly. Use the "
             . "sops CLI for documents that use it.";
     }
+
+    # Asked HERE, once, rather than at the point of match. At the point of
+    # match it fired from inside the leaf walk, so `encrypt` reported a rule
+    # problem under whichever leaf the walk happened to reach first --
+    # `bar: Cannot use '(?=f)foo' as the unencrypted_regex ...`, where `bar`
+    # has nothing to do with it (karr #166). It is also the whole of what makes
+    # the read path free to answer differently.
+    $metadata->assert_rule_regexes_agree;
 
     return 1;
 }

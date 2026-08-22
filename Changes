@@ -29,6 +29,34 @@ Revision history for File-SOPS
     byte-identical in AAD, MAC plaintext and decrypted value, and the number
     that disagree with the sops binary about whether the document is readable
     went from 91 to 0. See docs/adr/0049 and karr #160.
+  - BUG FIX: `decrypt`, `decrypt_file` and `extract` read a document whose
+    encryption rule is a regex Go RE2 cannot compile again. Making the read
+    path rule-driven (above) gave 0.003's dialect refusal a reach it was never
+    meant to have: `sops -e --unencrypted-regex '(?=foo)'` writes such a
+    document without a word, `sops -d` reads it back at exit 0 -- RE2 discards
+    the compile error, so the rule matches NOTHING and every value is
+    classified as though it were not there -- and this library had started
+    refusing it. That answer is reproducible and is now reproduced, so the two
+    implementations read the same documents again. Refusing to WRITE under such
+    a rule is unchanged and deliberate: a caller who asks for
+    `encrypted_regex => '(?=foo)'` and is quietly given "matches nothing" gets
+    every secret in the document on disk in plaintext, at exit 0, under a sops
+    section that makes the file look encrypted. Still refused on BOTH paths: a
+    pattern the two dialects compile and read differently (\v, \Q, \E) and one
+    Perl cannot compile at all ((?U)) -- for those there is no sops answer to
+    reproduce. Verified through the .sops.yaml path_regex compile oracle for
+    every escape letter and every (?...) form: each construct this
+    distribution calls RE2-unsupported is one RE2 really does reject, and each
+    one RE2 accepts is taken. See docs/adr/0051 and karr #171.
+  - BUG FIX: a rule-regex refusal from `encrypt` names the rule instead of
+    coming out under an unrelated key. It was raised from inside the leaf walk,
+    so the message arrived as `bar: Cannot use '(?=f)foo' as the
+    unencrypted_regex ...` -- `bar` being whichever leaf the walk reached first
+    and nothing to do with the problem. The rule is checked once now, when the
+    metadata for a write is built, before any leaf is looked at. New method
+    `File::SOPS::Metadata::assert_rule_regexes_agree` is that check. karr #166.
+  - `rotate` and `edit` refuse such a rule BEFORE decrypting rather than after,
+    so `edit` no longer opens the editor for a document it will not write back.
   - BUG FIX: a plain string of your own that happens to spell ENC[...] now
     survives a round trip when the rule leaves its path alone. `encrypt` wrote
     it verbatim and hashed it verbatim already; the read side then tried to

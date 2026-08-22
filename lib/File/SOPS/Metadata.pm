@@ -264,8 +264,9 @@ matches it -- see L</should_encrypt_path>.
 
 Defaults to C<undef>. Mutually exclusive with the other rules, see
 L</Encryption rules are mutually exclusive>. Matched in Go RE2's dialect and
-not in Perl's, and a pattern the two do not agree on is refused rather than
-matched -- see L</The regex rules are matched in RE2's dialect>.
+not in Perl's; a pattern RE2 cannot compile matches nothing, as it does at
+sops, and one the two dialects read differently is refused rather than matched
+-- see L</The regex rules are matched in RE2's dialect>.
 
 =cut
 
@@ -278,8 +279,9 @@ matches it -- see L</should_encrypt_path>.
 
 Defaults to C<undef>. Mutually exclusive with the other rules, see
 L</Encryption rules are mutually exclusive>. Matched in Go RE2's dialect and
-not in Perl's, and a pattern the two do not agree on is refused rather than
-matched -- see L</The regex rules are matched in RE2's dialect>.
+not in Perl's; a pattern RE2 cannot compile matches nothing, as it does at
+sops, and one the two dialects read differently is refused rather than matched
+-- see L</The regex rules are matched in RE2's dialect>.
 
 =head2 The regex rules are matched in RE2's dialect
 
@@ -313,13 +315,13 @@ this distribution's own test suite makes -- every rule pattern in it against
 every key in it -- eighteen changed, all of them a non-ASCII key under
 C<^\w+$>, and none of them an ASCII one.
 
-B<A pattern the two dialects do not agree on is refused.> sops does not report
-a pattern RE2 cannot compile: it matches with the compile error discarded, so
-the rule silently matches nothing. Measured -- C<< --encrypted-regex '(?=f)foo' >>
-writes B<every value of the document in plaintext> at exit 0, under a C<sops>
-section that makes it look encrypted, and C<< --unencrypted-regex '(?=f)foo' >>
-encrypts every value. Neither is a classification that can be reproduced
-quietly, so a rule using one of these dies instead:
+B<A pattern the two dialects do not agree on is refused for writing.> sops does
+not report a pattern RE2 cannot compile: it matches with the compile error
+discarded, so the rule silently matches nothing. Measured --
+C<< --encrypted-regex '(?=f)foo' >> writes B<every value of the document in
+plaintext> at exit 0, under a C<sops> section that makes it look encrypted, and
+C<< --unencrypted-regex '(?=f)foo' >> encrypts every value. Neither is a
+document this library will produce, so writing under one of these dies:
 
 =over 4
 
@@ -350,20 +352,31 @@ here)
 
 =back
 
-Everything both dialects have is taken, C<(?i)>, C<(?m)>, C<(?s)>, C<(?U)>,
+Everything both dialects have is taken, C<(?i)>, C<(?m)>, C<(?s)>,
 C<\p{...}>, C<[[:alpha:]]>, C<[[:^alpha:]]>, C<(?PE<lt>nameE<gt>)>, C<< (?<name>) >>
-and the lazy quantifiers included. The verdicts were read off RE2 itself, not
+and the lazy quantifiers included. C<(?U)> is B<not> among them -- RE2 has that
+flag and Perl does not, which is the next paragraph but one. The verdicts were read off RE2 itself, not
 guessed: a F<.sops.yaml> C<path_regex> is the one place sops reports
 I<error parsing regexp> rather than discarding it.
 
-The refusal is raised where the rule is B<used>, not where it is parsed, so a
-document carrying such a rule can still be L<File::SOPS/decrypt>ed -- that path
-never consults the rule. L<File::SOPS/encrypt>, L<File::SOPS/rotate> and
-L<File::SOPS/edit> are the ones that stop.
+B<Reading such a document is a different question, and it gets a different
+answer.> Since 0.003 the rule decides what a leaf B<is> on the way out as well
+as on the way in, so this predicate is asked on the read path too. Where RE2
+cannot compile the pattern, sops's answer -- the rule matches nothing -- is
+reproducible, and it is reproduced: L<File::SOPS/decrypt>, L<File::SOPS/extract>
+and L<File::SOPS/decrypt_file> read a document carrying such a rule exactly as
+C<sops -d> reads it, at exit 0. What stops is B<writing>:
+L<File::SOPS/encrypt>, L<File::SOPS/encrypt_file>,
+L<File::SOPS/encrypt_in_place>, L<File::SOPS/rotate> and L<File::SOPS/edit> all
+ask L</assert_rule_regexes_agree> once, before any leaf is walked. See
+F<docs/adr/0051>.
 
-A pattern B<Perl> cannot compile is refused too, with the reason: the dialects
-disagree in that direction as well, and C<(?U)fo+> and C<\C> are patterns sops
-takes and this side cannot.
+A pattern B<Perl> cannot compile is refused everywhere, read path included,
+with the reason: the dialects disagree in that direction as well, and
+C<(?U)fo+> is a pattern sops takes and this side cannot. It is the only such
+pattern measured -- C<\C>, C<\g> and C<\k> read like company for it and are
+not, because RE2 rejects all three (measured on 3.13.3 through the
+C<path_regex> oracle; F<docs/adr/0048> says otherwise and is wrong there).
 
 =head3 Limits
 
@@ -385,6 +398,13 @@ A C<\p{...}> naming a property Perl has and Go does not -- C<\p{Word}>,
 C<\p{Alpha}>, C<\p{IsAlpha}> -- is a third: RE2 rejects it, so sops's rule
 matches nothing, and this side cannot enumerate Go's table to tell that apart
 from C<\p{Greek}>, which both accept.
+
+A fourth arrived with the read path: a pattern B<neither> dialect can compile,
+C<fo(> being the measured one. RE2 rejects it, so sops matches nothing and
+reads the document at exit 0; here it reaches the Perl compile, which also
+rejects it, and there is nothing to tell that apart from C<(?U)fo+> -- a
+pattern RE2 B<does> compile and this side must not guess at. It is refused, so
+a document carrying it is one sops reads and this library does not.
 
 =head2 Encryption rules are mutually exclusive
 
@@ -1580,7 +1600,25 @@ sub _re2_divergent_group {
     # here and not there -- which is recorded as a limit in docs/adr/0048.
     use re '/a';
 
-    sub _rule_qr {
+    # sops's own answer for a pattern RE2 cannot compile: it discards the
+    # compile error, so the rule matches NOTHING. Compiled once, in here with
+    # the real patterns, because that is the answer the read path uses.
+    my $MATCHES_NOTHING = qr/(?!)/;
+
+    # The one place a rule pattern is looked at. Returns the matcher to use,
+    # the KIND of disagreement if there is one, and the refusal that goes with
+    # it -- because the two paths need different halves of that answer:
+    #
+    #   'unsupported'  RE2 cannot compile it, so sops matches nothing. That is
+    #                  reproducible, and $MATCHES_NOTHING reproduces it, so the
+    #                  READ path is given a matcher and no refusal is raised.
+    #   'different'    both dialects compile it and read it apart (\v, \Q, \E).
+    #   'perl'         RE2 compiles it and we cannot ((?U) is the only measured
+    #                  one; \C, \g and \k are rejected by BOTH).
+    #
+    # The last two have no answer to reproduce, so they are refused wherever
+    # they are met. The write path refuses all three. See docs/adr/0051.
+    sub _rule_verdict {
         my ($field, $pattern) = @_;
 
         my $shown = length($pattern) > 60
@@ -1588,7 +1626,10 @@ sub _re2_divergent_group {
             : $pattern;
 
         my ($construct, $kind) = _re2_divergent_construct($pattern);
-        croak "Cannot use '$shown' as the $field: it uses $construct, "
+        return (
+            $kind eq 'unsupported' ? $MATCHES_NOTHING : undef,
+            $kind,
+            "Cannot use '$shown' as the $field: it uses $construct, "
             . ($kind eq 'unsupported'
                 ? "which Go RE2 does not support. sops does not report that "
                 . "-- it discards the compile error, so the rule silently "
@@ -1601,16 +1642,29 @@ sub _re2_divergent_group {
                 . "implementations.")
             . " Rewrite the pattern in constructs both dialects agree on. "
             . "See docs/adr/0048."
-            if defined $construct;
+        ) if defined $construct;
 
         my $qr = eval { qr/$pattern/ };
-        croak "Cannot use '$shown' as the $field: it is not a valid Perl "
+        return ($qr, undef, undef) if defined $qr;
+
+        return (undef, 'perl',
+            "Cannot use '$shown' as the $field: it is not a valid Perl "
             . "regular expression (" . _regex_reason($@) . "). RE2 and Perl "
             . "do not accept the same patterns in either direction -- '(?U)' "
-            . "and '\\C' compile there and not here -- so a rule sops took "
-            . "can still be one this side cannot match with. See "
-            . "docs/adr/0048."
-            unless defined $qr;
+            . "compiles there and not here -- so a rule sops took can still "
+            . "be one this side cannot match with. See docs/adr/0048.");
+    }
+
+    sub _rule_qr {
+        my ($field, $pattern) = @_;
+
+        my ($qr, undef, $refusal) = _rule_verdict($field, $pattern);
+
+        # A pattern RE2 cannot compile arrives here WITH a matcher -- the one
+        # that matches nothing, which is what sops matches with. Every other
+        # refusal is one this side cannot reproduce, and it stands wherever
+        # the rule is asked, read path included. docs/adr/0051.
+        croak $refusal unless defined $qr;
 
         return $qr;
     }
@@ -1706,10 +1760,10 @@ Rules are applied in this order:
 
 Returns true if the key should be encrypted, false otherwise.
 
-B<Dies> where the rule is a regex the two implementations do not read the same
-way -- an ASCII-only class is matched as one, but a construct Go RE2 rejects,
-or one the two dialects take and disagree about, is refused rather than matched
-with Perl's meaning. See L</The regex rules are matched in RE2's dialect>.
+B<Dies> where the rule is a regex this side cannot read the way sops reads it
+-- a construct both dialects take and disagree about, or one Perl cannot
+compile. A construct Go RE2 rejects matches B<nothing> instead, because that is
+what it matches at sops. See L</The regex rules are matched in RE2's dialect>.
 
 =cut
 
@@ -1754,9 +1808,11 @@ A leaf is unencrypted if any component carries C<unencrypted_suffix> or matches
 C<unencrypted_regex>, and (when those are configured) encrypted only if some
 component carries C<encrypted_suffix> or matches C<encrypted_regex>.
 
-The two regex rules are matched in B<RE2's> dialect, not Perl's, and a pattern
-the two do not agree on is refused here rather than matched -- which is why
-this method can die. See L</The regex rules are matched in RE2's dialect>.
+The two regex rules are matched in B<RE2's> dialect, not Perl's. A pattern RE2
+cannot compile matches B<nothing> here, which is what it matches at sops; a
+pattern the two dialects compile and read differently, or one Perl cannot
+compile at all, is refused rather than matched -- which is why this method can
+still die. See L</The regex rules are matched in RE2's dialect>.
 
 This is the predicate L<File::SOPS> encrypts a document with, B<and the one it
 decrypts it with>: since 0.003 it is asked about every leaf on the way out too,
@@ -1771,6 +1827,43 @@ because an array contributes no path component of its own and its elements
 carry the parent's path.
 
 Returns true if the value at that path should be encrypted.
+
+=cut
+
+sub assert_rule_regexes_agree {
+    my ($self) = @_;
+
+    for my $field (qw( unencrypted_regex encrypted_regex )) {
+        my $pattern = $self->$field;
+        next unless defined $pattern && length $pattern;
+
+        my (undef, undef, $refusal) = _rule_verdict($field, $pattern);
+        croak $refusal if defined $refusal;
+    }
+
+    return 1;
+}
+
+=method assert_rule_regexes_agree
+
+    $meta->assert_rule_regexes_agree;   # or dies
+
+Dies unless L</unencrypted_regex> and L</encrypted_regex> are patterns Go RE2
+and Perl read the same way. Returns true otherwise, including when neither is
+set.
+
+B<This is the guard for writing, and L</should_encrypt_path> is deliberately
+more permissive than it.> A pattern RE2 cannot compile is not an error at sops
+-- it discards the compile error, so the rule matches nothing -- and that is
+reproducible, so a document carrying one is still read. Writing under it is
+not: a caller who asks for C<< encrypted_regex => '(?=foo)' >> and is given
+"matches nothing" gets every secret in the document written to disk in
+plaintext, under a C<sops> section that makes the file look encrypted, at exit
+0. See L<File::SOPS/The rule decides what a value is, in both directions> and
+F<docs/adr/0051>.
+
+L<File::SOPS> asks this once per document, when the metadata for a write is
+built, so the refusal names the rule and arrives before any leaf is walked.
 
 =cut
 
