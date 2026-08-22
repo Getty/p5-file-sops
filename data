@@ -1,0 +1,67 @@
+---
+claimed_at: 2026-08-22T04:50:46Z
+claimed_by: test-170
+class: standard
+completed: 2026-08-22T16:03:43Z
+created: 2026-08-21T11:53:28Z
+id: 170
+priority: low
+started: 2026-08-22T04:37:03Z
+status: done
+tags:
+- tests
+- pod
+- tooling
+title: xt/author/pod-links.t fails on every module because Pod::Checker does not know
+  =method
+updated: 2026-08-22T16:03:43Z
+---
+
+Found while running the author tests for karr #159; pre-existing at 42f15b8 and
+NOT caused by that change. Filed rather than acted on.
+
+    prove -lr xt/
+    xt/author/pod-links.t (Wstat: 2560) Tests: 11 Failed: 10
+    Failed tests: 1-9, 11
+
+Every failure is the same two things, in every module:
+
+  *** ERROR: Unknown directive: =method at line 689 in file lib/File/SOPS.pm
+  *** ERROR: unresolved internal link 'rotate' at line 180 in file ...
+
+`=method` is Pod::Weaver's, supplied by [@Author::GETTY] at build time, so
+Pod::Checker reading the SOURCE sees an unknown directive and then cannot
+resolve any L</method> link that points at one. The test therefore fails on
+every file that uses the house POD conventions -- which is all of them -- and
+has presumably been failing since those conventions landed.
+
+One extra, real and separate: lib/File/SOPS.pm line 241 has a non-ASCII
+character (a literal cafe-with-accent in `C<caf...>`) before any `=encoding`
+directive.
+
+Two ways out, both cheap:
+  * run the check against the BUILT distribution (dzil build, then check
+    blib/) where Pod::Weaver has already turned =method into =head2; or
+  * teach the test the custom directives before parsing.
+
+Either way an author test that fails at every commit is one nobody reads, and it
+is the file that would catch a genuinely broken POD link. Lane: whoever owns the
+release checks; the =encoding line is api's file.
+
+Verified: prove -lr xt/ reproduced the failure exactly as described (10/11 subtests failed, 'Unknown directive: =method' + unresolved internal link errors on raw lib/). Confirmed the =method/=attr/... directives are Pod::Weaver's from [@Author::GETTY] (getty-perl-release-author-getty skill), unknown to Pod::Checker before weaving.
+
+Fix (xt/author/pod-links.t only): detect whether we're checking the raw source tree (.git present -- Git::GatherDir never copies .git into a dzil build, so this is the same signal the original design already reasoned about) vs an already-woven copy (dzil test's own promoted t/author-pod-links.t, .git absent). In the raw case, run 'dzil build --in $tempdir' to weave the POD into a throwaway copy first, then podcheck THAT; in the already-woven case, behavior is unchanged from before. Did NOT take the 'teach podchecker the directives' route -- that would silence the unknown-directive error but leave every L</method_name> unresolved (still noise, still blind to a real dead link).
+
+Proof the net still catches a real break: copied the whole repo (incl. .git) to a scratch dir, mutated one valid L</rotate> link in lib/File/SOPS.pm to L</rotate_this_target_does_not_exist>, ran 'prove -lv xt/author/pod-links.t' from that copy -- test 1 (SOPS.pm) failed with the exact broken target named in the diagnostic, the other 10 files still passed. Net can still fall.
+
+Confirmed out of scope, untouched: the ~17 external L<...|https://...> docs/adr/* links (karr #126) -- Pod::Checker never resolves scheme'd URLs, so they were already silent (0 errors) on the full woven build before my change and remain so; no special-casing needed or added.
+
+Verification run:
+  prove -lr xt/           -> PASS (Files=1, Tests=11)
+  SOPS_BIN=/tmp/sops prove -lr t/  -> 1 failure, t/62-rule-regexes-are-matched-in-re2s-dialect.t subtest 3, in lib/File/SOPS.pm rule-regex matching -- outside my xt/-only boundary, concurrent WIP by another lane (lib/File/SOPS.pm and Metadata.pm show as modified in git status throughout this session, plus a new untracked t/66 file appeared mid-session). Unrelated to this fix; a rerun of just t/66 alone passed clean. Not touched, not fixed by me.
+
+File touched: xt/author/pod-links.t only.
+
+xt/author/pod-links.t fixed and verified; see edit history for full detail. Reported findings, proof of regression coverage, and the one unrelated t/62 failure (lib/File/SOPS.pm, another lane's WIP, outside my xt/-only boundary) already logged.
+
+REVIEW (Hauptagent, 2026-08-22): Mutationsprobe selbst gefahren, nicht die des Agenten geglaubt. prove -lr xt/ gruen (11 Tests). Dann L</rotate> in lib/File/SOPS.pm zu L</kaputtes_ziel_gibt_es_nicht> mutiert: Test 1 faellt und nennt das kaputte Ziel beim Namen, die anderen 10 Dateien bleiben gruen. Danach git checkout, Arbeitsbaum wieder sauber. Das Netz haelt also und faengt echte tote Links.
