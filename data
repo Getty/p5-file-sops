@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-08-21T11:58:23Z
+claimed_by: wire-160
+class: standard
+completed: 2026-08-22T13:53:37Z
+created: 2026-08-21T09:38:55Z
+depends_on:
+- 150
+id: 160
+priority: high
+started: 2026-08-21T11:05:41Z
+status: done
+tags:
+- wire
+- mac
+- rotate
+- interop
+title: _decrypt_tree is ENC-driven where sops is RULE-driven
+updated: 2026-08-22T13:53:37Z
+---
+
+Split out of karr #150, which closed the exposure with a guard on the write path (docs/adr/0046). This is the structural half and it is the wire lane: it moves what the MAC covers.
+
+sops decrypts RULE-first. A leaf the encryption rule says is not encrypted is taken as a LITERAL value and hashed as one, so an ENC[...] string sitting under a rule that excludes it goes into the digest verbatim and the MAC stops the document. Measured on sops 3.13.3: exit 51, MAC mismatch, for every rule shape that excludes an encrypted leaf.
+
+This distribution decrypts ENC-driven: _decrypt_tree does not consult should_encrypt_path at all, so it decrypts every leaf that LOOKS encrypted, whatever the rule says. Two consequences:
+
+  1. We READ, at exit 0, a document sops refuses at exit 51. karr #150 measured the write side of that (rotate wrote the plaintext back out) and now refuses it, in that one direction only.
+  2. The other direction is still divergent and is not a leak: a BARE leaf the rule SELECTS. sops refuses it at exit 25 ("Input string <value> does not match sops data format"); here it is read as a literal and, on a re-encryption, silently ENCRYPTED. Measured. Note the legitimate case that any such check has to exclude: sops leaves an empty string and a null bare whatever the rule says, and reads them back at exit 0.
+
+The change: make _decrypt_tree consult should_encrypt_path, take an excluded leaf literally, and let _mac_digest see the ENC[...] text. That is what makes both directions fall out of the MAC rather than out of a guard.
+
+When it lands, _assert_rule_covers_encrypted_leaves and _encrypted_leaves_the_rule_excludes in lib/File/SOPS.pm come out with it, and the pins in t/60 move to the MAC failure. The guard refuses a strict subset of what the MAC would refuse, with one deliberate exception: under ignore_mac => 1 the guard still refuses where the MAC cannot run. Decide there whether ignore_mac should keep refusing.
+
+Lane: wire.
+
+Landed. docs/adr/0049. _decrypt_tree, _mac_bytes and _digested_leaves are rule-first; ADR 0046's guard and _encrypted_leaves_the_rule_excludes are gone; ignore_mac does NOT keep refusing (measured: sops rotate writes the same bytes for the same tree and reads them back at exit 0). Corpus: 208 documents, 4 formats, sops- and library-written, +/- mac_only_encrypted, 6 well-formed rules and 8 rule swaps -- 96 well-formed byte-identical in AAD/MAC-plaintext/values, disagreements with the sops binary 91 -> 0, and all 42 documents we now refuse are accepted by sops once their MAC is recomputed with our digest. t/65 fails 31 assertions in 5 of 8 subtests against the tree before. New drift: karr #171, #172, #173. Inverted pins outside the file boundary and NOT touched: t/45 line ~117 and t/61 line ~293 (one line each, both verified).
+
+2026-08-21 11:58 Rule-first decrypt landed; two inverted pins outside the file boundary are handed back with verified one-line fixes (t/45, t/61).
+
+COMMITTED 085773e by the orchestrator. Suite re-run against the committed tree with sops 3.13.3 restored to /tmp/sops (the binary was GONE from this machine at session start -- /tmp had been cleared -- and t/53 plus every interop-gated subtest were skipping silently): prove -lr t/ 65 files, 1306 tests, PASS; SOPS_BIN=/tmp/sops prove -l t/04-interop.t 32/32 PASS. Both lines executed. Stands on review for maintainer acceptance -- it is a BEHAVIOUR CHANGE.
