@@ -267,30 +267,61 @@ subtest 'and it is not written as null any more' => sub {
 };
 
 ###############################################################################
-# 4. WHAT MUST NOT MOVE, part one: a non-finite float that carries a string
-#    half of its OWN keeps it, whatever it says. This is ADR 0031's `banana`
-#    row, and the reason the repair keys on the ABSENCE of a public PV rather
-#    than on the number.
+# 4. karr #140: a contradicting string half is now refused on the plaintext
+#    emit path too. The MAC-covered paths refused these already --
+#    assert_representable in _compute_mac's leaf sweep, and the mac_covered
+#    croak below for the JSON case. The plaintext path used to fall through
+#    with the string half written verbatim, the leaf retyped to str on a
+#    later parse, and a decrypt_file -> encrypt_file round trip changed the
+#    type without warning.
+#
+#    canonical_float_tree now consults assert_representable's `encrypted => 0`
+#    branch, so the rule is in one place and the contradiction is caught for
+#    every caller of the walk: decrypt_file, edit, _serialize_plaintext, and a
+#    direct emit() on a tree the caller built. The croak is the karr #59
+#    message the encrypt side already used, and the caller's text is never
+#    named in it.
 ###############################################################################
 
-subtest 'a stated string half is never overwritten' => sub {
-    for my $pv (qw( banana .INf .infinity Inf )) {
-        my $leaf = dualvar($INF, $pv);
-        my $yaml = File::SOPS::Format::YAML->emit({ v => $leaf });
-        like($yaml, qr/^v: \Q$pv\E$/m, "[$pv] YAML writes the caller's text");
+subtest 'a contradicting string half is now refused on the plaintext path' => sub {
+    for my $case (
+        [ 'banana'        => $INF,  'banana'    ],
+        [ '.INf'          => $INF,  '.INf'      ],
+        [ '.infinity'     => $INF,  '.infinity' ],
+        [ '-.inf on +Inf' => $INF,  '-.inf'     ],
+        [ '.inf on -Inf'  => -$INF, '.inf'      ],
+        [ '.inf on NaN'   => $NAN,  '.inf'      ],
+    ) {
+        my ($name, $double, $pv) = @$case;
+        my $err = error_from(sub {
+            File::SOPS::Format::YAML->emit({ v => dualvar($double, $pv) });
+        });
+        ok($err, "[$name] YAML refuses it");
+        like($err, qr/non-finite float/,
+            "[$name] with the karr #59 message");
 
-        my $json = File::SOPS::Format::JSON->emit({ v => $leaf });
-        like($json, qr/"\Q$pv\E"/, "[$pv] and JSON writes it quoted, as before");
+        my $jerr = error_from(sub {
+            File::SOPS::Format::JSON->emit({ v => dualvar($double, $pv) });
+        });
+        ok($jerr, "[$name] JSON refuses it too");
     }
+};
 
-    # The contradictions: the number says one thing and the text another. Both
-    # are left exactly as they are here -- refusing them is the encrypt path's
-    # job, which section 5 pins.
-    for my $case ([ $INF, '-.inf' ], [ -$INF, '.inf' ], [ $NAN, '.inf' ]) {
-        my ($double, $pv) = @$case;
-        my $yaml = File::SOPS::Format::YAML->emit({ v => dualvar($double, $pv) });
-        like($yaml, qr/^v: \Q$pv\E$/m,
-            "a contradictory $pv is written as it stands, not repaired");
+subtest 'a stated string half that IS the go-yaml token still passes through' => sub {
+    # No regression: a non-finite dualvar whose PV is one of the twelve tokens
+    # go-yaml resolves to this same double is exactly what ADR 0031 made
+    # writable, and the karr #140 fix does not touch that case.
+    for my $case (
+        [ '.inf'  => $INF,  '.inf'  ],
+        [ '.Inf'  => $INF,  '.Inf'  ],
+        [ '.INF'  => $INF,  '.INF'  ],
+        [ '-.inf' => -$INF, '-.inf' ],
+        [ '.nan'  => $NAN,  '.nan'  ],
+    ) {
+        my ($name, $double, $token) = @$case;
+        my $yaml = File::SOPS::Format::YAML->emit({ v => dualvar($double, $token) });
+        like($yaml, qr/^v: \Q$token\E$/m,
+            "[$name] YAML writes the token");
     }
 };
 

@@ -1660,9 +1660,37 @@ sub _canonical_floats {
     # _compute_mac's leaf sweep, and its gate is untouched. A bare NV cannot
     # reach this walk on the encrypt path at all.
     if ($text =~ $NO_AGREED_FORM) {
+        # karr #140: refuse the contradiction the MAC-covered paths already
+        # refuse -- a non-finite float whose public PV disagrees with its
+        # number. The MAC-covered paths caught it through assert_representable
+        # in _compute_mac's leaf sweep, and the mac_covered croak below
+        # refuses the JSON case where the handler has no spelling for a
+        # non-finite value at all. Only the plaintext emit path silently
+        # wrote the string half verbatim, the leaf retyped to str on a later
+        # parse, and a decrypt_file -> encrypt_file round trip changed the
+        # type without warning.
+        #
+        # The predicate is the same one assert_representable uses
+        # (encrypted => 0 already gates on !_carries_go_non_finite_token, see
+        # the karr #59 message above for the wire-form reasoning). Consulting
+        # it here keeps the rule in one place -- the gate does not drift if
+        # the wire format changes -- and reaches every caller of the walk:
+        # decrypt_file, edit, _serialize_plaintext, and a direct emit() call
+        # on a tree the caller constructed.
+        #
+        # Bare NV leaves are not in scope: _non_finite_token_leaf below
+        # manufactures a token PV for them in YAML and croaks in JSON, which
+        # is the existing karr #113 / karr #134 behaviour. Without that
+        # filter here, assert_representable would refuse the bare-NV case
+        # that karr #134 / ADR 0037 made writable.
+        if (_has_public_pv($node)) {
+            eval { __PACKAGE__->assert_representable($node, encrypted => 0); 1 }
+                or croak _leaf_location($path) . ": "
+                    . ($@ =~ s/\s+at\s+\S+\s+line\s+\d+\.?\s*\z//r);
+        }
+
         $node = _non_finite_token_leaf($node, $text, $carrier, $path)
             unless _has_public_pv($node);
-        return $node unless _carries_go_non_finite_token($node, $text);
         return _written_leaf($node, $text, $reject_scalar, $path)
             if $reject_scalar;
         return $node unless $mac_covered;
