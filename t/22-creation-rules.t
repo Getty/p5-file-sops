@@ -412,6 +412,81 @@ subtest 'a path_regex with a construct RE2 does not have is refused at match tim
     ok(exists $args{recipients}, 'a (?i) pattern compiles in both RE2 and Perl');
 };
 
+subtest 'a path_regex with a construct the narrow scan let through is now refused (karr #164)' => sub {
+    # karr #53 named lookarounds and backreferences only -- atomic groups,
+    # possessive quantifiers, the (?x) family and a handful of RE2-rejected
+    # escapes were still being taken here, and each one of those silently
+    # selected a different rule (or none) at sops. The scan is now the
+    # Metadata one (karr #161 / docs/adr/0048), which names every construct
+    # RE2 cannot compile -- measured on sops 3.13.3 against a .sops.yaml
+    # path_regex, every row below triggers "error parsing regexp" at exit 1.
+    #
+    # The wording stays path_regex-specific because sops's behaviour here is
+    # different: it REPORTS the compile error rather than discarding it (karr
+    # #164), so the croak still says "sops will refuse to compile".
+    for my $case (
+        [ 'atomic group',           '(?>foo)'           ],
+        [ 'possessive quantifier',  'fo*+o'             ],
+        [ 'possessive on a range',  'x{1,2}+'           ],
+        [ 'escape \K',              'f\Koo'             ],
+        [ 'escape \Z',              'foo\Z'             ],
+        [ 'escape \R',              'f\Roo'             ],
+        [ 'flag (?x)',              '(?x) f o o'        ],
+        [ 'flag (?a)',              '(?a)foo'           ],
+        [ 'inline comment (?#)',    '(?#c)foo'          ],
+        [ 'branch reset (?|)',      '(?|(f)|(o))oo'     ],
+        [ 'subpattern call (?R)',   '(foo)(?R)foo'      ],
+        [ 'named backref (?P=n)',   '(?P<n>foo)(?P=n)'  ],
+        [ 'numbered backref \1',    '(f)o\1o'           ],
+    ) {
+        my ($name, $pattern) = @$case;
+        my $root = tree(
+            '.sops.yaml' => config_with(rule($pattern, $pub_a, '')),
+            's.yaml'     => "k: v\n",
+        );
+        my $err = exception(sub {
+            File::SOPS->creation_rules_for(file => "$root/s.yaml") });
+        like($err, qr/path_regex/, "$name is refused, naming the field");
+        like($err, qr/\Q$root\E/,  "$name: also names the config file")
+            or diag("err: $err");
+        like($err, qr/sops will refuse to compile/,
+            "$name: still names the path_regex-specific outcome (karr #164)");
+    }
+};
+
+subtest 'a path_regex both dialects accept but read apart is refused (karr #164)' => sub {
+    # The Metadata scan covers two kinds of disagreement, not one: a
+    # construct RE2 rejects (above) AND one both dialects compile but read
+    # differently (\v is vertical TAB to RE2 and vertical-whitespace CLASS to
+    # Perl; \Q..\E is a quoted literal run to RE2 and nothing at all to
+    # Perl). For path_regex, the second kind matters the same way: this side
+    # would select a different rule than sops. Measured: sops takes \v and
+    # \Q..\E as a path_regex without complaint, but the rule it builds does
+    # not match the same paths here.
+    #
+    # The wording differs from the unsupported case because sops does NOT
+    # refuse to compile -- the two paths describe different sops behaviour.
+    for my $case (
+        [ '\v (vertical tab vs class)', 'a\vb'     ],
+        [ '\Q..\E (quoted literal)',    '\Qa.b\E'  ],
+        [ 'lone \E (quoted literal end)', 'a\E'    ],
+    ) {
+        my ($name, $pattern) = @$case;
+        my $root = tree(
+            '.sops.yaml' => config_with(rule($pattern, $pub_a, '')),
+            's.yaml'     => "k: v\n",
+        );
+        my $err = exception(sub {
+            File::SOPS->creation_rules_for(file => "$root/s.yaml") });
+        like($err, qr/path_regex/, "$name is refused, naming the field");
+        like($err, qr/read DIFFERENTLY/,
+            "$name: wording names the 'different' kind, not 'sops will refuse'")
+            or diag("err: $err");
+        unlike($err, qr/sops will refuse to compile/,
+            "$name: the 'different' wording does NOT mention 'sops will refuse'");
+    }
+};
+
 ###############################################################################
 # What a rule carries.
 ###############################################################################

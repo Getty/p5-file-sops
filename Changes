@@ -48,6 +48,18 @@ Revision history for File-SOPS
     every escape letter and every (?...) form: each construct this
     distribution calls RE2-unsupported is one RE2 really does reject, and each
     one RE2 accepts is taken. See docs/adr/0051 and karr #171.
+  - BEHAVIOUR CHANGE: a `.sops.yaml` `path_regex` is now refused for the same
+    constructs `unencrypted_regex` and `encrypted_regex` are -- atomic groups,
+    possessive quantifiers, `\Z`, `\K`, `\R`, the `(?x)` family and the rest
+    of the RE2-rejected set were still being taken here, and each one of them
+    silently selected a different rule (or none) at sops. The narrow text
+    match is gone; `creation_rules_for` uses the same construct scan as the
+    encryption rules, and the wording stays path_regex-specific because
+    sops's behaviour differs -- it REPORTS the unsupported case as "error
+    parsing regexp" at exit 1, where the encryption rules see a discarded
+    compile error and matches nothing. The two croaks describe different
+    things and stay where they are. `(?i)^ss$` and the other three limits
+    ADR 0048 records are untouched. See karr #164.
   - BUG FIX: a rule-regex refusal from `encrypt` names the rule instead of
     coming out under an unrelated key. It was raised from inside the leaf walk,
     so the message arrived as `bar: Cannot use '(?=f)foo' as the

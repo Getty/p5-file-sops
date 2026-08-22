@@ -2423,22 +2423,32 @@ sub _first_matching_rule {
             if $@;
 
         # sops compiles the same string with Go RE2, which is not the same
-        # dialect. A pattern that compiles here but uses an RE2-incompatible
-        # construct silently selects a different rule in sops (or none), so
-        # the two tools disagree without either one saying so. Refuse the
-        # constructs that are unambiguous -- lookarounds and backreferences
-        # -- and let everything that is in both (?i, character classes,
-        # standard quantifiers, anchors) through.
-        my $incompatible = _re2_incompatible_construct($regex);
-        if ($incompatible) {
+        # dialect. A pattern the two dialects do not agree on -- one RE2
+        # rejects, or one both take and read differently -- silently selects
+        # a different rule in sops (or none), so the two tools disagree
+        # without either one saying so. The scan is the one in Metadata
+        # (karr #164): it is escape-aware, character-class aware, and reads
+        # every construct's RE2 verdict off the .sops.yaml oracle rather than
+        # guessing. We translate the kind into a path_regex-specific message
+        # because sops's behaviour here is different -- it REPORTS the
+        # unsupported case as "error parsing regexp" rather than discarding
+        # the compile error -- and the two croaks describe different things.
+        my ($construct, $kind) = _re2_path_regex_diagnosis($regex);
+        if ($construct) {
             my $shown = length($regex) > 60
                 ? substr($regex, 0, 57) . '...'
                 : $regex;
             croak "Creation rule $index in '$config' has a path_regex "
-                . "('$shown') that uses $incompatible, which Go RE2 does "
-                . "not support and sops will refuse to compile. Either "
-                . "rewrite the pattern in constructs both dialects accept, "
-                . "or drop the rule. See the POD on creation_rules_for.";
+                . "('$shown') that uses $construct, "
+                . ($kind eq 'different'
+                    ? "which Go RE2 and Perl both accept but read "
+                    . "DIFFERENTLY, so this side would select a different "
+                    . "rule than sops. "
+                    : "which Go RE2 does not support and sops will refuse "
+                    . "to compile. ")
+                . "Either rewrite the pattern in constructs both dialects "
+                . "agree on, or drop the rule. See the POD on "
+                . "creation_rules_for.";
         }
 
         return ($rule, $index) if $matched;
@@ -2447,32 +2457,25 @@ sub _first_matching_rule {
     return;
 }
 
-# What construct in this pattern, if any, Go RE2 will not compile? Returns a
-# human-readable name (e.g. "a lookbehind") or the empty string if nothing in
-# the pattern is RE2-incompatible. The check is intentionally conservative:
-# only the unambiguous cases -- lookarounds (?=, (?!, (?<=, (?<!) and
-# backreferences (\1..\9) -- because RE2 silently rejects them while Perl
-# compiles them. Possessive quantifiers and atomic groups are also RE2-unable
-# but Perl does not have them in the same form (Perl writes them as (?>...)
-# or with the /a modifier), so flagging those would produce false positives on
-# patterns that compile the same way in both. See karr #53.
-sub _re2_incompatible_construct {
+# What in this path_regex, if any, the two regex dialects do not agree on.
+# Returns the construct name and the kind of disagreement (the same two
+# Metadata::_re2_divergent_construct returns: 'unsupported' for a construct
+# RE2 cannot compile, 'different' for one both take and read apart), or
+# the empty list when the pattern is in both dialects.
+#
+# The scan is the one in Metadata.pm (karr #161 / docs/adr/0048, broadened
+# by karr #164 to also cover the path_regex case). The narrow check this
+# replaces (karr #53) named lookarounds and backreferences only; atomic
+# groups, possessive quantifiers, \Z, \K, the (?x) family and the rest of
+# the RE2-rejected set were still being taken here and silently picking a
+# different rule at sops -- measured on sops 3.13.3 against a .sops.yaml
+# path_regex: each one of those triggers "error parsing regexp" at exit 1
+# there.
+sub _re2_path_regex_diagnosis {
     my ($regex) = @_;
-    return '' unless defined $regex;
 
-    # Lookarounds: (?=  (?!  (?<=  (?<!
-    return 'a lookahead (?=...) or negative lookahead (?!...)'
-        if $regex =~ /\(\?[=!]/;
-    return 'a lookbehind (?<=...) or negative lookbehind (?<!...)'
-        if $regex =~ /\(\?<?[=!]/;
-
-    # Backreferences. \1..\9 are unambiguous in both dialects; \g{1} is the
-    # Perl-only spelling and would already be rejected by RE2, but the simpler
-    # form is what most configs use.
-    return 'a backreference (\\1, \\2, ...)'
-        if $regex =~ /\\[1-9]/;
-
-    return '';
+    my @divergent = File::SOPS::Metadata::_re2_divergent_construct($regex);
+    return @divergent;
 }
 
 # Is a creation rule's field set, in the sense Go's zero value gives it? An
