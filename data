@@ -1,0 +1,111 @@
+---
+claimed_at: 2026-08-22T04:57:01Z
+claimed_by: wire-124
+class: standard
+completed: 2026-08-22T16:02:58Z
+created: 2026-08-21T06:31:00Z
+id: 137
+priority: medium
+started: 2026-08-22T04:42:08Z
+status: done
+tags:
+- wire
+- env
+- ini
+- mac
+- roadmap
+title: 'ENV/INI: an integral or exponent-range float is written as a display form
+  and hashed as the wire form'
+updated: 2026-08-22T16:02:58Z
+---
+
+Gemessen an sops 3.13.3 waehrend karr #77. Dritter Fall derselben Klasse wie
+karr #124 (Boolean) und karr #125 (null), und in KEINEM Ticket vorher.
+Entschieden in docs/adr/0035, gepinnt in t/50-flat-store-type-policy.t.
+
+Im UNVERSCHLUESSELTEN Slot eines ENV- oder INI-Dokuments schreibt sops fuer
+einen Float eine Anzeigeform und deckt mit dem Digest die kanonische
+positionale Form:
+
+  yaml-Quelle   sops schrieb   sops_mac deckt              sops -d
+  1.0           1.0            1                           exit 51
+  2.0           2.0            2                           exit 51
+  100.0         100.0          100                         exit 51
+  0.0           0.0            0                           exit 51
+  -0.0          -0.0           -0                          exit 51
+  018           18.0           18                          exit 51
+  1e2 / 1.0e2   1E+06-Stil     100                         exit 51
+  1e20          1E+20          100000000000000000000       exit 51
+  1.50          1.5            1.5                         exit 0
+  0.5 / .5      0.5            0.5                         exit 0
+  3.14          3.14           3.14                        exit 0
+  1.23456789012345678  1.2345678901234567 (dito)           exit 0
+
+Die Regel: sops haengt ".0" an, wo die kuerzeste Darstellung keinen Punkt
+hat, und nutzt Grossbuchstaben-Exponenten im Exponentenbereich -- waehrend
+sein eigener Digest strconv.FormatFloat(v, f, -1, 64) deckt. Wo die beiden
+Formen zusammenfallen, geht es gut; sonst schreibt sops mit exit 0 eine Datei,
+die es selbst mit exit 51 ablehnt.
+
+ENV und INI verhalten sich identisch, Zeile fuer Zeile.
+
+Der VERSCHLUESSELTE Slot ist unauffaellig: type:float mit kanonischem
+Klartext, exit 0 in beiden Formaten.
+
+WAS ZU TUN IST: nichts Eigenes. ADR 0035 entscheidet fuer alle drei Faelle
+dieselbe Regel -- ein unverschluesseltes Leaf wird als
+Encrypted->value_to_bytes geschrieben, also `1`, `-0`,
+`100000000000000000000`. Der Digest bewegt sich dabei NICHT (er deckt genau
+diese Bytes schon), und jede dieser Zeilen ist eine, die sops selbst fuer den
+entsprechenden String schreibt und mit exit 0 liest (gemessen, 7 Typen x 2
+Formate).
+
+Dieses Ticket existiert, damit #36 und #37 den Fall benannt vorfinden wie
+#124 und #125, und damit er nicht nur in einem ADR-Absatz steht. Schliesst
+sich mit ihnen zusammen, wenn der jeweilige Handler die Regel umsetzt.
+
+Lane: wire, gemeinsam mit #36/#37. Vorarbeit, nicht dringend -- es gibt
+keinen ENV- und keinen INI-Handler.
+
+GEMESSEN UND GESCHLOSSEN 2026-08-22, wire-124, docs/adr/0052.
+
+SCHREIBHAELFTE: erledigt und selbst nachgemessen, nicht aus dem Ticket
+uebernommen. Beide Handler (karr #36 89d01ee, karr #37 610ec6c) setzen
+ADR 0035 um. File::SOPS->encrypt(format => env|ini) mit bool/undef/1.0/1e20/
+-0.0/42/hello schreibt True, False, (leer), 1, 100000000000000000000, -0, 42,
+hello -- und sops -d liest BEIDE Formate bei exit 0.
+
+LESEHAELFTE, die eigentliche offene Frage, die kein Ticketkoerper stellt:
+27 Skalare x 2 Formate = 54 Dokumente, mit sops -e geschrieben, dann an
+sops -d und an File::SOPS->decrypt gegeben. NULL divergente Zeilen. Es gibt
+keinen Skalar, den sops liest und wir nicht, und keinen, den wir lesen und
+sops ablehnt. Wo sops die Anzeigeform schreibt, lehnt sops seine eigene
+Datei ab (exit 51; exit 25 fuer null im verschluesselten Slot) und wir
+ebenso. Das ist damit NICHT die Klasse von karr #102/#105/#108 -- ADR 0038s
+Diskriminator antwortet NEIN, und dort ist Refusal richtig.
+
+DER BEFUND, DER DEN NAHELIEGENDEN FIX AUSSCHLIESST (neu, in keinem Ticket):
+zu jedem kaputten Wert gibt es einen STRING, dessen Text sops auf dieselben
+Bytes schreibt, und DIESES Dokument liest sops mit exit 0.
+
+  v_unencrypted=<nil>  ist null (exit 51) UND der String "<nil>" (exit 0)
+  v_unencrypted=true   ist bool (exit 51) UND der String "true"  (exit 0)
+  v_unencrypted=1.0    ist 1.0  (exit 51) UND der String "1.0"   (exit 0)
+
+Byte-identische Zeilen, in beiden Formaten. Nur der Digest unterscheidet
+sie, und der ist genau das, was schon widersprochen hat. <nil> beim Lesen
+auf undef abzubilden -- der Fix, zu dem #125s Koerper einlaedt, indem er die
+Bytes benennt -- zerstoert also einen funktionierenden Wert, um eine
+unlesbare Datei zu retten. Verifiziert durch Mutation: dieser Fix laesst
+t/67 Abschnitt 3 fallen UND laesst die kaputte Datei stillschweigend durch.
+
+KEINE CODEAENDERUNG NOETIG. Gepinnt in
+t/67-a-display-form-sops-wrote-is-refused-in-both-stores.t (ENV+INI, alle
+sechs Formen, plus die Mehrdeutigkeit). t/59 pinnte bisher 3 der 6 Formen
+fuer dotenv, t/61 gar keine.
+
+Diagnose-Luecke als karr #174 an die api-Lane abgegeben: die MAC-Meldung
+sagt nicht, dass sops die Datei geschrieben hat und selbst nicht liest.
+_verify_mac liegt in SOPS.pm und gehoert der api-Lane.
+
+2026-08-22 04:57 Erledigt ohne Codeaenderung. Schreibhaelfte durch #36/#37 umgesetzt und nachgemessen; Lesehaelfte gemessen (54 Dokumente, 0 Divergenzen) und korrekt. Entscheidung in docs/adr/0052, gepinnt in t/67. Diagnose-Luecke als #174 an die api-Lane.
