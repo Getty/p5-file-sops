@@ -1,0 +1,37 @@
+---
+class: standard
+created: 2026-08-22T04:56:59Z
+id: 175
+priority: medium
+status: backlog
+tags:
+- docs
+- rules
+- interop
+title: docs/adr/0048 names \C, \g and \k as RE2-accepted; RE2 rejects all three
+updated: 2026-08-22T16:06:05Z
+---
+
+docs/adr/0048, in "What RE2 will not compile -- and what sops does with it", says:
+
+    and, in the other direction, what RE2 accepts and **Perl** rejects: `(?U)`, `\C`, `\g`, `\k`.
+
+Measured on sops 3.13.3 (2026-08-22) through the same .sops.yaml path_regex compile oracle ADR 0048 itself used -- the one place sops reports the compile error instead of discarding it:
+
+    (?U)fo+           RE2 COMPILES it        (config loaded, rule simply did not match)
+    f\Coo             RE2 REJECTS: invalid escape sequence: `\C`
+    (f)\g{1}, (f)\g1  RE2 REJECTS: invalid escape sequence: `\g`
+    (?<n>f)\k<n>      RE2 REJECTS: invalid escape sequence: `\k`
+    (?<n>f)\k'n'      RE2 REJECTS: invalid escape sequence: `\k`
+
+So (?U) is the ONLY measured pattern RE2 accepts and Perl rejects. \C, \g and \k are rejected by BOTH dialects, which puts them with the constructs that "match nothing" at sops rather than beside (?U).
+
+This was harmless while every divergent construct was refused alike -- only the message differed. It stopped being harmless with karr #171 / docs/adr/0049: the kind label now DECIDES whether the read path is lenient, so a construct wrongly filed as "RE2 accepts" would be wrongly refused, and one wrongly filed as "RE2 rejects" would be wrongly read as matching nothing.
+
+The CODE is right -- _re2_divergent_construct puts \C, \g and \k in the unsupported (RE2-rejects) half, which the measurement confirms, and every one of the 55 escape letters and 19 (?...) forms was re-measured against the oracle for docs/adr/0051. It is ADR 0048s PROSE that is wrong.
+
+Fix: correct that sentence in docs/adr/0048 to name (?U) alone, and note that \C, \g and \k belong in the list above it. lib/File/SOPS/Metadata.pm POD already says so and points here; docs/adr/0051 records the measurement table.
+
+Found while implementing karr #171 (docs/adr/0051). Not absorbed into that change because editing another ADRs recorded measurement is its own decision.
+
+VERIFIZIERT (Hauptagent, 2026-08-22): selbst durch das path_regex-Orakel gemessen, sops 3.13.3. (?U)fo+ KOMPILIERT; f\Coo, (f)\g{1}, (?<n>f)\k<n> lehnt RE2 alle drei ab ("invalid escape sequence"). Der falsche Satz steht in docs/adr/0048 Zeile 128. Reine Prosakorrektur, Code ist richtig.
