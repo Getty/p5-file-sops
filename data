@@ -1,0 +1,70 @@
+---
+class: standard
+completed: 2026-08-22T14:12:07Z
+created: 2026-08-22T14:07:14Z
+id: 177
+priority: medium
+started: 2026-08-22T14:12:07Z
+status: done
+tags:
+- docs
+- release
+title: CLAUDE.md and file-sops-core skill still say ENV/INI handlers do not exist
+updated: 2026-08-22T14:12:07Z
+---
+
+Pre-release audit finding (release-checker, HEAD 9a181a1, 2026-08-22).
+
+CLAUDE.md line 6 says:
+
+    What still does not exist: ENV and INI format handlers (karr #36, #37) ...
+
+and line 122:
+
+    format     => 'yaml',       # yaml, json; env and ini are roadmap
+
+The .claude/skills/file-sops-core/SKILL.md hardlink (line ~193) says the same:
+
+    Not implemented today: the ENV and INI format handlers (karr #36, #37) ...
+
+Both are false as of HEAD. karr #36 (commit 89d01ee, "NEW FORMAT: the dotenv
+handler CLAUDE.md has promised since 0.001") and karr #37 (commit 610ec6c,
+"NEW FORMAT: the INI handler, and the walk rule its comments need") landed
+lib/File/SOPS/Format/ENV.pm, Format/ENV/Ordered.pm and Format/INI.pm, both
+fully wired into encrypt/decrypt/the file variants/encrypt_in_place/edit/
+extract/rotate, both proven against sops 3.13.3 in t/59 and t/61, and both
+documented at length in the {{$NEXT}} section of Changes.
+
+Root cause: commit 326b839 ("CLAUDE.md: the ADRs are a contract now, and
+t/04 is no longer the only interop test") touched CLAUDE.md on 2026-08-21
+but predates 89d01ee and 610ec6c (2026-08-21 later that day / into
+2026-08-22), so the roadmap note was never revisited after the handlers
+landed.
+
+Not a functional or release blocker -- nothing a caller invokes is affected
+-- but CLAUDE.md is this project's own second contract ("the description
+of what exists lives in skill file-sops-core") and is read by every
+file-sops-* agent as ground truth. Shipping a 0.003 release with its own
+design doc telling the next reader two format handlers do not exist, when
+Changes and the code both say otherwise, is the kind of contradiction this
+audit exists to catch.
+
+Fix: update both files' ENV/INI roadmap language to reflect karr #36/#37
+as done, and re-hardlink/sync file-sops-core if it is shared outside this
+repo. Lane: docs only, no behavior-relevant code -- the orchestrating agent
+or maintainer can do this directly, no file-sops-wire/api/format lane needed.
+
+ERLEDIGT 2026-08-22, Commit 078f4c0. Beide genannten Stellen korrigiert -- und beim Anfassen kam ein SCHWERERER Befund in derselben Datei heraus, der hier festgehalten gehoert, weil das Ticket ihn nicht kannte:
+
+file-sops-core/SKILL.md sagte bis eben:
+    Note the asymmetry in the tree walk: _encrypt_tree consults
+    should_encrypt_key, _decrypt_tree does not -- decryption is driven purely
+    by whether a leaf matches ENC[...].
+
+Das war bis 085773e wahr und ist seit ADR 0049 das GENAUE GEGENTEIL des Codes. Diese Skill wird ueber briefing.skills in JEDEN file-sops-wire/-api/-format/-test-writer-Agenten zwangsgeladen. Der eine Satz, den ein Worker am ehesten ungeprueft glaubt, hat also jedem Arbeiter in diesem Repo erzaehlt, ein Security-Fix sei nicht passiert. Der Ersatztext benennt die Umkehrung ausdruecklich statt sie still zu tauschen.
+
+Ausserdem falsch und mitkorrigiert: die Skill nannte should_encrypt_key als das Praedikat, das die Walks fragen. Sie fragen should_encrypt_path (7 Aufrufstellen in SOPS.pm, 0 fuer das andere).
+
+Ausserdem nachgezogen: der Interop-Absatz nannte 122 Tests mit Binary und 105 ohne -- richtig, als t/04-interop.t die einzige Datei war, die sops treibt. Heute sind es 1325 gegen 1107, und beide melden All tests successful. Genau damit hat diese Sitzung angefangen.
+
+LEHRE FUER DEN NAECHSTEN AUDIT: der Befund war als Prosa-Drift erfasst (ENV/INI steht als roadmap drin) und war in Wahrheit eine falsche Verhaltensaussage in einer zwangsgeladenen Skill. Wer CLAUDE.md oder eine briefing-Skill auf Drift prueft, prueft nicht nur, was sie ueber den FUNKTIONSUMFANG sagen, sondern was sie ueber das VERHALTEN sagen -- das ist die Haelfte, die Schaden anrichtet.
