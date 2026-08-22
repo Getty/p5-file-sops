@@ -3796,20 +3796,130 @@ sub _verify_mac {
     # we print the shape of the check instead, which is the part that tells you
     # where to look. Nothing here is derived from a value, a data key or an age
     # identity.
+    # A HINT for documents this library refuses but sops wrote and sops -d
+    # also refuses -- ENV and INI have no type label, so sops's display form
+    # for a typed value lands in the file as bare bytes that disagree with
+    # what the digest covers. The text alone is ambiguous with a string of
+    # the same spelling (which sops -d reads at exit 0), so the hint is
+    # phrased as "consistent with" rather than as a confirmed cause, and
+    # not added for any other format. See docs/adr/0052 and karr #174.
+    my $hint = _mac_failure_sops_display_hint($args{data}, $metadata, $args{format_class});
+
     croak sprintf(
         "MAC verification failed: the digest over %d leaf value%s in %s "
         . "order does not match the one stored in the sops section%s. The "
         . "document has been altered since it was written, or was written by "
-        . "something that computes the digest differently. Pass ignore_mac "
+        . "something that computes the digest differently.%s Pass ignore_mac "
         . "=> 1 to read it anyway -- what you get back is decrypted but not "
         . "authenticated.",
         scalar @$leaves,
         (@$leaves == 1 ? '' : 's'),
         ($ordered ? 'document' : 'sorted-key'),
         ($metadata->mac_only_encrypted ? ', with mac_only_encrypted set' : ''),
+        ($hint ? ' ' . $hint : ''),
     ) unless $expected eq $computed;
 
     return 1;
+}
+
+# Hedged hint appended to the MAC verification refusal: when the format is
+# untyped (env, ini) and a leaf carried in an UNENCRYPTED slot reads as one of
+# the wire text spellings Go's printer writes for a typed value, the file is
+# consistent with one sops wrote and `sops -d` also cannot open. Two
+# qualifications make the wording a "consistent with" rather than a finding.
+#
+#   1. The text is AMBIGUOUS with a literal string of the same spelling -- the
+#      string "true" and the bool true are byte-identical on the wire, and
+#      a sops-write containing a string "true" in an unencrypted slot is read
+#      back at exit 0. A hint that named this as the cause without that
+#      qualification would misdiagnose those documents.
+#   2. The check is on the PARSED tree the rest of the library is working
+#      with, not on the document bytes -- a document whose wire form is a
+#      display form but whose parser normalises it before _verify_mac can
+#      see it (none of the four current handlers do this for env/ini) would
+#      not match here. That is named, not fixed, because repairing the text
+#      on read would change what a re-write emits (docs/adr/0052).
+#
+# Returns the empty string for every other format or shape. The walker is
+# kept narrow on purpose: only what the detection rule in docs/adr/0052
+# section 3 names.
+sub _mac_failure_sops_display_hint {
+    my ($data, $metadata, $format_class) = @_;
+
+    return '' unless $format_class;
+    # The real handlers all declare format_name; defensive check so a mock
+    # handler in t/51 (LineFormat, ReversedLineFormat, DeclinesOrder) does
+    # not change behaviour here.
+    return '' unless $format_class->can('format_name');
+    my $name = $format_class->format_name;
+    return '' unless $name eq 'env' || $name eq 'ini';
+
+    my $matches = [ _scan_sops_display_forms($data, $metadata, []) ];
+    return '' unless @$matches;
+
+    my ($path, $text) = @{$matches->[0]};
+    my $where = @$path ? join(':', @$path) : '(document root)';
+
+    return sprintf(
+        'The document also carries an unencrypted value at %s whose text (%s) '
+        . 'is a Go display form sops writes into an %s slot for a typed value '
+        . '(bool, null, or float); the MAC covers the typed value rather than '
+        . 'the displayed text, and `sops -d` rejects the same document. The '
+        . 'text alone is ambiguous with a string of the same spelling -- '
+        . 'which sops reads at exit 0 -- so this only indicates a consistent '
+        . 'cause, not a confirmed one.',
+        $where, $text, $name,
+    );
+}
+
+sub _scan_sops_display_forms {
+    my ($node, $metadata, $path) = @_;
+    no warnings 'recursion';
+
+    if (ref $node eq 'HASH') {
+        my @found;
+        for my $k (keys %$node) {
+            push @$path, $k;
+            push @found, _scan_sops_display_forms($node->{$k}, $metadata, $path);
+            pop @$path;
+        }
+        return @found;
+    }
+    if (ref $node eq 'ARRAY') {
+        my @found;
+        push @found, _scan_sops_display_forms($_, $metadata, $path) for @$node;
+        return @found;
+    }
+
+    # Filter to UNENCRYPTED leaves: an encrypted slot holds an ENC[...] blob
+    # whose plaintext the digest covers, never the wire text, so the detection
+    # rule below cannot fire on an encrypted leaf's stringify.
+    return () if $metadata->should_encrypt_path($path);
+    return () if !defined $node || ref $node || blessed $node;
+    my $text = "$node";
+
+    return () unless _is_sops_display_form_text($text);
+    return [ [@$path], $text ];
+}
+
+# The wire text sops's Go printer writes for a typed value when the store has
+# no type label: dotenv and INI. Four families cover every Go print form
+# measured against sops 3.13.3 (docs/adr/0052):
+#
+#   true        -- bool
+#   false       -- bool
+#   <nil>       -- null
+#   N.0         -- a float whose textual rendering has a fractional zero
+#   mE[+-]k     -- a float whose textual rendering is in exponent form
+#                 (Go prints small exponents as decimal, so 1e2 -> 100.0,
+#                 which the N.0 family catches; 1.5e-5 -> 1.5E-05)
+sub _is_sops_display_form_text {
+    my ($text) = @_;
+    return 1 if $text eq 'true' || $text eq 'false';
+    return 1 if $text eq '<nil>';
+    return 1 if $text =~ /\A-?[0-9]+\.0\z/;
+    return 1 if $text =~ /\A-?[0-9.]+E[+-][0-9]+\z/;
+    return 0;
 }
 
 sub _mac_digest {
