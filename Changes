@@ -1,6 +1,25 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - NEW DIAGNOSTIC: a MAC verification failure on an env or ini document
+    whose tree carries an unencrypted value with a Go display form sops wrote
+    into a typed-value slot (bool, null, integral float, or one printed in
+    exponent form -- `true`/`false`/`<nil>`/`N.0`/`mE[+-]k`) now ends with a
+    hedged paragraph that names the leaf path, the displayed text, and the
+    two legs of the diagnosis: the MAC covers the typed value rather than the
+    displayed text, AND `sops -d` rejects the same document. The hedge is
+    load-bearing and is the reason it reads the way it does: the displayed
+    text is byte-identical with a legitimate string sops reads at exit 0, so
+    a writer cannot infer whether the file was tampered with, made by another
+    tool, or made by sops but cannot now be read by sops either. The wording
+    says "consistent cause" rather than "the cause". The hint does not fire
+    in YAML or JSON (where the typed value reaches the wire in a way our
+    readers can already recover), on a leaf the rule encrypts (where the
+    digest covers the ENC[...] blob, never the wire text), or when no display
+    form is present (and then MAC verification usually succeeds). Every
+    existing croak keeps the literal phrase "MAC verification failed" so
+    callers grepping for that match unchanged. Pinned by t/68. See
+    docs/adr/0052 section 3 and karr #174.
   - BEHAVIOUR CHANGE: a value is decrypted because the document's encryption
     RULE says it is encrypted, not because it looks encrypted. `decrypt` asks
     `should_encrypt_path` about every leaf on the way out now, exactly as
