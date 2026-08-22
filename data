@@ -1,0 +1,49 @@
+---
+class: standard
+created: 2026-08-22T04:57:23Z
+id: 176
+priority: low
+status: backlog
+tags:
+- rules
+- interop
+- api
+title: A rule pattern NEITHER dialect can compile is refused on the read path, where
+  sops reads it
+updated: 2026-08-22T16:06:12Z
+---
+
+docs/adr/0051 makes the read path reproduce sops for a rule regex RE2 cannot compile: sops discards the compile error, the rule matches nothing, and decrypt/extract/decrypt_file now answer exactly as `sops -d` does.
+
+The split is by RE2s verdict, and it is taken in two places:
+
+  1. _re2_divergent_construct names a construct RE2 does not have -> kind
+     "unsupported" -> matcher that matches nothing -> read path passes.
+  2. nothing named, and the Perl compile then fails -> kind "perl" -> refused
+     everywhere.
+
+Step 2 conflates two cases that are NOT the same:
+
+    (?U)fo+   RE2 COMPILES it, Perl does not.  Refusing is correct -- the rule
+              really does select keys over there and this side cannot say
+              which, so guessing "matches nothing" would classify leaves
+              wrongly.
+    fo(       RE2 REJECTS it too (measured: "error parsing regexp: missing
+              closing ): `fo(`"), so sops matches nothing and reads the
+              document at exit 0. We refuse it.
+
+So `fo(` is a document sops reads and this library does not -- the ADR 0038 discriminator, on a narrow case. Measured on sops 3.13.3, 2026-08-22, through the .sops.yaml path_regex oracle. Recorded as a Limit in docs/adr/0051 and in the Metadata POD rather than closed there.
+
+Why it was not closed in docs/adr/0051: telling the two apart needs positive knowledge that RE2 rejects the pattern, and the only thing that could supply it for `fo(` is a paren-balance check -- a second, narrower regex parser living beside _re2_divergent_construct, whose false positives would refuse rules sops takes. That trade wanted its own decision rather than being made mid-change.
+
+Note the failure mode is LOUD either way, which is why this is low: a wrongly-refused document raises the dialect refusal naming the pattern, and (per docs/adr/0051) a wrongly-LENIENT read would fail on the MAC or on the bare-at-a-selected-path guard. Nothing here can return a wrong plaintext quietly.
+
+Possible ways out, none obviously right:
+ - a paren-balance / bracket-balance check feeding the "unsupported" kind;
+ - accept the residue and document it (what docs/adr/0051 does today);
+ - shell out to a real RE2 when one is available (rejected on its face: the
+   library must not depend on the sops binary being present).
+
+Found while implementing karr #171 (docs/adr/0051).
+
+VERIFIZIERT (Hauptagent, 2026-08-22): reproduziert. Dokument mit unencrypted_regex "fo(" -- RE2 lehnt es ab ("missing closing )"), sops -d liest bei exit 0, File::SOPS->decrypt refused. Divergenz real, laut, eng.
