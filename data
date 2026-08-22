@@ -1,0 +1,45 @@
+---
+claimed_at: 2026-08-22T04:59:32Z
+claimed_by: api-171
+class: standard
+completed: 2026-08-22T16:03:43Z
+created: 2026-08-21T10:35:48Z
+id: 166
+priority: low
+started: 2026-08-22T04:37:00Z
+status: done
+tags:
+- api
+- errors
+title: A rule-regex refusal is reported under a leaf path it has nothing to do with
+updated: 2026-08-22T16:03:43Z
+---
+
+karr #161 raises the rule-dialect refusal where the rule is USED, which for `encrypt` is inside the leaf walk. `File::SOPS::_assert_leaves_representable` asks should_encrypt_path inside an eval and re-throws with `_at_path`, so the message comes out as:
+
+    foo: Cannot use '(?=f)foo' as the unencrypted_regex: it uses a lookahead ...
+
+The `foo:` is the first leaf the walk reached and has nothing to do with the
+problem, which is the rule. It reads as though the KEY were at fault.
+
+rotate and edit are unaffected -- they reach should_encrypt_path outside that
+eval and the message comes out clean (verified).
+
+Two ways out, neither in Metadata.pm:
+ - have `_assert_leaves_representable` not wrap an exception that did not come
+   from assert_representable, or
+ - validate the rule once in File::SOPS::_metadata_for (or wherever the
+   Metadata is built for a write) so the refusal is raised before any walk.
+
+The second is the better one and is also where a nicer message could name the
+argument the caller passed. Both are in lib/File/SOPS.pm, which was outside
+karr #161 file boundary.
+
+NOT a candidate: validating in Metadata BUILD/from_hash. That would refuse to
+READ a document carrying such a rule, and decrypt/extract deliberately still
+work on one (verified against a document sops wrote with
+--unencrypted-regex '(?=f)foo').
+
+2026-08-22 04:59 Closed as a side effect of docs/adr/0051, not as a patch: the rule is checked once in _assert_rules_supported when the metadata for a write is built, so there is no leaf path left for the message to be reported under. Took option 2 from the ticket body (validate where the Metadata is built), which the ticket itself preferred. Pinned in t/66 section 3, for both regex fields and for a Perl-uncompilable pattern.
+
+REVIEW (Hauptagent, 2026-08-22): die Meldung selbst provoziert. Sie beginnt jetzt mit "Cannot use \x27(?=foo)\x27 as the unencrypted_regex: ..." -- kein vorangestellter Leaf-Pfad mehr. assert_rule_regexes_agree wird an drei Stellen vor jedem Walk gerufen (SOPS.pm:1653, 1831, 2951), also gibt es keinen Leaf-Pfad, unter dem die Refusal noch auftauchen koennte.
