@@ -1,6 +1,38 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a value is decrypted because the document's encryption
+    RULE says it is encrypted, not because it looks encrypted. `decrypt` asks
+    `should_encrypt_path` about every leaf on the way out now, exactly as
+    `encrypt` does on the way in, and that is how sops reads a document. Two
+    things follow and both are visible to callers. A leaf the rule EXCLUDES is
+    a literal value whatever its text spells: an ENC[...] string there comes
+    back as that string, and the MAC covers that string rather than the value
+    behind it -- so a document whose rule excludes a leaf that really is
+    encrypted now fails its MAC, which is what sops answers too (exit 51,
+    measured over four formats and all four rule fields, with the digest read
+    straight off sops's own `computed` figure and reproduced byte for byte).
+    A leaf the rule SELECTS must be encrypted, and one that is not is refused
+    at its path instead of being read as a literal and then silently ENCRYPTED
+    by the next write; sops refuses the same document at exit 25. Four shapes
+    are still left alone, because sops leaves them alone: an undef, an empty
+    string, a comment, and an empty list or mapping. The error names the path
+    and the rule and never the value.
+    This REPLACES the guard 0.003 added for the same defect: `rotate` and
+    `edit` no longer raise "Refusing to rotate ...", because there is no longer
+    a plaintext for them to leak -- an excluded leaf is never decrypted, so
+    what they write back is the same ENC[...] text the file already held, which
+    is what `sops rotate` writes for the same tree. `ignore_mac => 1` does not
+    reopen it either. Over a corpus of 208 documents -- four formats, written by
+    sops and by this library, with and without mac_only_encrypted, under six
+    well-formed rules and eight rule swaps -- 96 well-formed documents are
+    byte-identical in AAD, MAC plaintext and decrypted value, and the number
+    that disagree with the sops binary about whether the document is readable
+    went from 91 to 0. See docs/adr/0049 and karr #160.
+  - BUG FIX: a plain string of your own that happens to spell ENC[...] now
+    survives a round trip when the rule leaves its path alone. `encrypt` wrote
+    it verbatim and hashed it verbatim already; the read side then tried to
+    decrypt it and died on a document this library had just written.
   - NEW FORMAT: the INI handler CLAUDE.md has promised since 0.001.
     `format => 'ini'` and any `.ini` file now go through `encrypt`, `decrypt`,
     `encrypt_file`, `decrypt_file`, `encrypt_in_place`, `edit`, `extract` and
@@ -48,15 +80,14 @@ Revision history for File-SOPS
     \w, \d, \s and POSIX classes are ASCII-only, so an ordinary .sops.yaml
     rule plus one non-ASCII key made sops encrypt a value this library then
     wrote back readable (measured end to end, no editing anywhere). Such a
-    document is now REFUSED, naming the leaf and the rule that disagrees with
-    it -- and in `edit`, before the editor is opened rather than after. sops
-    refuses the same documents rather than reading them (measured on 3.13.3:
-    exit 51, MAC mismatch), because it decrypts rule-first and hashes the
-    ENC[...] string itself. The opposite disagreement -- a bare value the rule
-    selects, which is quietly ENCRYPTED rather than exposed -- is unchanged and
-    still divergent (sops: exit 25). `encrypt_file` and `encrypt_in_place`
-    were never affected: both refuse an already-encrypted input. See
-    docs/adr/0046, karr #150, and karr #160/#161 for the two halves left open.
+    document is now stopped -- first by a guard that named the leaf and the
+    rule, and then, before this released, by the rule-first decryption in the
+    entry above, which removes the plaintext instead of refusing to write it.
+    sops stops the same documents rather than reading them (measured on
+    3.13.3: exit 51, MAC mismatch), because it decrypts rule-first and hashes
+    the ENC[...] string itself. `encrypt_file` and `encrypt_in_place` were
+    never affected: both refuse an already-encrypted input. See docs/adr/0046
+    and karr #150; the guard itself is gone with docs/adr/0049.
   - BEHAVIOUR CHANGE and SECURITY FIX: `unencrypted_regex` and `encrypted_regex`
     are now matched in Go RE2's dialect rather than Perl's, so a rule selects
     the same keys here as it does at sops. RE2's \w, \W, \d, \D, \s, \S, \b,
@@ -116,12 +147,11 @@ Revision history for File-SOPS
     only producer, `policy_args` does not carry `lastmodified` across a
     re-encryption, and `update_lastmodified` writes that rendering directly.
     A spelling Go's layout cannot parse keeps the document's own bytes rather
-    than being refused, for the reason karr #145 recorded one field over. STILL
-    DIVERGENT, permissive and recorded: an UNQUOTED timestamp, which go-yaml v3
-    resolves as `!!timestamp` and sops refuses at exit 1 where this library
-    reads it - a bare and a quoted scalar arrive here as the same Perl string,
-    so closing it needs the YAML handler and not this. See docs/adr/0044 and
-    karr #144.
+    than being refused, for the reason karr #145 recorded one field over. The
+    second direction - an UNQUOTED timestamp, which go-yaml v3 resolves as
+    `!!timestamp` and sops refuses at exit 1 where this library reads it - is
+    the entry below, in the YAML handler, because a bare and a quoted scalar
+    arrive here as the same Perl string. See docs/adr/0044 and karr #144.
   - NEW DIAGNOSTIC: reading a YAML document whose `sops` section spells
     `lastmodified` as a PLAIN scalar now warns. Such a file is one no sops can
     open: go-yaml resolves a bare RFC 3339 scalar to a Go `time.Time` where

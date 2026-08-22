@@ -797,12 +797,8 @@ Values excluded from encryption are still covered by the MAC, so they are
 authenticated even though they are readable -- unless C<mac_only_encrypted> is
 on.
 
-The rule is applied on the way B<in> only. Decryption here is driven by which
-values look encrypted and does not consult the rule at all, which is why
-L</rotate> and L</edit> -- the two methods that do both halves -- refuse a
-document whose rule and whose stored values disagree, rather than writing the
-difference out in plaintext. See
-L</A rule that does not cover what is encrypted is refused>.
+The same rule is applied on the way B<out>, and it is what decides what a leaf
+B<is>: see L</The rule decides what a value is, in both directions>.
 
 =head3 Reusing another document's rules
 
@@ -1095,6 +1091,46 @@ authenticated> -- the AAD binding on each individual value still holds, but
 nothing detects a value that was deleted, duplicated, moved to another key, or
 replaced with one taken from elsewhere in the same document. Use it to recover
 data, not to consume it.
+
+=head3 The rule decides what a value is, in both directions
+
+B<New in 0.003, and it changes what this method returns and what it refuses.>
+The document's encryption rule -- L<File::SOPS::Metadata/should_encrypt_path>,
+built from C<unencrypted_suffix>, C<encrypted_suffix>, C<unencrypted_regex> or
+C<encrypted_regex> -- is asked about B<every> leaf on the way out, exactly as it
+is on the way in, and its answer is what decides whether a leaf is ciphertext at
+all. Until 0.003 this method asked the leaf instead: anything that looked like
+C<ENC[...]> was decrypted, whatever the rule said.
+
+That is how sops reads a document, and two things follow from it.
+
+B<A leaf the rule excludes is a literal value>, whatever its text spells. An
+C<ENC[...]> string at such a path is not decrypted; it comes back as that
+string, and the MAC covers that string rather than the value behind it. A
+document whose rule excludes a leaf that really is encrypted therefore fails
+its MAC, which is what sops does with it too (measured on 3.13.3
+over four formats and all four rule fields: exit 51, I<MAC mismatch>, with the
+digest taken over the C<ENC[...]> text byte for byte). It also means a plain
+string of your own that happens to spell C<ENC[...]> survives a round trip
+intact, as long as the rule leaves its path alone.
+
+B<A leaf the rule selects must be encrypted>, and one that is not is refused at
+its path -- because reading it as a literal meant B<encrypting> it on the next
+write, turning a value that was readable into ciphertext under a data key the
+caller may not keep. sops refuses the same document at exit 25. Four shapes are
+left alone rather than refused, because sops leaves them alone as well: an
+C<undef>, an empty string, a comment, and an empty list or mapping. The first
+two are also the only shapes L</encrypt> writes bare into a slot the rule
+selects.
+
+The error message names the path and the rule and never the value: a leaf that
+is bare where the rule says it is encrypted is a secret in the clear, and an
+error message goes into bug reports.
+
+C<< ignore_mac => 1 >> does not change any of this. It skips the MAC and
+nothing else, so a document whose rule excludes an encrypted leaf comes back
+holding that leaf's C<ENC[...]> text -- decrypted values everywhere the rule
+selects, ciphertext everywhere it does not.
 
 =head3 A comment in a list comes back as a C<File::SOPS::Comment>
 
@@ -1591,7 +1627,7 @@ sub rotate {
 
     my $content = _read_file($file, 'file');
 
-    my ($stored, $metadata) = _format_class($format)->parse($content);
+    my (undef, $metadata) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
     _assert_rekeyable($metadata, $file, verb => 'rotate', noun => 'Rotation');
@@ -1609,13 +1645,12 @@ sub rotate {
         ignore_mac => $args{ignore_mac},
     );
 
-    # Asked after the decryption -- so that a document which cannot be read at
-    # all fails on the MAC and not on its rule -- and before anything is
-    # written. The decryption above returns the plaintext of every leaf that
-    # LOOKS encrypted; the re-encryption below encrypts only what the rule
-    # selects, and would write the rest out bare.
-    _assert_rule_covers_encrypted_leaves($stored, $metadata, $file,
-        verb => 'rotate', noun => 'Rotation');
+    # docs/adr/0046's guard stood here and is gone: the decryption above is
+    # rule-driven now (docs/adr/0049), so a leaf the rule excludes comes back
+    # as its own ENC[...] text and the re-encryption writes that text -- there
+    # is no plaintext left for this method to leak. A document whose rule and
+    # whose stored values disagree fails on the MAC, inside decrypt, which is
+    # where sops fails it.
 
     # Re-encrypt with new data key, under the rules this document already had
     my $encrypted = $class->encrypt(
@@ -1705,51 +1740,30 @@ anything. Rotate such a file with the sops CLI, which can re-encrypt for every
 backend; or, if losing those recipients is the intention, say so by calling
 L</decrypt> and L</encrypt> yourself.
 
-=head3 A rule that does not cover what is encrypted is refused
+=head3 A rule that does not cover what is encrypted stops on the MAC
 
-B<New in 0.003, and a change for existing callers.> A rotation re-encrypts the
-document under the rule the document itself carries, and that rule has to be
-the one the document is B<already> encrypted under. Where a leaf is encrypted
-in the file and the rule says it is not, rotation is refused, naming the leaf
-and the rule that disagrees with it:
+B<Changed in 0.003, and it changed twice.> A rotation re-encrypts the document
+under the rule the document itself carries, and that rule has to be the one the
+document is B<already> encrypted under. Where a leaf is encrypted in the file
+and the rule says it is not, this method used to write that value back into the
+file B<in plaintext>, at exit 0 -- L</decrypt> was driven by which values looked
+encrypted and returned the plaintext of all of them, L</encrypt> was driven by
+the rule and encrypted only what the rule selected, and everything in between
+went to disk bare.
 
-    Refusing to rotate 'secrets.yaml': one of its values is encrypted at a
-    path this document's own encryption rule (unencrypted_regex: ^\w+$) says
-    is NOT encrypted -- db:password. ...
+That cannot happen any more, and not because a guard stands in the way. The
+decryption L</rotate> does first is B<rule-first> now, so a leaf the rule
+excludes is never decrypted at all: what comes back is its own C<ENC[...]>
+text, and what gets written is that same text. There is no plaintext for this
+method to leak. What stops such a document is the MAC, in L</decrypt>, which is
+exactly where sops stops it -- and it is stopped because the digest covers the
+C<ENC[...]> text rather than the value behind it. See
+L</The rule decides what a value is, in both directions>.
 
-Until this refusal such a file was rotated at exit 0 and B<the value was
-written back into it in plaintext>: L</decrypt> is driven by which values look
-encrypted and returns the plaintext of all of them, L</encrypt> is driven by
-the rule and encrypts only what the rule selects, and everything in between
-went to disk bare -- in a file that still looks like a sops file, with a valid
-MAC over the plaintext it now shows.
-
-sops cannot produce that file, because it decrypts B<rule-first>: a value the
-rule excludes is read as the literal C<ENC[...]> string and hashed as one, so
-the MAC stops the document before anything is written. Measured on 3.13.3,
-every rule shape that excludes an encrypted leaf -- a widened
-C<unencrypted_suffix>, an C<encrypted_suffix> or C<encrypted_regex> that
-matches nothing, an C<unencrypted_regex> that matches everything -- is exit 51,
-I<MAC mismatch>. Refusing here is the closest this layer can get to that
-without moving what the digest covers, which is the same fix and a larger one
-(karr #160).
-
-Two ways into such a file, and neither needs the rotation to be at fault. One
-is a C<sops> section edited by hand, or a document whose rule was replaced
-after it was written. The other needs no editing at all: C<unencrypted_regex>
-and C<encrypted_regex> are matched here by Perl and in sops by RE2, and RE2's
-C<\w>, C<\d>, C<\s> and POSIX classes are ASCII-only where Perl's are
-Unicode-aware -- so C<< unencrypted_regex => '^\w+$' >> classifies a key with
-a non-ASCII character differently in the two implementations, and sops
-encrypts a value this library then thought was never encrypted. That
-divergence is open and is karr #161; this refusal is what stops it costing a
-secret in the meantime.
-
-The B<opposite> disagreement is not refused: a leaf that is bare where the rule
-says it should be encrypted is simply encrypted on the way back out. Nothing is
-written in plaintext, so the fail-loud rule does not reach it -- but it is a
-divergence, because sops refuses that document too (exit 25, I<Input string
-E<lt>valueE<gt> does not match sops' data format>). It is part of karr #160.
+The refusal an intermediate release raised here, naming the leaf and the rule,
+is gone with the guard that raised it. It refused two documents the MAC does
+not, and sops reads both: one whose stored MAC really is over the literal, and
+-- under C<< ignore_mac => 1 >> -- any of them.
 
 C<ignore_mac> is passed through to L</decrypt>; rotating a file you could not
 verify re-signs whatever it contained, so prefer to fail.
@@ -1770,7 +1784,7 @@ sub edit {
 
     my $content = _read_file($file, 'file');
 
-    my ($stored, $metadata) = _format_class($format)->parse($content);
+    my (undef, $metadata) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
     # Re-encryption here generates a NEW data key, exactly as rotate does, so
@@ -1785,11 +1799,9 @@ sub edit {
         ignore_mac => $args{ignore_mac},
     );
 
-    # rotate's refusal, in the one place here that can still act on it: before
-    # the editor is opened. Refusing afterwards would throw away what was just
-    # typed, for a defect that was in the file before the editor ran.
-    _assert_rule_covers_encrypted_leaves($stored, $metadata, $file,
-        verb => 'edit', noun => 'Editing');
+    # docs/adr/0046's guard stood here too and is gone for rotate's reason
+    # (docs/adr/0049). What replaces it is still ahead of the editor: the
+    # decryption above is where such a document now stops, on its MAC.
 
     my $before = _serialize_plaintext($data, $format);
     my $after  = _edit_text($before, $file, \@editor);
@@ -1945,11 +1957,11 @@ C<azure_kv>, C<hc_vault> or C<key_groups> material cannot be re-encrypted for
 those recipients here, and dropping them silently would revoke their access
 while reporting success. See L</Files rotate refuses>.
 
-It refuses the other of rotate's files too, and B<before the editor is opened>:
-a document holding an encrypted value at a path its own encryption rule says is
-not encrypted would come back from the editor with that value written out in
-plaintext. See L</A rule that does not cover what is encrypted is refused>.
-Refusing after the editor had run would throw away what was just typed, for a
+It stops on the other of rotate's files too, and B<before the editor is
+opened>: a document holding an encrypted value at a path its own encryption
+rule says is not encrypted fails its MAC in the L</decrypt> this method does
+first. See L</A rule that does not cover what is encrypted stops on the MAC>.
+Stopping after the editor had run would throw away what was just typed, for a
 defect that was in the file before it started.
 
 Key B<order> is not preserved either: the plaintext handed to the editor is
@@ -2914,117 +2926,6 @@ sub _assert_rekeyable {
         . "what you want, say so explicitly with decrypt followed by encrypt.";
 }
 
-# Every method that re-encrypts a document it just read writes it back under
-# the rule the document itself carries -- and that rule has to be the one the
-# document is already encrypted under. Where it is not, the two halves of the
-# round trip disagree: _decrypt_tree is driven by which values LOOK encrypted
-# and returns the plaintext of all of them, _encrypt_tree is driven by the
-# rule and encrypts only what the rule selects, and every leaf in between is
-# written back BARE. The secret lands on disk, in a file that still looks like
-# a sops file, and the method returns true.
-#
-# sops cannot reach that state, because it decrypts RULE-first: a value the
-# rule excludes is read as the literal ENC[...] string and hashed as one, so
-# the MAC stops the document before anything is written. Measured on 3.13.3,
-# every rule that excludes an encrypted leaf -- a changed unencrypted_suffix,
-# an encrypted_suffix or encrypted_regex that matches nothing, an
-# unencrypted_regex that matches everything -- is exit 51, MAC mismatch.
-#
-# Making _decrypt_tree rule-driven here is the same fix and the larger one: it
-# moves what the digest covers, which is not this layer's to move. Until it
-# lands this refuses, in the one direction that writes a secret out. See
-# docs/adr/0046 and karr #160.
-sub _assert_rule_covers_encrypted_leaves {
-    my ($stored, $metadata, $file, %words) = @_;
-
-    my @excluded
-        = _encrypted_leaves_the_rule_excludes($stored, $metadata, [], 0);
-    return 1 unless @excluded;
-
-    my @set = grep {
-        defined $metadata->rule_value($_) && length $metadata->rule_value($_)
-    } @File::SOPS::Metadata::ENCRYPTION_RULES;
-    my $rule = @set
-        ? join(', ', map { "$_: " . $metadata->rule_value($_) } @set)
-        : 'no encryption rule at all';
-
-    my $what = @excluded == 1
-        ? "one of its values is encrypted at a path this document's own "
-          . "encryption rule ($rule) says is NOT encrypted -- $excluded[0]"
-        : scalar(@excluded) . " of its values are encrypted at paths this "
-          . "document's own encryption rule ($rule) says are NOT encrypted "
-          . "-- the first of them $excluded[0]";
-
-    croak "Refusing to $words{verb} '$file': $what. $words{noun} re-encrypts "
-        . "the document under that rule, so "
-        . (@excluded == 1 ? 'that value' : 'every one of those values')
-        . " would be written back into the file in PLAINTEXT -- which is what "
-        . "this method did until 0.003, at exit 0 and with nothing else to "
-        . "show for it. sops refuses this document rather than reading it "
-        . "(measured on 3.13.3: exit 51, MAC mismatch), because it decrypts "
-        . "rule-first and hashes the ENC[...] string itself. Correct the rule "
-        . "-- in the sops section, or in the .sops.yaml the file was encrypted "
-        . "under -- so that it covers the values that really are encrypted; or "
-        . "decrypt the file and encrypt it again under the rule you want.";
-}
-
-# The paths of every stored leaf that IS encrypted and that should_encrypt_path
-# says is not. Deliberately one-directional: the other disagreement -- a bare
-# leaf the rule selects -- writes no secret out (it encrypts a value that was
-# readable), and sops answers it differently too, exit 25 rather than 51.
-#
-# The walk is _encrypt_tree's, with its three rules: an ARRAY contributes no
-# path component, a comment bucket contributes none either (docs/adr/0047), and
-# the decision is taken at the leaf against the WHOLE path. Keys are sorted so
-# that the path the refusal names is the same one on every run.
-#
-# All three have to be _encrypt_tree's, not merely similar to them. This walk
-# asks the encryption rule about a path that _encrypt_tree is about to encrypt
-# under, so a component it adds and _encrypt_tree does not is a disagreement
-# between the file this library writes and the file it will accept back:
-# measured with `unencrypted_regex => '^$'` on an ini document, encrypt put the
-# section's comment under `db:` and encrypted it -- which is what sops 3.13.3
-# does with the same rule -- and rotate then refused that file, because this
-# walk had asked the rule about `db::` instead.
-#
-# $stored is the document's own tree, so a comment in it wears its wire shape;
-# that, and nothing about key material, is what the last argument selects.
-sub _encrypted_leaves_the_rule_excludes {
-    no warnings 'recursion';
-    my ($node, $metadata, $path, $depth) = @_;
-
-    $depth = ($depth // 0) + 1;
-    _assert_depth($depth) if ref $node eq 'HASH' || ref $node eq 'ARRAY';
-
-    if (ref $node eq 'HASH') {
-        return map {
-            my $k = $_;
-            my $bucket
-                = _adds_no_path_component($k, $path, $node->{$k}, 'on the wire');
-            push @$path, $k unless $bucket;
-            my @found = _encrypted_leaves_the_rule_excludes(
-                $node->{$k}, $metadata, $path, $depth);
-            pop @$path unless $bucket;
-            @found;
-        } sort keys %$node;
-    }
-    elsif (ref $node eq 'ARRAY') {
-        return map {
-            _encrypted_leaves_the_rule_excludes($_, $metadata, $path, $depth)
-        } @$node;
-    }
-
-    # Any other reference is not an ENC[...] string -- a plaintext comment leaf
-    # arrives here as a File::SOPS::Comment object -- and is_encrypted wants a
-    # scalar.
-    return () if ref $node;
-    return () unless defined $node
-        && File::SOPS::Encrypted->is_encrypted($node);
-    return () if $metadata->should_encrypt_path($path);
-
-    return join(':', @$path);
-}
-
 # --- how deep a document may be -----------------------------------------
 #
 # Every walk in this file recurses, and each of them carries the two lines
@@ -3368,8 +3269,8 @@ our $COMMENT_BUCKET_KEY = '';
 # decrypted by it. In the document's own tree a comment is an
 # ENC[...,type:comment] string; in a plaintext tree it is a
 # File::SOPS::Comment. The decrypt side spells it with the data key because it
-# has one; the walks that read $stored pass a bare truth because they have
-# none and need none.
+# has one; a walk over the document's own tree that has no key passes a bare
+# truth instead, because it needs none.
 #
 # Passing nothing on the ENCRYPT side is what stops a caller's plain string
 # that merely SPELLS a comment leaf from moving the path its neighbours are
@@ -3382,9 +3283,11 @@ sub _is_comment_bucket {
     return 1;
 }
 
-# THE predicate, asked by every walk that builds a path -- _encrypt_tree,
-# _decrypt_tree and _encrypted_leaves_the_rule_excludes. One sub rather than
-# the same three lines three times: the rule decides which AAD a value is
+# THE predicate, asked by every walk that builds a path -- _encrypt_tree and
+# _decrypt_tree. One sub rather than the same three lines twice over: since
+# docs/adr/0049 both walks ask the encryption rule about the path they build,
+# so a component one of them adds and the other does not is a document this
+# library writes and then cannot read. The rule decides which AAD a value is
 # encrypted under and which path the encryption rules are asked about, and a
 # walk that answers it differently from _encrypt_tree produces a document this
 # library writes and then refuses (measured, with unencrypted_regex `^$`:
@@ -3546,7 +3449,60 @@ sub _decrypt_tree {
         }
         return \@result;
     }
-    elsif (File::SOPS::Encrypted->is_encrypted($node)) {
+    else {
+        # RULE-FIRST, which is how sops reads a document: the rule decides
+        # what a leaf IS, and the leaf's own text never gets a vote. An
+        # excluded leaf is a literal value whatever it spells -- ENC[...]
+        # included -- and the digest sees that text, which is what
+        # _mac_bytes and _digested_leaves below had to learn with it.
+        #
+        # Asking the LEAF instead is what let rotate and edit write an
+        # excluded value's plaintext back into the file at exit 0 (karr #150),
+        # which docs/adr/0046 closed with a guard on the write path and handed
+        # the mechanism here. Measured on sops 3.13.3 over 4 formats x 4 rule
+        # fields x 4 cells, all 64 answering alike: an ENC[...] leaf the rule
+        # excludes is exit 51 (its own text is in the digest -- read straight
+        # off sops's `computed` figure), and a bare leaf the rule selects is
+        # exit 25. docs/adr/0049.
+        return $node unless $metadata->should_encrypt_path($path);
+
+        # A SELECTED slot holds an encrypted string, and sops leaves exactly
+        # four shapes alone there rather than refusing them (measured in all
+        # four formats, exit 0 each):
+        #
+        #   * a null -- Go's walk returns before the cipher is reached;
+        #   * an empty string -- the cipher itself short-circuits it;
+        #   * a comment, which sops warns about and keeps;
+        #   * an empty list or mapping, which holds no leaf and never arrives.
+        #
+        # The first two are the only shapes _encrypt_tree writes bare into a
+        # selected slot, so they are also what keeps a document THIS library
+        # wrote readable. !ref guards the eq: JSON::PP::Boolean overloads it
+        # and JSON->false eq '' is true.
+        return $node if !defined $node;
+        return $node if !ref $node && $node eq '';
+        return $node if File::SOPS::Encrypted->is_comment($node);
+
+        # The other direction of the same disagreement, and the one sops's
+        # walk reaches first: bare where the rule says encrypted. Read as a
+        # literal it was silently ENCRYPTED by the next write -- a value that
+        # was readable, turned into ciphertext under a key the caller may not
+        # keep. sops stops at exit 25 with `Input string <value> does not
+        # match sops' data format`; the value is NOT quoted here, because a
+        # leaf that is bare where the rule says encrypted is a secret in the
+        # clear and an error message goes to bug reports.
+        croak _at_path($path, "this document's own encryption rule says this "
+            . "value is encrypted, but the file holds it as a plain value, "
+            . "so there is nothing here to decrypt. sops refuses the same "
+            . "document rather than reading it (measured on 3.13.3: exit 25, "
+            . "'Input string ... does not match sops' data format'), because "
+            . "it decrypts rule-first. Correct the rule -- in the sops "
+            . "section, or in the .sops.yaml the file was encrypted under -- "
+            . "so that it matches the values that really are encrypted. Only "
+            . "an empty value, a null and a comment may stand bare in an "
+            . "encrypted slot")
+            unless !ref $node && File::SOPS::Encrypted->is_encrypted($node);
+
         my $aad = _path_to_aad($path);
         my @value = eval {
             my $enc = File::SOPS::Encrypted->parse($node);
@@ -3554,9 +3510,6 @@ sub _decrypt_tree {
         };
         croak _at_path($path, $@) if $@;
         return $value[0];
-    }
-    else {
-        return $node;
     }
 }
 
@@ -3621,9 +3574,52 @@ our $MAC_ONLY_ENCRYPTED_INIT = pack 'C*',
 # representability sweep in _compute_mac and the leaf COUNT in the MAC error
 # message speak about the same list the digest was taken over. See
 # docs/adr/0041.
+#
+# Since docs/adr/0049 the wire half has a condition, and it is not tidiness:
+# see _wire_comment_reads_as_a_comment below.
 sub _digested_leaves {
-    my ($leaves, $data_key) = @_;
-    return [ grep { !_is_comment_leaf($_->[1], $data_key) } @$leaves ];
+    my ($leaves, $data_key, $metadata) = @_;
+    return [ grep {
+        my ($path, $value) = @$_;
+        !_is_comment_leaf($value,
+            _wire_comment_reads_as_a_comment($path, $data_key, $metadata)
+                ? $data_key : undef);
+    } @$leaves ];
+}
+
+# Whether an ENC[...,type:comment] string sitting at $path comes back out of
+# the file as a COMMENT or as a value -- which is what decides whether the
+# digest covers it, because sops digests no comment and does digest a value.
+#
+# It has two answers because the wire has two shapes for a comment, and only
+# one of them is a value slot:
+#
+#   * In a FLAT store a comment is a comment LINE -- `#ENC[...]` in dotenv,
+#     `; ENC[...]` in ini -- so the store reads it as a comment before any rule
+#     is consulted, and no rule can turn it into a value. This handler's
+#     spelling for such a line is the comment bucket, a `''` KEY, so a leaf
+#     whose last path component is that key is a comment line whatever the rule
+#     says. See $COMMENT_BUCKET_KEY and docs/adr/0045 / docs/adr/0047.
+#   * In YAML a comment is an ordinary SEQUENCE ENTRY holding the ENC[...]
+#     string, and it becomes a comment only where something decrypts it -- so
+#     at a path the rule EXCLUDES it stays a string and is digested as one.
+#
+# Measured on sops 3.13.3, one rule-swapped document per format put through
+# both hypotheses with the MAC recomputed each way (`sops -d` exit code):
+#
+#                     comment digested   comment skipped
+#     yaml                    0                51
+#     ini                    51                 0
+#     dotenv                 51                 0
+#
+# The encrypt side has no data key and no wire shapes, and answers nothing
+# here.
+sub _wire_comment_reads_as_a_comment {
+    my ($path, $data_key, $metadata) = @_;
+
+    return 0 unless defined $data_key;
+    return 1 if @$path && $path->[-1] eq $COMMENT_BUCKET_KEY;
+    return !$metadata || $metadata->should_encrypt_path($path) ? 1 : 0;
 }
 
 # A comment wears two shapes and they are NOT one question. In a plaintext tree
@@ -3733,7 +3729,7 @@ sub _verify_mac {
     my $ordered = _parse_in_document_order($args{document}, $args{format_class});
     my $leaves  = _digested_leaves(($ordered
         ? _document_leaves($ordered, $args{data}, [], [])
-        : _sorted_leaves($args{data}, [], [])), $data_key);
+        : _sorted_leaves($args{data}, [], [])), $data_key, $metadata);
 
     my $computed = _mac_digest(
         leaves   => $leaves,
@@ -3776,8 +3772,13 @@ sub _mac_digest {
 
     for my $leaf (@$leaves) {
         my ($path, $value) = @$leaf;
-        next if $only_encrypted && !$metadata->should_encrypt_path($path);
-        $ctx->add(_mac_bytes($value, $path, $data_key));
+        # Asked ONCE per leaf and handed on, because it now answers two
+        # questions and they must not be able to disagree: which leaves
+        # mac_only_encrypted covers, and whether this one is ciphertext at all
+        # (docs/adr/0049).
+        my $selected = !$metadata || $metadata->should_encrypt_path($path);
+        next if $only_encrypted && !$selected;
+        $ctx->add(_mac_bytes($value, $path, $data_key, $selected));
     }
 
     # Uppercase hex digest (SOPS format)
@@ -3785,7 +3786,9 @@ sub _mac_digest {
 }
 
 sub _mac_bytes {
-    my ($value, $path, $data_key) = @_;
+    my ($value, $path, $data_key, $selected) = @_;
+
+    $selected = 1 unless defined $selected;
 
     # Decrypt side. Hash the authenticated plaintext exactly as it came off
     # the cipher: running it back through decrypt_value's type conversion
@@ -3793,7 +3796,16 @@ sub _mac_bytes {
     # document would fail its own MAC. type:bool is the one case that needs
     # normalising, because SOPS's ToBytes titlecases the boolean it parsed
     # rather than echoing the spelling it was given.
-    if (defined $data_key && File::SOPS::Encrypted->is_encrypted($value)) {
+    #
+    # $selected is the encryption rule's answer for this path, and it is what
+    # decides whether the leaf is ciphertext at all -- _decrypt_tree's rule,
+    # asked here so the digest covers what the tree walk returned. Where the
+    # rule EXCLUDES the leaf, its ENC[...] text is a literal and goes into the
+    # digest as it stands. Read off sops's own `computed` figure on a MAC
+    # mismatch: SHA-512 of the ENC[...] string, byte for byte, and repairing
+    # the stored MAC to that digest makes `sops -d` exit 0. docs/adr/0049.
+    if ($selected && defined $data_key
+        && File::SOPS::Encrypted->is_encrypted($value)) {
         # A value that will not parse or will not decrypt used to be skipped
         # here, so the digest quietly covered a different document than the one
         # on disk and the only symptom was "MAC verification failed" with no

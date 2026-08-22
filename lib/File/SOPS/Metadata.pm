@@ -1758,8 +1758,12 @@ The two regex rules are matched in B<RE2's> dialect, not Perl's, and a pattern
 the two do not agree on is refused here rather than matched -- which is why
 this method can die. See L</The regex rules are matched in RE2's dialect>.
 
-This is the predicate L<File::SOPS> encrypts a document with, and the one it
-uses to decide which values the MAC covers when L</mac_only_encrypted> is set.
+This is the predicate L<File::SOPS> encrypts a document with, B<and the one it
+decrypts it with>: since 0.003 it is asked about every leaf on the way out too,
+and its answer is what decides whether a leaf is ciphertext at all rather than
+a value that happens to spell C<ENC[...]>. It is also what decides which values
+the MAC covers when L</mac_only_encrypted> is set. See
+L<File::SOPS/The rule decides what a value is, in both directions>.
 Measured against sops 3.13.3 with C<--encrypted-suffix _enc>: every value
 under a C<top_enc:> block is encrypted, a C<nested_enc:> under an ordinary
 parent is encrypted, and the elements of a C<list_enc:> array are encrypted

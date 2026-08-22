@@ -10,14 +10,15 @@ use Crypt::Age;
 
 use File::SOPS;
 
-# karr #150 -- docs/adr/0046.
+# karr #150 -- docs/adr/0046, then karr #160 -- docs/adr/0049.
 #
-# This distribution decrypts ENC-DRIVEN: _decrypt_tree asks whether a leaf
-# LOOKS encrypted and never asks the encryption rule. It encrypts RULE-DRIVEN:
+# This distribution decrypted ENC-DRIVEN: _decrypt_tree asked whether a leaf
+# LOOKS encrypted and never asked the encryption rule. It encrypts RULE-DRIVEN:
 # _encrypt_tree asks should_encrypt_path and nothing else. Every method that
-# does both -- rotate and edit -- therefore writes back BARE every leaf that is
+# does both -- rotate and edit -- therefore wrote back BARE every leaf that is
 # encrypted in the file and that the document's own rule excludes. Measured
-# before this landed: `File::SOPS->rotate` on such a document exited 0 and left
+# before docs/adr/0046 landed: `File::SOPS->rotate` on such a document exited 0
+# and left
 #
 #     password: hunter2
 #
@@ -26,6 +27,12 @@ use File::SOPS;
 # sops cannot reach that state: it decrypts rule-first, so a value the rule
 # excludes is read as the literal ENC[...] string and hashed as one, and the
 # MAC stops the document. The interop half below is what says so.
+#
+# docs/adr/0046 closed that with a GUARD on the write path, and this file
+# pinned the guard. docs/adr/0049 made _decrypt_tree rule-first instead and the
+# guard came out, so the pins have moved to what refuses these documents now --
+# which is the MAC, in decrypt, exactly where sops refuses them. Nothing about
+# the DAMAGE moved, and that is what the assertions are still mostly about:
 #
 # What this file pins is the PLAINTEXT ON DISK, not the exit code. The exit
 # code was the least of it: the damage is the secret in the file.
@@ -37,21 +44,30 @@ my ($PUBLIC, $SECRET) = Crypt::Age->generate_keypair();
 # answer two of the rows below with exit 25 instead of 51.
 my @SECRETS = qw( topsecret hunter2 first-token second-token );
 
-# The rule shapes, the number of encrypted leaves each of them excludes, the
-# path the refusal has to name first, and what sops answers for the same
-# document. All measured against sops 3.13.3 on 2026-08-21.
+# The rule shapes and what sops answers for the same document. All measured
+# against sops 3.13.3 on 2026-08-21.
 #
 # 51 is the MAC mismatch: the ENC[...] string went into the digest verbatim.
 # 25 is the other direction of the same disagreement, reached first by sops's
 # walk in those two rows -- `note_unencrypted` is bare and those rules select
-# it, so sops tries to decrypt the literal `public`. That direction writes no
-# secret out and is NOT refused here; see karr #160.
+# it, so sops tries to decrypt the literal `public`.
+#
+# Since docs/adr/0049 the exit code is the whole of what distinguishes the
+# rows HERE too, which is why it is what the expectations below are keyed off:
+# a row sops answers 51 fails our MAC, and a row sops answers 25 is refused at
+# the leaf by the same walk that refuses it there. Neither is order-dependent:
+# only one branch of _decrypt_tree croaks, so a document holding a bare leaf
+# the rule selects stops there whatever order the hash is walked in.
+my %REFUSAL = (
+    51 => qr/MAC verification failed/,
+    25 => qr/rule says this value is encrypted/,
+);
 my @RULES = (
-    [ 'encrypted_regex: "^nothing$"', 'encrypted_regex',    '^nothing$', 4, 'api_key',     51 ],
-    [ 'encrypted_suffix: _nope',      'encrypted_suffix',   '_nope',     4, 'api_key',     51 ],
-    [ 'unencrypted_regex: "."',       'unencrypted_regex',  '.',         4, 'api_key',     51 ],
-    [ 'unencrypted_suffix: word',     'unencrypted_suffix', 'word',      1, 'db:password', 25 ],
-    [ 'unencrypted_suffix: s',        'unencrypted_suffix', 's',         2, 'tokens',      25 ],
+    [ 'encrypted_regex: "^nothing$"', 'encrypted_regex',    '^nothing$', 51 ],
+    [ 'encrypted_suffix: _nope',      'encrypted_suffix',   '_nope',     51 ],
+    [ 'unencrypted_regex: "."',       'unencrypted_regex',  '.',         51 ],
+    [ 'unencrypted_suffix: word',     'unencrypted_suffix', 'word',      25 ],
+    [ 'unencrypted_suffix: s',        'unencrypted_suffix', 's',         25 ],
 );
 
 ###############################################################################
@@ -59,7 +75,7 @@ my @RULES = (
 ###############################################################################
 subtest 'rotate refuses every rule shape, and leaves the file untouched' => sub {
     for my $rule (@RULES) {
-        my ($line, $field, $pattern, $count, $first, undef) = @$rule;
+        my ($line, undef, undef, $exit) = @$rule;
 
         my $dir  = tempdir(CLEANUP => 1);
         my $file = "$dir/secrets.yaml";
@@ -70,19 +86,15 @@ subtest 'rotate refuses every rule shape, and leaves the file untouched' => sub 
             File::SOPS->rotate(file => $file, identities => [ $SECRET ])
         };
 
-        like $err, qr/\ARefusing to rotate '\Q$file\E'/,
-            "$line: rotate refuses";
+        like $err, $REFUSAL{$exit},
+            "$line: rotate refuses, the way sops does (exit $exit)";
 
-        # WHAT does not fit: the leaf, and the rule that disagrees with it.
-        # A bare "refused" would leave the caller to guess which of the two
-        # they wrote wrongly.
-        like $err, qr/\Q$first\E/,
-            "  and names the leaf ($first)";
-        like $err, qr/\Q$field: $pattern\E/,
-            "  and names the rule that excludes it";
-        like $err, $count == 1 ? qr/one of its values is encrypted/
-                               : qr/\b$count of its values are encrypted/,
-            "  and says how many ($count)";
+        # ONE mechanism refuses these, and it is the one sops refuses them
+        # with. docs/adr/0046's guard sat in front of it and named the leaf;
+        # anything still saying so would mean the guard, or something shaped
+        # like it, had come back.
+        unlike $err, qr/Refusing to rotate/,
+            '  and it is not a guard beside the round trip that says so';
 
         # The point of the whole ticket.
         my $after = slurp($file);
@@ -115,8 +127,9 @@ subtest 'edit refuses the same document without opening the editor' => sub {
         );
     };
 
-    like $err, qr/\ARefusing to edit '\Q$file\E'/, 'edit refuses';
-    like $err, qr/Editing re-encrypts the document/, 'in its own words';
+    like $err, qr/MAC verification failed/, 'edit refuses';
+    unlike $err, qr/Refusing to edit/,
+        'on the MAC, in the decrypt it does first, not on a guard of its own';
     ok !-e $marker,
         'the editor never ran -- refusing after it would throw away the edit';
 
@@ -152,24 +165,28 @@ subtest 'a rule that reproduces the document still rotates and still edits' => s
 };
 
 ###############################################################################
-# 4. The other direction is NOT refused -- an open divergence, karr #160
+# 4. The other direction, INVERTED by docs/adr/0049
 ###############################################################################
-subtest 'a bare leaf the rule selects is still encrypted silently' => sub {
+subtest 'a bare leaf the rule selects is refused, not encrypted silently' => sub {
     # The mirror image: the rule says encrypt, the document holds the value
-    # bare. Nothing is written out in plaintext -- a readable value is
-    # ENCRYPTED instead -- so it is outside what this guard refuses. sops
-    # refuses it at exit 25 (pinned in the interop half). When _decrypt_tree
-    # becomes rule-driven (karr #160) this subtest is what has to change.
+    # bare. Until karr #160 this subtest pinned the divergence rather than the
+    # fix -- rotate went through at exit 0 and the readable value came back
+    # ENCRYPTED, under a data key the caller may not keep -- and it said in so
+    # many words that a rule-driven _decrypt_tree was what had to change it.
+    # It did. sops refuses this document at exit 25 (pinned in the interop
+    # half) and so do we now, out of the same walk.
     my $dir  = tempdir(CLEANUP => 1);
     my $file = "$dir/secrets.yaml";
-    write_bytes($file, with_rule(base_document(), 'encrypted_regex: "."'));
+    my $doc  = with_rule(base_document(), 'encrypted_regex: "."');
+    write_bytes($file, $doc);
 
-    is exception {
+    like exception {
         File::SOPS->rotate(file => $file, identities => [ $SECRET ])
-    }, undef, 'rotate does NOT refuse it (divergence, karr #160)';
+    }, qr/\Anote_unencrypted: .*rule says this value is encrypted/s,
+        'rotate refuses it, at the path of the leaf that disagrees';
 
-    like slurp($file), qr/note_unencrypted: ENC\[AES256_GCM/,
-        'the readable value comes back encrypted, quietly';
+    is slurp($file), $doc,
+        'and the readable value is still readable, in a file left as it was';
 };
 
 ###############################################################################
@@ -191,7 +208,7 @@ SKIP: {
         local $ENV{SOPS_AGE_KEY_FILE} = "$dir/key.txt";
 
         for my $rule (@RULES) {
-            my ($line, undef, undef, undef, undef, $expected) = @$rule;
+            my ($line, undef, undef, $expected) = @$rule;
             my $file = "$dir/probe.yaml";
             my $doc  = with_rule(base_document(), $line);
             write_bytes($file, $doc);

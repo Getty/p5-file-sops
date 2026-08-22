@@ -99,6 +99,13 @@ my $DEEP_ALIASED = YAML::XS::Load($ALIAS_CHAIN);
 my $DEEP_PLAIN   = chain(265);
 
 my $META = File::SOPS::Metadata->new;
+
+# Since docs/adr/0049 the decrypt walk is RULE-driven: a leaf the rule selects
+# must be an ENC[...] string, and a bare one is refused at its path. The
+# fixtures below are plaintext, so _decrypt_tree needs a rule that selects
+# nothing -- otherwise this file measures that refusal instead of the recursion
+# noise it is about. karr #160.
+my $LITERAL = File::SOPS::Metadata->new(unencrypted_regex => '.');
 my $KEY  = "\0" x 32;
 
 # Every recursive walk in File::SOPS, by the name it has in the source, called
@@ -114,7 +121,7 @@ my @WALKS = (
     [ '_encrypt_tree'
         => sub { File::SOPS::_encrypt_tree($_[0], $KEY, $META, []) } ],
     [ '_decrypt_tree'
-        => sub { File::SOPS::_decrypt_tree($_[0], $KEY, $META, []) } ],
+        => sub { File::SOPS::_decrypt_tree($_[0], $KEY, $LITERAL, []) } ],
     [ '_document_leaves'
         => sub { File::SOPS::_document_leaves($_[0], $_[0], [], []) } ],
 );

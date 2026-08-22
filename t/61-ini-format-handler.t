@@ -290,8 +290,8 @@ subtest 'every walk that builds a path asks the same question' => sub {
     write_file("$tempdir/misruled.ini", $misruled);
     like(exception(sub {
         File::SOPS->rotate(file => "$tempdir/misruled.ini", identities => [$secret])
-    }), qr/Refusing to rotate/,
-        'a rule that excludes the section itself is still refused');
+    }), qr/MAC verification failed/,
+        'a rule that excludes the section itself now fails the MAC (docs/adr/0049)');
 };
 
 ###############################################################################
