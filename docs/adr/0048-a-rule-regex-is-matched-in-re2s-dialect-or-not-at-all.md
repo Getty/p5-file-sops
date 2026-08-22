@@ -119,14 +119,19 @@ rejects, and Perl accepts:
 - lookahead `(?=`, `(?!`; lookbehind `(?<=`, `(?<!`
 - backreferences `\1`..`\9` and `(?P=name)`
 - atomic groups `(?>`; possessive quantifiers `*+`, `++`, `?+`, `{n,m}+`
-- the escapes `\Z \K \G \R \h \H \V \N \X \c \e \o \u \l \U \L`, and `\b`
-  **inside a character class** (where it is BACKSPACE, not a boundary)
+- the escapes `\Z \K \G \R \h \H \V \N \X \c \e \o \u \l \U \L`, `\g`, `\k`,
+  and `\b` **inside a character class** (where it is BACKSPACE, not a
+  boundary)
 - `(?#comment)`, `(?|branch reset)`, `(?{code})`, `(?R)`, `(?1)`, `(?&n)`,
   `(?'name'...)`, `(?^flags)`
 - the flags RE2 has no letter for: `x`, `a`, `d`, `l`, `u`, `n`, `p`
 
-and, in the other direction, what RE2 accepts and **Perl** rejects: `(?U)`,
-`\C`, `\g`, `\k`. Both dialects take `\w \d \s \b \A \z`, `\p{...}`, `\pL`,
+The escape `\C` is refused by RE2 and refused by Perl (`\C no longer
+supported in regex`), so it is not a divergence and belongs in the default
+"both refuse" class rather than in either list.
+
+and, in the other direction, what RE2 accepts and **Perl** rejects: `(?U)`
+alone. Both dialects take `\w \d \s \b \A \z`, `\p{...}`, `\pL`,
 `\P{...}`, `[[:alpha:]]`, `[[:^alpha:]]`, `(?i) (?m) (?s)`, `(?i-s:...)`,
 `(?P<name>)`, `(?<name>)`, the lazy quantifiers, `\0`-octal, `\x{}` and every
 punctuation escape.
