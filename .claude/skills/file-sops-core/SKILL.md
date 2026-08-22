@@ -159,10 +159,36 @@ only when defined. `version` defaults to `3.7.3`.
 
 Encryption rules: `unencrypted_suffix` (default `_unencrypted`) marks keys that are
 **not encrypted but still hashed into the MAC**; `encrypted_suffix`,
-`unencrypted_regex` and `encrypted_regex` are parsed and stored but drive only
-`should_encrypt_key`. Note the asymmetry in the tree walk: `_encrypt_tree` consults
-`should_encrypt_key`, `_decrypt_tree` does not — decryption is driven purely by whether
-a leaf matches `ENC[...]`.
+`unencrypted_regex` and `encrypted_regex` are the other three. `should_encrypt_key`
+answers for one key, `should_encrypt_path` for a whole path — the second is the one
+the walks ask.
+
+**The rule decides what a leaf *is*, in both directions (ADR 0049, since 0.003).**
+`_encrypt_tree` and `_decrypt_tree` both consult `should_encrypt_path`, and the leaf's
+own text gets no vote. This *reversed* the asymmetry this document described for most
+of its life — decryption used to be driven purely by whether a leaf matched `ENC[...]`
+— so anything you remember about ENC-driven decryption is out of date. Two
+consequences, both measured against sops and both caller-visible:
+
+- A leaf the rule **excludes** is a literal value whatever it spells. An `ENC[...]`
+  string there is *not* decrypted, and the digest covers that text rather than the
+  value behind it — so a document whose rule excludes an encrypted leaf fails its own
+  MAC, exactly as sops fails it (exit 51).
+- A leaf the rule **selects** must be encrypted; a bare one is refused at its path
+  (sops: exit 25). Four shapes stay bare because sops leaves them alone: an `undef`,
+  an empty string, a comment, and an empty list or mapping.
+
+Because both walks now ask the same predicate, a path component one adds and the other
+does not is a document this library writes and then cannot read. That is why
+`_adds_no_path_component` exists and why every walk that builds a path goes through it.
+
+**The two regex rules are matched in RE2's dialect, not Perl's (ADR 0048/0051).** A
+pattern RE2 cannot compile matches *nothing* on the **read** path — sops discards the
+compile error, so that answer is reproducible and is reproduced — and is refused on the
+**write** path, where handing a caller "matches nothing" for `encrypted_regex` would put
+every secret on disk in plaintext at exit 0. A pattern both dialects compile and read
+*differently* (`\v`, `\Q`, `\E`), or one Perl cannot compile at all (`(?U)`), is
+refused everywhere: there is no sops answer to reproduce.
 
 ## Verification — read this before saying "tests pass"
 
@@ -177,11 +203,15 @@ structures. It finds a binary via `$SOPS_BIN`, then `PATH`, then `/tmp/sops`, an
 skips when none of the three yields one. A `$SOPS_BIN` that is set but not executable
 is a hard failure, not a fall-through to something nobody chose.
 
-**Check the run, not the summary.** With sops on `PATH` the suite is 122 tests; without
-it, 105 and a skip notice. `All tests successful` at 105 means the compatibility
-assertions did not execute — that is exactly how two releases shipped a library whose
-every YAML file sops rejected. When the test runs it prints the binary and version it
-used; quote that when you claim compatibility.
+**Check the run, not the summary.** `t/04-interop.t` is no longer the only file that
+drives the binary — most files added since `t/34` do — so a missing binary now quietly
+subtracts hundreds of assertions from the whole suite, not twenty from one file.
+Measured 2026-08-22: **1325 tests with the binary, 1107 without**, and the run reports
+`All tests successful` either way. That gap is the entire compatibility proof, and it
+does not announce itself. `ls -l /tmp/sops` before you believe a green run. This is
+exactly how two releases shipped a library whose every YAML file sops rejected. When
+the test runs it prints the binary and version it used; quote that when you claim
+compatibility.
 
 If a binary is missing, `maint/fetch-sops` installs the pinned version (needs a Go
 toolchain). A release without a real interop run is a release of untested compatibility
@@ -189,11 +219,13 @@ claims.
 
 ## Deliberate gaps
 
-`CLAUDE.md` is the original design document and describes more than exists. Not
-implemented today: the ENV and INI format handlers (karr #36, #37), and every
-backend other than age — PGP, KMS, GCP KMS, Azure KV, Vault (karr #39; the
-metadata fields for them exist and round-trip, the encryption does not). Treat
-that file as a roadmap, not as a description of the code.
+`CLAUDE.md` is the original design document and still describes a little more than
+exists. Not implemented today: every backend other than age — PGP, KMS, GCP KMS,
+Azure KV, Vault (karr #39; the metadata fields for them exist and round-trip, the
+encryption does not), and that gap is **parked on a maintainer decision**, not merely
+undone. All four format handlers exist: YAML, JSON, ENV/dotenv (karr #36) and INI
+(karr #37), the last two since 2026-08-21. Treat `CLAUDE.md` as a roadmap, not as a
+description of the code.
 
 `.sops.yaml` creation rules **do** exist now (`creation_rules_for`, karr #38). Two
 things about them are easy to get wrong: `path_regex` matches the path relative to

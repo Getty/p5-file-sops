@@ -3,21 +3,31 @@
 Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
 > **Status of this file:** it is the original *design document*, kept as the roadmap.
-> What still does not exist: **ENV and INI format handlers** (karr #36, #37) and
-> **every backend beyond age** — PGP, AWS KMS, GCP KMS, Azure KV, Vault (karr #39;
-> their metadata fields already round-trip, only the wrapping is missing).
-> Implemented since: `encrypt_in_place`, `edit`, and `.sops.yaml` creation rules
+> What still does not exist: **every backend beyond age** — PGP, AWS KMS, GCP KMS,
+> Azure KV, Vault (karr #39; their metadata fields already round-trip, only the
+> wrapping is missing), and that one is *parked* on a maintainer decision rather
+> than merely undone.
+> Implemented since: `encrypt_in_place`, `edit`, `.sops.yaml` creation rules
 > (`creation_rules_for`, karr #38 — with one deliberate divergence from sops,
-> confirmed by the maintainer and recorded in ADR 0007).
+> confirmed by the maintainer and recorded in ADR 0007), and **all four format
+> handlers** — the ENV/dotenv one (karr #36) and the INI one (karr #37) both
+> landed on 2026-08-21, so `format => 'env'` and `format => 'ini'` are no longer
+> roadmap anywhere below.
 > The description of what exists lives in skill `file-sops-core`; the POD in
 > `lib/File/SOPS.pm` is the contract.
 >
-> **The ADRs are the second contract, and there are now 30 of them.** They are not
+> **The ADRs are the second contract, and there are now 52 of them.** They are not
 > background reading: several record deliberate divergences and refusals that look
 > like bugs until you find the measurement behind them. Before changing anything in
 > `Format::YAML::parse`, in the walks in `SOPS.pm`, or in `assert_representable`,
 > read what already decided that ground — ADR 0023 to 0030 are all from a single
 > night of work and all sit in exactly those three places.
+>
+> **Two of them decide what a value *is* and are newer than most of this file.**
+> ADR 0049: a leaf is decrypted because the encryption rule says so, not because
+> it looks encrypted — the same predicate now runs on the way out as on the way
+> in. ADR 0051: a rule regex RE2 cannot compile matches *nothing* on the read
+> path, the way sops matches it, and is refused only for writing.
 
 ## Delegation
 
@@ -119,7 +129,7 @@ use File::SOPS;
 my $encrypted = File::SOPS->encrypt(
     data       => { password => 'secret', user => 'admin' },
     recipients => ['age1...'],  # age public keys
-    format     => 'yaml',       # yaml, json; env and ini are roadmap
+    format     => 'yaml',       # yaml, json, env, ini
 );
 
 # Decrypt
@@ -240,7 +250,8 @@ cannot re-wrap.
 
 ## Files
 
-`ENV.pm` and `INI.pm` do not exist (karr #36, #37); everything else under `lib/` does.
+Everything under `lib/` below exists, `ENV.pm` and `INI.pm` included (karr #36, #37,
+both landed 2026-08-21).
 The `t/` layout below was the sketch — the real suite is listed by `ls t/` and is
 well past 40 files, and `t/04-interop.t` is **no longer** the only one that talks
 to the sops binary: most files added since t/34 drive it directly, which is why
@@ -252,22 +263,26 @@ lib/
 │   ├── SOPS.pm                 # Main interface
 │   └── SOPS/
 │       ├── Encrypted.pm        # Encrypted value parsing/generation
+│       ├── Comment.pm          # a sops comment is a leaf of its own (ADR 0041)
 │       ├── Metadata.pm         # SOPS metadata handling
 │       ├── Metadata/
 │       │   └── Flat.pm         # the sops_age__list_0__map_enc encoding
 │       ├── Format/
 │       │   ├── YAML.pm
 │       │   ├── JSON.pm
-│       │   ├── ENV.pm          # roadmap
-│       │   └── INI.pm          # roadmap
+│       │   ├── ENV.pm          # dotenv
+│       │   ├── ENV/
+│       │   │   └── Ordered.pm  # the order-preserving reparse (ADR 0036)
+│       │   └── INI.pm
 │       └── Backend/
 │           └── Age.pm          # age encryption backend
 ```
 
-`Metadata/Flat.pm` is the one file here with no caller: it is the flat metadata
-wire format ENV and INI carry the `sops` section in, built and measured against
-the binary ahead of either handler so that the two cannot build it twice and
-drift (karr #75, ADR 0022).
+`Metadata/Flat.pm` was built and measured against the binary **ahead of** either
+flat handler, so that ENV and INI could not build the same wire format twice and
+drift (karr #75, ADR 0022). That bet paid: both now load it, one with
+`prefix => 'sops_'` and one with `prefix => ''`, which is the whole difference
+between a dotenv `sops` section and an INI `[sops]` one.
 
 ## References
 
