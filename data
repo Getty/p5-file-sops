@@ -1,0 +1,38 @@
+---
+claimed_at: 2026-08-22T04:59:26Z
+claimed_by: api-171
+class: standard
+completed: 2026-08-22T16:03:43Z
+created: 2026-08-21T11:53:43Z
+id: 171
+priority: high
+started: 2026-08-22T04:36:54Z
+status: done
+tags:
+- rules
+- interop
+- api
+title: should_encrypt_path's RE2 refusal now reaches decrypt and extract
+updated: 2026-08-22T16:03:43Z
+---
+
+Split out of karr #160 (docs/adr/0049), which made _decrypt_tree consult should_encrypt_path. That closes a read path ADR 0048 deliberately kept open.
+
+ADR 0048 refuses a rule regex the two dialects do not share, AT THE POINT OF USE, and section 3 lists the paths that stay open: "Metadata->from_hash still reads such a rule, so a document carrying one can still be decrypted and extracted -- neither consults the rule -- and the rescue path out of a damaged file stays open." Both consult it now.
+
+MEASURED (sops 3.13.3, 2026-08-21): a document whose sops section carries
+  unencrypted_regex: "(?=foo)"
+is read by `sops -d` at EXIT 0. sops discards the RE2 compile error, so the rule matches nothing, every value is selected, and every value is decrypted. Before karr #160 this library read it too (measured, same document, value returned). It now refuses it with ADR 0048s message.
+
+Nothing is written and nothing leaks -- it is a refusal, the safest failure mode -- but it is an ordinary sops document this library used to read, and `sops -e --unencrypted-regex "(?=foo)"` produces one silently.
+
+Two ways out, both rule POLICY and therefore this lane rather than the wire lane:
+
+  (a) A lenient mode on should_encrypt_path for the READ path only, where a pattern RE2 cannot COMPILE matches nothing, exactly as it does at sops. Measured to be correct. The cost is a second answer out of the one predicate that _encrypt_tree, _compute_mac, mac_only_encrypted and _decrypt_tree all share.
+  (b) Move ADR 0048s refusal out of _rule_qr and onto the write path explicitly, which is what ADR 0048 section 3 already says it is ("encrypt, encrypt_file, encrypt_in_place, rotate and edit stop"). Then should_encrypt_path has ONE answer everywhere -- sops answer -- and the refusal is a guard of its own.
+
+Note the split either way: a pattern RE2 cannot compile is reproducible ("matches nothing"). A pattern both dialects COMPILE and read DIFFERENTLY (\v, \Q..\E) or that Perl cannot compile at all ((?U), \C, \g, \k) is not, and must stay refused on the read path too.
+
+2026-08-22 04:59 docs/adr/0051: the refusal moves off the match and onto the write path. _rule_qr returns a matches-nothing matcher for a pattern RE2 cannot compile (sops own answer, discarded compile error), so decrypt/decrypt_file/extract read such a document at exit 0 exactly as sops -d does. Refused on BOTH paths still: 'different' (\v \Q \E) and 'perl' ((?U)). New Metadata->assert_rule_regexes_agree is the write guard, called from _assert_rules_supported plus rotate and edit ahead of their decrypt. t/66 new: 27 assertions red in 6/11 subtests vs 085773e. t/62 subtest 3 inverted by one line (should_encrypt_path -> assert_rule_regexes_agree), rows and wording unchanged. prove -lr t/ 67 files 1325 tests PASS; SOPS_BIN=/tmp/sops prove -l t/04-interop.t RAN 32/32 vs sops 3.13.3.
+
+REVIEW (Hauptagent, 2026-08-22): selbst gegen sops 3.13.3 gemessen. Dokument mit unencrypted_regex "(?=foo)", von sops -e geschrieben: sops -d exit 0 -- und File::SOPS->decrypt liefert jetzt dieselben Werte, extract ebenso. Schreibpfad refused mit der ADR-0048-Meldung, in encrypt (SOPS.pm:2951) wie in rotate (SOPS.pm:1653). Die Asymmetrie aus ADR 0051 ist damit real und in beide Richtungen belegt.
