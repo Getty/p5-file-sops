@@ -1,0 +1,351 @@
+---
+class: standard
+created: 2026-08-16T16:33:20Z
+depends_on:
+- 69
+id: 70
+priority: high
+status: todo
+tags:
+- coordination
+- planning
+title: 'Coordination: order of work, what is ready, and what must not be started yet'
+updated: 2026-08-22T16:07:10Z
+---
+
+Koordinationsticket. NEU GESCHRIEBEN 2026-08-22 vom Orchestrator, gegen HEAD
+085773e. Die Fassung vom 2026-08-21 beschrieb Phasen A bis E, die inzwischen
+alle beantwortet, erledigt oder ausdruecklich geparkt sind -- sie taugte als
+Wegweiser nicht mehr. Was von ihr weiter gilt, steht unten unter VERLAUF und
+REGELN; die dortigen Messwerte und Warnungen sind woertlich uebernommen.
+
+Wer das hier uebernimmt, liest zuerst .claude/rules/file-sops-rules.md. Die
+Lane-Regel gilt: behavior-relevanter Code wird delegiert, nicht selbst
+angefasst. Jedes genannte Ticket hat seinen eigenen Plan im Body -- dieses hier
+sagt nur, WAS WANN, WAS PARALLEL, WAS NICHT und WAS NUR DER MAINTAINER
+ENTSCHEIDET.
+
+================================================================
+UMGEBUNG -- und hier hat sich etwas Unangenehmes geaendert
+================================================================
+DAS SOPS-BINARY WAR WEG. Beim Start der Sitzung vom 2026-08-22 gab es
+/tmp/sops nicht mehr; /tmp war geleert worden. Die Folge ist genau das
+Fehlerbild, vor dem die Hausregeln warnen und das man nicht sieht, wenn man
+nicht hinsieht: `prove -lr t/` meldete "All tests successful" und hatte dabei
+t/04-interop.t und jeden interop-gegateten Subtest STILL uebersprungen -- 65
+Dateien, 1107 Tests statt 1306.
+
+Wiederhergestellt (sops 3.13.3, GitHub-Release, nach /tmp/sops). Gemessen
+danach auf 085773e bei sauberem Arbeitsbaum, beide Zeilen ausgefuehrt:
+
+  SOPS_BIN=/tmp/sops prove -lr t/                65 Dateien, 1306 Tests, PASS
+  SOPS_BIN=/tmp/sops prove -l t/04-interop.t     32/32 PASS
+
+DIE LEHRE, und sie gehoert an den Anfang jeder Sitzung: /tmp ueberlebt keinen
+Neustart und keine Aufraeumung. Wer hier arbeitet, PRUEFT ZUERST `ls -l
+/tmp/sops` und `/tmp/sops --version`. Die Differenz zwischen 1107 und 1306
+Tests ist der ganze Interop-Beweis dieser Distribution, und sie meldet sich
+nicht von selbst. Alle Messwerte auf diesem Board gelten gegen 3.13.3; eine
+andere Version macht sie still wertlos.
+
+================================================================
+WAS IN HEAD IST UND NICHT ABGENOMMEN -- der Review-Stapel
+================================================================
+Drei Tickets stehen auf 'review'. Alle drei sind implementiert, getestet und
+committet. Was fehlt, ist ausschliesslich die Abnahme des Maintainers, und bei
+zweien ist das keine Formalie, weil sie BEHAVIOUR CHANGES sind.
+
+  #160  BEHAVIOUR CHANGE, Commit 085773e, docs/adr/0049.
+        Ein Leaf wird entschluesselt, weil die REGEL es sagt, nicht weil es
+        verschluesselt AUSSIEHT. _decrypt_tree fragt should_encrypt_path wie
+        _encrypt_tree es tut; der Text des Leafs hat keine Stimme mehr. Damit
+        faellt der Guard aus docs/adr/0046 weg (rotate/edit sagen kein
+        "Refusing to rotate" mehr) und beide Richtungen der alten Asymmetrie
+        fallen aus dem MAC statt aus einer Wache daneben. Korpus: 208
+        Dokumente, 4 Formate, Uneinigkeit mit dem Binary 91 -> 0.
+  #159  NEW DIAGNOSTIC, Commit c1e207f, docs/adr/0050. Ein PLAIN
+        lastmodified wird gewarnt, nicht abgelehnt -- weil rotate so eine
+        Datei noch reparieren kann und eine Refusal genau das wegnaehme.
+  #148  MEASURED, NOT IMPLEMENTED, ebenfalls in c1e207f. Ein Kommentar ueber
+        einem Mapping-Key bleibt verloren. Die Begruendung ist staerker als
+        der Ticketkoerper: YAML::PPs PARSER haelt den Text zwar (EOL-Tokens),
+        aber es gibt im Perl-Hash keinen Platz, an den ein solcher Kommentar
+        gehoerte, und YAML::XS wie YAML::PP::Emitter koennen ueberhaupt keinen
+        Kommentar emittieren. Kein Lane-Handoff, eine Wand.
+
+#160 und #159 gemeinsam abnehmen oder gemeinsam zurueckweisen ist NICHT
+noetig -- sie haengen nicht aneinander. #148 ist eine Feststellung und kostet
+nur ein Ja.
+
+================================================================
+DIE EINE OFFENE MAINTAINER-ENTSCHEIDUNG: DER RELEASE-SCHNITT
+================================================================
+Sie steht seit dem 2026-08-16 offen und das Argument ist seither in jeder
+Sitzung staerker geworden. Der Stand am 2026-08-22:
+
+  * {{$NEXT}} in Changes hat 116 Eintraege. 0.002 ist vom 2026-02-22.
+  * $VERSION steht auf 0.003, getaggt ist 0.002 -- 0.002 ist weiter die
+    Version auf CPAN.
+  * 50 ADRs, davon 42 seit dem letzten Release.
+  * Darunter mehrere BEHAVIOUR CHANGES und die Aenderungen, die diese
+    Bibliothek zum ersten Mal Dokumente lesen lassen, die sops schreibt
+    (#102, #105, #108) -- und jetzt #160, das das Modell dahinter geradezieht.
+  * GitHub-Issue #1 (Test failures auf perl 5.32, gefixt in 11658c3) wartet
+    auf genau dieses Release.
+
+DARAN HAENGT #126, und es ist die kleinere Haelfte derselben Frage:
+origin/main ist inzwischen 83 Commits zurueck. Jeder in POD eingewobene
+`L<docs/adr/NNNN|https://github.com/...>`-Link auf eine ADR nach 0008 liefert
+heute 404 -- empirisch bestaetigt, nicht vermutet. Ein CPAN-Release wuerde das
+so ausliefern. Der Push nach origin ist die Loesung und ist nach aussen
+gerichtet, also ebenfalls eine Maintainer-Entscheidung, nicht die eines
+Agenten.
+
+`dzil release` und jeder CPAN-Upload bleiben ohne ausdrueckliche Zustimmung
+STRIKT VERBOTEN -- auch wenn ein Plan "release" als naechsten Schritt nennt.
+Vor einem Release gehoert file-sops-release-checker drueber; die fehlende
+LICENSE war genau die Sorte Fund, die dort hingehoert.
+
+================================================================
+WAS GERADE LAEUFT (2026-08-22)
+================================================================
+  #171 + #166 + #163   api-Lane, in-progress, claim api-171.
+       Alle drei fassen lib/File/SOPS.pm und lib/File/SOPS/Metadata.pm an und
+       sind deshalb EIN Auftrag. #171 ist eine LESE-REGRESSION aus #160: seit
+       _decrypt_tree die Regel fragt, erreicht die RE2-Refusal aus ADR 0048
+       auch decrypt und extract, und ein gewoehnliches sops-Dokument mit einem
+       Pattern, das RE2 nicht kompiliert, wird hier abgelehnt, obwohl
+       `sops -d` es bei Exit 0 liest.
+  #170   test-Lane, in-progress, claim test-170. Nur xt/, keine Beruehrung
+       mit der api-Lane.
+
+================================================================
+DIE NAECHSTEN AUFTRAEGE, in dieser Reihenfolge
+================================================================
+Gruppiert nach dem, was sie bewegen, nicht nach Lane-Namen. Der Engpass ist
+wie immer die Datei.
+
+GRUPPE 1 -- die Kommentar-Nachlese aus ADR 0041/0045/0047/0049. Zusammen
+vergeben, ein Agent, Wire-Lane, weil alle vier dasselbe Datenmodell anfassen:
+  #172  low   INI-Kommentarbucket an ausgeschlossenem Pfad verliert seine
+              Form bei der Re-Encryption. Nur ueber ignore_mac erreichbar.
+              Der Digest ist bereits richtig -- es ist die FORM des Baums.
+  #173  low   sops warnt bei einem Klartext-Kommentar im verschluesselten
+              Slot, wir sagen nichts. Entscheidung: carp oder nicht.
+  #168  low   ZUERST NEU MESSEN. Der Koerper stammt von vor #160, und
+              _wire_comment_reads_as_a_comment fasst genau diese Frage an.
+              Gut moeglich, dass das Ticket erledigt oder anders ist.
+  #169  low   Ein Mapping-Kommentar geht still verloren, ein
+              Sequenz-Kommentar wird laut abgelehnt. Haengt inhaltlich an
+              #148 und ist dessen kleinere, loesbare Haelfte.
+
+GRUPPE 2 -- die RE2-Nachlese, NACH der api-Lane oben, weil dieselben Dateien:
+  #164  medium  Zwei RE2-Detektoren, der eine ist der schmale Vorfahr des
+                anderen. Ein path_regex mit atomarer Gruppe oder possessivem
+                Quantor geht hier durch und bedeutet bei sops etwas anderes.
+  #165  medium  Drei gemessene Divergenzen ueberleben ADR 0048. Eine davon
+                ist die Richtung SECRET-BARE (volle Fallfaltung, U+00DF).
+                Entscheidung, ob eine davon es wert ist.
+
+GRUPPE 3 -- die Interop-Lesefehler, die Klasse von #102/#105/#108. Das ist
+die Gruppe mit dem hoechsten Nutzen pro Aufwand, weil jedes Ticket eine Datei
+betrifft, die sops schreibt und wir nicht lesen (oder umgekehrt). Einzeln
+vergeben, jedes mit Messung zuerst:
+  #127  medium  Eine Zahl mit fuehrender Null ist 493 fuer sops und 755 hier.
+                GLEICHES Typlabel, ANDERER Wert -- die stillste Sorte.
+  #136  medium  type:bytes bringt `sops -d` in JEDEM Format zum Absturz.
+                Entscheidung: nachbauen kann man das nicht, also was tun wir.
+  #137  medium  ENV/INI: ein ganzzahliger Float wird als Anzeigeform
+                geschrieben und als Wireform gehasht.
+  #124  medium  ENV: unverschluesselter Boolean lowercase geschrieben,
+                titlecase gehasht -- sops liest seine eigene Datei nicht.
+  #125  medium  ENV: null wird <nil> geschrieben und als "" gehasht.
+  #140  medium  Ein Klartext-Emit schreibt die widerspruechliche
+                String-Haelfte eines nicht-endlichen Floats woertlich.
+  #121, #130, #132, #139, #141, #151, #156, #157  low, dieselbe Klasse oder
+                reine Entscheidungen. Erst wenn die medium-Reihe leer ist.
+
+GRUPPE 4 -- Hausputz, jederzeit einschiebbar, keine Wire-Beruehrung:
+  #120  low  Deep-Recursion-Rauschen ausserhalb SOPS.pm (335 Warnungen im
+             Lauf, gemeldet von t/45).
+  #142  low  should_encrypt_path kostet 1.87us und wird seit #160 nicht mehr
+             zwei-, sondern viermal pro Leaf gefragt. Der Koerper ist damit
+             ueberholt und die Zahl muss neu gemessen werden.
+  #154  low  Soll File::SOPS::Comment eine Moo-Klasse sein.
+
+GRUPPE 5 -- gross, ADR VOR Code, nicht nebenbei:
+  #31   Multi-Document YAML. Die Falle steht im Koerper und wird nicht neu
+        hergeleitet: YAML::XS::Load gibt im Skalarkontext das LETZTE,
+        YAML::PP->load_string das ERSTE Dokument. Beide Seiten muessen im
+        SELBEN Commit umgestellt werden, sonst paart der MAC-Walk die
+        Reihenfolge des einen mit den Werten des anderen -- das faellt nicht
+        auf, es liefert nur einen falschen MAC.
+  #99   Quoting eines True/False-Strings. Braucht einen echten Emitter mit
+        Per-Skalar-Stilkontrolle, den YAML::XS nicht hat. Muss sich gegen ein
+        Korpus der Groesse von ADR 0019 beweisen.
+
+GRUPPE 6 -- BEWUSST NICHT VERGEBEN:
+  #39   Backends jenseits age. Auf ausdrueckliche Maintainer-Entscheidung vom
+        2026-08-21 GEPARKT. Nicht neu bewerten, nicht wieder vorschlagen, bis
+        ein Anwendungsfall da ist. PGP und die drei Cloud-KMS sind out of
+        scope; "not implemented, refuses loudly" ist die vertretbare
+        Dauerantwort, und das LESEN solcher Dokumente deckt der
+        Metadata-Round-Trip heute schon ab.
+
+================================================================
+WAS PARALLEL DARF -- Dateikonflikte entscheiden das, nicht Lanes
+================================================================
+  SOPS.pm + Metadata.pm   #171/#166/#163, danach #164/#165, #142  -> NIE
+                          gleichzeitig
+  Encrypted.pm            #104, #168, #136, #127                  -> NIE
+                          gleichzeitig
+  Format/YAML.pm          #99, #31, #140, #141                    -> NIE
+                          gleichzeitig
+  Format/ENV.pm + INI.pm  #124, #125, #137, #172                  -> teilbar,
+                          aber #137 fasst beide an
+  nur xt/ oder nur docs/  #170, #126, reine Entscheidungen        -> immer
+                          parallel moeglich
+
+Parallel ist sinnvoll fuer MESSEN und ENTSCHEIDEN, nicht fuer das Schreiben.
+Wer trotzdem gleichzeitig implementieren laesst, gibt jedem Agenten einen
+isolierten Worktree -- im gemeinsamen Baum ueberschreiben sie sich. Am
+2026-08-21 liefen bis zu drei Lanes gleichzeitig, nach DATEIEN getrennt, mit
+`git` ausschliesslich beim Orchestrator: kein Konflikt, kein verlorener
+Schreibvorgang. Changes wurde von mehreren Lanes zugleich ergaenzt und hat
+gehalten, weil jede an ihrem eigenen Anker eingefuegt hat.
+
+================================================================
+REGELN, DIE FUER JEDEN GELTEN, DER HIER WEITERMACHT
+================================================================
+1. PRUEF ZUERST DAS BINARY. `ls -l /tmp/sops`. Ohne es meldet die Suite
+   "All tests successful" und hat den halben Beweis uebersprungen. Nenne
+   immer, WELCHE Zeile gelaufen ist -- beide sind hier ausfuehrbar, es gibt
+   also keine Entschuldigung mehr, nur eine zu nennen.
+2. DIE TICKETKOERPER SIND NICHT DIE MESSUNG. Am 2026-08-21 waren drei von
+   ihnen an entscheidender Stelle falsch, und in zwei Faellen haette ein Fix
+   nach Ticketkoerper Schaden angerichtet: #76 behauptete, ein
+   type:comment-Leaf stehe IM DIGEST (tut es nicht, vier Messungen); #104s
+   Anhang behauptete, uint64max sei die Grenze fuer den Float-Weg (ist es
+   nicht); #102 war als Schreibproblem erfasst und ist ein LESEFEHLER. Wer
+   ein Ticket uebernimmt, misst zuerst nach und baut dann. Das Binary liegt
+   da, die Messung ist meistens in Minuten erledigt.
+3. DAS NETZ MUSS ZUERST FALLEN. Ein Test gegen eine Scratch-Kopie laeuft nur
+   dann wirklich gegen die Scratch-Kopie, wenn nichts das echte lib/ wieder
+   hereinholt. `prove -l` tut das. Und ein Messskript mit hartkodiertem
+   `use lib '/home/getty/dev/p5-file-sops/lib'` tut es ebenfalls und
+   ueberstimmt dabei still ein `perl -I`. Beide Male wird das Netz gruen, ohne
+   irgendetwas zu fangen.
+4. Kryptocode nicht im Vorbeigehen aendern. Was falsch aussieht, ist meistens
+   eine bewusste Go-Kompatibilitaetsentscheidung.
+5. Einen Guard nie lockern, um einen Test gruen zu bekommen.
+6. DATEIWEISE STAGEN, nie `git add -A`. Am 2026-08-20 lag uncommittete Arbeit
+   einer PARALLELEN Sitzung an Encrypted.pm im selben Baum; ein `git add -A`
+   haette sie mitgenommen. Aus demselben Grund ist ein Testlauf, der zeitlich
+   mit fremden Schreibvorgaengen zusammenfaellt, KEINE Aussage ueber HEAD.
+7. Kein Handeln an GitHub-Issues ohne ausdrueckliche Anweisung. karr ist das
+   interne Board; GitHub ist der oeffentliche Tracker unter dem Account des
+   Maintainers.
+
+STAND 2026-08-22 (Orchestrator-Sitzung). Vier Commits, HEAD 9a181a1, und zum
+ersten Mal seit langem ist alles GEPUSHT.
+
+DER WICHTIGSTE BEFUND WAR DIE UMGEBUNG, nicht der Code: /tmp/sops war weg,
+/tmp geleert. `prove -lr t/` meldete "All tests successful" mit 1107 statt
+1325 Tests -- t/04-interop.t und jeder interop-gegatete Subtest still
+uebersprungen. sops 3.13.3 wiederhergestellt. Der neue Body oben macht daraus
+Regel 1, weil sich das jederzeit wiederholt.
+
+COMMITTET:
+  085773e  #160  BEHAVIOUR CHANGE, ADR 0049. Rule-first decrypt. Der Guard aus
+                 ADR 0046 faellt weg, beide Richtungen fallen aus dem MAC.
+  96fec05  #171 + #166 + #163  BUG FIX, ADR 0051. Ein Pattern, das RE2 nicht
+                 kompiliert, matcht auf dem LESEPFAD nichts -- wie bei sops --
+                 und wird nur fuer das SCHREIBEN abgelehnt. #171 war eine
+                 Lese-Regression, die 085773e selbst aufgerissen hatte: ADR
+                 0048s Refusal bekam durch die rule-first-Entschluesselung eine
+                 Reichweite, die sie nie haben sollte.
+  4002140  #124 + #125 + #137  ADR 0052, KEIN Code. Alle drei waren von der
+                 SCHREIBSEITE geschrieben, und ihre Schreibhaelfte war seit #36
+                 und #37 erledigt. Die Lesehaelfte, die kein Ticketkoerper
+                 stellte: 27 Skalare x 2 Formate, NULL divergente Zeilen.
+  9a181a1  #170  xt/author/pod-links.t webt die POD jetzt selbst.
+  Gepusht: 808d2ec..9a181a1, 86 Commits. GitHub listet unter docs/adr jetzt 52
+  Dateien statt 8 -- #126 ist damit erledigt und verifiziert.
+
+ABGENOMMEN vom Maintainer: #160, #159, #148 auf done.
+AUF REVIEW und alle in HEAD: #171, #163, #166, #170, #124, #125, #137.
+
+DIE LEHRE DIESER SITZUNG, und sie ist neu: EIN TICKET KANN VON DER FALSCHEN
+SEITE GESCHRIEBEN SEIN. #124, #125 und #137 nannten alle drei eine
+Emitter-Regel als offene Arbeit; die war seit zwei Tagen erledigt, und die
+Frage, die zaehlte -- koennen wir LESEN, was sops schreibt -- stellte keiner
+der drei Koerper. Das ist die Schwester von Regel 2: der Koerper ist nicht die
+Messung, und manchmal ist er nicht einmal die Frage. Der Beleg kostete eine
+halbe Stunde Messung und sparte drei Implementierungen.
+
+ZWEITE LEHRE, aus #171: eine Aenderung, die eine Frage an einer Stelle richtig
+beantwortet, kann eine ANDERE Antwort dorthin tragen, wo sie nichts zu suchen
+hat. 085773e hat den Lesepfad regelgetrieben gemacht -- richtig -- und damit
+ADR 0048s Schreibpfad-Refusal auf den Lesepfad mitgeschleppt. Wer hier etwas
+an einem gemeinsam benutzten Praedikat aendert, geht die Aufrufer durch.
+
+NEUE TICKETS ALS BEFUND, keine Erfindung: #174 (die MAC-Meldung sagt nicht,
+dass sops die Datei selbst nicht lesen kann -- ein blanker MAC-Fehler liest
+sich als UNSER Defekt), #175 (ADR 0048 nennt drei Escapes als von RE2
+akzeptiert, die RE2 in Wahrheit ablehnt -- der Code hatte recht, die Prosa
+nicht), #176 (ein Pattern, das KEIN Dialekt kompiliert, wird hier abgelehnt
+und von sops gelesen).
+
+RELEASE: file-sops-release-checker laeuft, allein und gegen einen sauberen
+Baum -- ein dzil build gegen einen Baum, in den parallel geschrieben wird, ist
+keine Aussage ueber HEAD. dzil build und dzil test sind vom Maintainer
+freigegeben, dzil release und jeder CPAN-Upload NICHT.
+
+STAND 2026-08-22 (Hauptagent, nach eigener Abnahme gegen HEAD 078f4c0):
+
+REVIEW-STAPEL IST LEER. Alle sieben abgenommen und auf done: #124, #125, #137
+(ADR 0052, ohne Codeaenderung), #163, #166, #171 (ADR 0051), #170 (xt/).
+Die drei zuvor hier gelisteten -- #160, #159, #148 -- waren schon vorher
+abgenommen. Es steht nichts mehr auf review.
+
+ABNAHME WAR EIGENSTAENDIG NACHGEMESSEN, nicht aus den Ticketkoerpern
+uebernommen: ENV/INI-Schreibhaelfte 16/16 sops -d exit 0; Lesehaelfte 16/16
+einig inklusive der drei byte-identischen String-Zwillinge; das
+(?=foo)-Dokument liest decrypt/extract bei exit 0 wie sops -d und wird auf
+encrypt und rotate refused; die Refusal traegt keinen Leaf-Pfad mehr;
+xt/author/pod-links.t faellt bei einem mutierten L</...>-Ziel und nennt es.
+
+TESTZAHL AKTUALISIERT: nicht mehr 1306, sondern
+  prove -lr t/                      67 Dateien, 1325 Tests, PASS, KEINE Skips
+  SOPS_BIN=/tmp/sops t/04-interop.t 32/32 PASS
+  prove -lr xt/                     11 Tests, PASS
+Arbeitsbaum sauber, alles committet.
+
+GRUPPE 3 IST GESCHRUMPFT: #124, #125 und #137 sind erledigt und fallen aus
+der medium-Reihe. Offen dort bleiben #127, #136, #140.
+
+VIER NEUE TICKETS seit der letzten Fassung, alle vier Abfall der gerade
+abgenommenen Arbeit und alle vier von mir nachgemessen:
+  #174 medium  api   MAC-Meldung sagt bei ENV/INI nicht, dass sops die Datei
+                     selbst nicht liest. Diagnose-Luecke, kein Fehlverhalten.
+                     Gehoert zu Gruppe 3 im Geist, faellt aber in _verify_mac.
+  #175 medium  docs  ADR 0048 Zeile 128 nennt \C, \g, \k als RE2-akzeptiert.
+                     Selbst gemessen: RE2 lehnt alle drei ab, (?U) ist der
+                     einzige. Nur Prosa, Code ist richtig. BILLIGSTES TICKET
+                     AUF DEM BOARD und es steht in einem Dokument, das seit
+                     ADR 0049 mitentscheidet -- gehoert vor #164/#165.
+  #176 low     api   Ein Pattern, das KEIN Dialekt kompiliert (fo(), wird hier
+                     refused, wo sops liest. Reproduziert. Gehoert zu
+                     Gruppe 2, hinter #164/#165.
+  #178 medium  maint maint/fetch-sops braucht Go, das es hier nicht gibt.
+                     Bestaetigt die UMGEBUNG-Warnung oben mit Werkzeug statt
+                     Text. Punkt 1+2 sind reines maint/, Punkt 3 test-Lane.
+
+REIHENFOLGE-EMPFEHLUNG, geaendert: #175 zuerst (eine Zeile Prosa, entsperrt
+Gruppe 2 sauber), dann Gruppe 2 (#164, #165, danach #176), dann #178 vor der
+naechsten laengeren Sitzung, weil es genau die Falle schliesst, die diesem
+Ticket schon einmal 218 Tests unbemerkt gekostet hat.
+
+DIE RELEASE-ENTSCHEIDUNG STEHT WEITER OFFEN und ist gewachsen: 52 ADRs statt
+50, {{$NEXT}} entsprechend laenger. #126 (origin/main 83+ Commits zurueck,
+ADR-Links liefern 404) haengt unveraendert daran. Beides Maintainer.
