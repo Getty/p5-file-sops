@@ -1,0 +1,115 @@
+---
+claimed_at: 2026-08-22T04:56:50Z
+claimed_by: wire-124
+class: standard
+completed: 2026-08-22T16:02:58Z
+created: 2026-08-21T05:31:05Z
+id: 124
+priority: medium
+started: 2026-08-22T04:41:56Z
+status: done
+tags:
+- wire
+- env
+- mac
+- roadmap
+title: 'ENV: ein unverschluesselter Boolean wird lowercase geschrieben und titlecase
+  gehasht -- sops liest seine eigene Datei nicht'
+updated: 2026-08-22T16:02:58Z
+---
+
+Gemessen an sops 3.13.3 waehrend karr #109 (ENV-Escape auf Datenwerten).
+
+Nachbarbefund, NICHT von #109 behoben -- dort ist er in docs/adr/0030 unter
+"Two neighbouring ENV defects" benannt.
+
+  plaintext yaml:  v_unencrypted: true
+  sops -e --output-type dotenv:
+                   v_unencrypted=true          (lowercase)
+  sops_mac-Klartext (entschluesselt ueber Metadata::Flat -> Metadata ->
+                     Backend::Age -> Encrypted):
+                   28A91492CBD2575E...         = SHA-512("True")
+                                                 NICHT SHA-512("true")
+  sops -d --input-type dotenv:
+                   MAC mismatch, exit 51
+
+Also: der env-Store schreibt die lowercase-Schreibweise und der Digest deckt
+die Go-Titlecase-Schreibweise (Invariante 4, Encrypted::value_to_bytes). Beim
+Lesen ist der env-Store untypisiert, gibt den String "true" zurueck, hasht
+"true" -- und die Datei faellt durch ihren eigenen MAC.
+
+Kontrolle: dasselbe Dokument mit --output-type yaml liest sops fehlerfrei
+zurueck (exit 0). Der Defekt ist also spezifisch fuer den env-Store.
+Ein VERSCHLUESSELTER Boolean in dotenv ist unauffaellig: die Zelle traegt
+type:bool und sops -d liefert exit 0.
+
+WARUM DAS NICHT IN #109 GEHOERT: was UNSER env-Emitter fuer einen Boolean
+schreiben soll, ist die Per-Format-Typpolitik aus karr #77. Innerhalb einer
+Escape-ADR entschieden zu werden haette #77 vorweggenommen.
+
+Die REGEL, unter die der Fall faellt, steht schon: ADR 0008 -- ein Leaf, das
+der Emitter nicht als den Text schreiben kann, den der Digest deckt, wird
+refused. Fuer ENV formuliert ADR 0030 sie; welchen Text unser Emitter
+ueberhaupt schreibt, entscheidet #77.
+
+Lane: wire, gemeinsam mit #77.
+Vorarbeit fuer #36, nicht dringend -- es gibt keinen ENV-Handler.
+ENTSCHIEDEN 2026-08-21 durch karr #77 / docs/adr/0035: unser ENV- und
+INI-Emitter schreibt ein unverschluesseltes Leaf als exakt
+Encrypted->value_to_bytes, also `True` bzw. `False`. Nicht refused.
+Gemessen: der sops_mac-Klartext dieses Dokuments deckt 28A91492... = SHA-512
+("True") -- also GENAU die Bytes, die wir schreiben wuerden. Der Digest
+bewegt sich nicht; nur die eine Zeile, die ihm widersprach, aendert sich.
+Und `v_unencrypted=True` ist eine Zeile, die sops selbst schreibt (fuer den
+String "True") und mit exit 0 liest, in dotenv wie in ini gemessen.
+Kosten, bewusst: der Wert kommt als String "True" zurueck. Das macht sops mit
+JEDEM unverschluesselten Wert im Format so, auch mit denen, die es richtig
+schreibt -- der Reader hat keine Typsyntax. Wer den Typ braucht, nimmt einen
+verschluesselten Slot, dort traegt type:bool ihn und der Round-Trip ist exakt.
+Bleibt offen bis #36/#37 die Regel im Emitter umsetzen. Gepinnt in
+t/50-flat-store-type-policy.t.
+
+GEMESSEN UND GESCHLOSSEN 2026-08-22, wire-124, docs/adr/0052.
+
+SCHREIBHAELFTE: erledigt und selbst nachgemessen, nicht aus dem Ticket
+uebernommen. Beide Handler (karr #36 89d01ee, karr #37 610ec6c) setzen
+ADR 0035 um. File::SOPS->encrypt(format => env|ini) mit bool/undef/1.0/1e20/
+-0.0/42/hello schreibt True, False, (leer), 1, 100000000000000000000, -0, 42,
+hello -- und sops -d liest BEIDE Formate bei exit 0.
+
+LESEHAELFTE, die eigentliche offene Frage, die kein Ticketkoerper stellt:
+27 Skalare x 2 Formate = 54 Dokumente, mit sops -e geschrieben, dann an
+sops -d und an File::SOPS->decrypt gegeben. NULL divergente Zeilen. Es gibt
+keinen Skalar, den sops liest und wir nicht, und keinen, den wir lesen und
+sops ablehnt. Wo sops die Anzeigeform schreibt, lehnt sops seine eigene
+Datei ab (exit 51; exit 25 fuer null im verschluesselten Slot) und wir
+ebenso. Das ist damit NICHT die Klasse von karr #102/#105/#108 -- ADR 0038s
+Diskriminator antwortet NEIN, und dort ist Refusal richtig.
+
+DER BEFUND, DER DEN NAHELIEGENDEN FIX AUSSCHLIESST (neu, in keinem Ticket):
+zu jedem kaputten Wert gibt es einen STRING, dessen Text sops auf dieselben
+Bytes schreibt, und DIESES Dokument liest sops mit exit 0.
+
+  v_unencrypted=<nil>  ist null (exit 51) UND der String "<nil>" (exit 0)
+  v_unencrypted=true   ist bool (exit 51) UND der String "true"  (exit 0)
+  v_unencrypted=1.0    ist 1.0  (exit 51) UND der String "1.0"   (exit 0)
+
+Byte-identische Zeilen, in beiden Formaten. Nur der Digest unterscheidet
+sie, und der ist genau das, was schon widersprochen hat. <nil> beim Lesen
+auf undef abzubilden -- der Fix, zu dem #125s Koerper einlaedt, indem er die
+Bytes benennt -- zerstoert also einen funktionierenden Wert, um eine
+unlesbare Datei zu retten. Verifiziert durch Mutation: dieser Fix laesst
+t/67 Abschnitt 3 fallen UND laesst die kaputte Datei stillschweigend durch.
+
+KEINE CODEAENDERUNG NOETIG. Gepinnt in
+t/67-a-display-form-sops-wrote-is-refused-in-both-stores.t (ENV+INI, alle
+sechs Formen, plus die Mehrdeutigkeit). t/59 pinnte bisher 3 der 6 Formen
+fuer dotenv, t/61 gar keine.
+
+Diagnose-Luecke als karr #174 an die api-Lane abgegeben: die MAC-Meldung
+sagt nicht, dass sops die Datei geschrieben hat und selbst nicht liest.
+_verify_mac liegt in SOPS.pm und gehoert der api-Lane.
+
+2026-08-22 04:56 Erledigt ohne Codeaenderung. Schreibhaelfte durch #36/#37 umgesetzt und nachgemessen; Lesehaelfte gemessen (54 Dokumente, 0 Divergenzen) und korrekt. Entscheidung in docs/adr/0052, gepinnt in t/67. Diagnose-Luecke als #174 an die api-Lane.
+
+REVIEW (Hauptagent, 2026-08-22): unabhaengig nachgemessen, nicht aus dem Ticket uebernommen. Schreibhaelfte: File::SOPS->encrypt(format => env|ini) mit bool/undef/1.0/1e20/-0.0/42/hello -> True, False, (leer), 1, 100000000000000000000, -0, 42, hello; sops 3.13.3 -d liest alle 16 Dokumente (8 Werte x 2 Formate) bei exit 0. Lesehaelfte: 16 von sops selbst geschriebene Dokumente (5 Anzeigeformen + 3 String-Zwillinge, je 2 Formate) -- 16/16 einig, null Divergenzen; die byte-identischen Zeilen v_unencrypted=<nil>/true/1.0 sind in der einen Herkunft exit 51 auf beiden Seiten und in der anderen exit 0 auf beiden Seiten. Damit ist der naheliegende <nil>->undef-Fix nachweislich falsch. Suite: prove -lr t/ 67 Dateien, 1325 Tests, PASS, keine Skips, Interop lief real gegen sops 3.13.3.
