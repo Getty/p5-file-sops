@@ -1,0 +1,64 @@
+---
+class: standard
+created: 2026-08-22T04:55:00Z
+id: 174
+priority: medium
+status: backlog
+tags:
+- api
+- mac
+- env
+- ini
+- diagnostics
+title: MAC failure on an ENV/INI document does not say that sops wrote it and cannot
+  read it either
+updated: 2026-08-22T16:06:24Z
+---
+
+Gemessen 2026-08-22 waehrend karr #124/#125/#137 (docs/adr/0052). Kein
+Fehlverhalten -- eine Diagnose-Luecke.
+
+BEFUND. Wo sops in den unverschluesselten Slot eines dotenv- oder
+ini-Dokuments eine Go-Anzeigeform schreibt, deckt sein eigener Digest die
+Wireform. Die Datei faellt durch ihren eigenen MAC, bei sops (exit 51) wie
+bei uns. Unsere Refusal ist richtig (ADR 0038s Diskriminator: sops liest
+seine eigene Datei NICHT zurueck) und ADR 0052 schliesst die drei Tickets
+genau deshalb ohne Codeaenderung.
+
+Was der Nutzer aber liest, ist:
+
+  MAC verification failed: ... The document has been altered since it was
+  written, or was written by something that computes the digest differently.
+
+Beide Haelften sind wahr und keine ist der nuetzliche Satz. Der nuetzliche
+Satz ist: SOPS HAT DIESE DATEI GESCHRIEBEN UND KANN SIE SELBST NICHT LESEN.
+Wer diese Distribution benutzt, tut das wegen Kompatibilitaet -- ein nackter
+MAC-Fehler auf einer sops-geschriebenen Datei liest sich als UNSER Defekt.
+Das ist teuer: es ist genau die Verwechslung, die karr #102/#105/#108 zu
+echten Bugs gemacht hat, hier aber ohne Bug darunter.
+
+WO. lib/File/SOPS.pm, _verify_mac -- api-Lane. Die wire-Lane hat es gemessen
+und nicht angefasst, weil die Datei ihr nicht gehoert.
+
+ERKENNUNGSREGEL, gemessen. Bei MAC-Fehlschlag und format env|ini: haelt das
+Dokument einen unverschluesselten Leaf, dessen TEXT eine Anzeigeform ist?
+
+  true | false        -> Digest deckt True | False
+  <nil>               -> Digest deckt den leeren String
+  /^-?[0-9]+\.0$/     -> Digest deckt die kanonische Ganzzahl (1.0 -> 1)
+  /^-?[0-9.]+E[+-][0-9]+$/ -> Digest deckt die positionale Form
+
+DIE MELDUNG MUSS GEHEDGT BLEIBEN, und das ist der schwierige Teil. Derselbe
+Text entsteht auch aus einem legitimen STRING ("true", "<nil>", "1.0"), den
+sops mit exit 0 schreibt und liest -- gepinnt in
+t/67-...-is-refused-in-both-stores.t, Abschnitt 3. Der Hinweis darf also
+NICHT behaupten, die Datei sei sops-defekt; er darf nur sagen, dass der
+Fehlschlag damit vereinbar ist und dass sops -d dieselbe Datei ablehnt.
+Ein Hinweis, der bei Manipulation in die Irre fuehrt, waere schlimmer als
+keiner.
+
+NICHT tun: den Text beim Lesen reparieren. ADR 0052 Abschnitt 3 und die
+Rejected alternatives sagen warum -- der Text ist mehrdeutig, nur der Digest
+loest ihn auf, und der Digest ist das, was schon widersprochen hat.
+
+GEGENGELESEN (Hauptagent, 2026-08-22): die Mehrdeutigkeit, an der die Meldung haengt, selbst nachgemessen -- v_unencrypted=<nil>/true/1.0 sind byte-identisch aus zwei Herkuenften und beide Seiten urteilen jeweils gleich (16/16 einig). Die Forderung "gehedgt bleiben" ist damit keine Vorsicht, sondern zwingend.
