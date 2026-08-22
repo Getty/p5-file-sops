@@ -1,0 +1,25 @@
+---
+class: standard
+completed: 2026-08-22T13:53:18Z
+created: 2026-08-21T05:32:50Z
+id: 126
+priority: high
+started: 2026-08-22T13:53:18Z
+status: done
+tags:
+- release
+- docs
+- pod
+title: 'origin/main is 58 commits behind HEAD: POD-embedded ADR links 404 on GitHub'
+updated: 2026-08-22T13:53:18Z
+---
+
+Release audit at HEAD 5536313 (14 commits since 3e5e6b0). Every new ADR from tonight's work (0009-0028, except a few without a hyperlink) is referenced from woven POD as `L<docs/adr/NNNN|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/NNNN-....md>`. origin/main currently only has docs/adr/0001-0008 (verified: `git ls-tree -r --name-only origin/main -- docs/adr` = 8 files; local HEAD has 29). `git rev-list --count origin/main..HEAD` = 58.
+
+Empirically confirmed via `gh api repos/Getty/p5-file-sops/contents/...`: docs/adr/0008 -> 200 (exists on GitHub), docs/adr/0022 -> 404 Not Found. So right now every one of those ~17 GitHub links in the built POD is dead.
+
+Neither xt/author-pod-syntax.t nor xt/author-pod-links.t (Pod::Checker, karr #98's fix) catches this: both check POD syntax / internal link resolution, neither performs an HTTP check on an external L<...|https://...> target. This is a real gap in the pre-release check, not just this one incident.
+
+Action: push local main to origin (58 commits) before or as part of the next release, so the ADR links in the shipped POD resolve. Not a code/test blocker -- dzil build/dzil test/interop all pass clean at HEAD -- but a real documentation-quality gap a CPAN release would ship today.
+
+ERLEDIGT 2026-08-22. main nach origin gepusht (808d2ec..9a181a1, 86 Commits), auf ausdrueckliche Maintainer-Entscheidung. Verifiziert statt angenommen: GitHub-API listet unter docs/adr jetzt 52 Dateien statt 8. Jeder in POD eingewobene L<docs/adr/NNNN|https://github.com/...>-Link loest damit auf. Die von diesem Ticket benannte Luecke in der Vorab-Pruefung bleibt bestehen und ist NICHT geschlossen: weder xt/author-pod-syntax.t noch xt/author/pod-links.t prueft ein externes L<...|https://...>-Ziel per HTTP -- karr #170 hat das am 2026-08-22 noch einmal ausdruecklich bestaetigt (Pod::Checker loest nur Dokument- und Modulziele auf, nie scheme'd URLs). Wer das schliessen will, braucht ein eigenes Ticket.
