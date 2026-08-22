@@ -1,0 +1,38 @@
+---
+class: standard
+created: 2026-08-22T14:12:36Z
+id: 178
+priority: medium
+status: backlog
+tags:
+- tooling
+- interop
+- release
+title: maint/fetch-sops braucht Go und faellt sonst aus -- der Prebuilt-Download ist
+  nur ein Hinweistext
+updated: 2026-08-22T16:06:18Z
+---
+
+Gefunden 2026-08-22, als /tmp/sops fehlte und die Suite still 1107 statt 1325 Tests meldete.
+
+maint/fetch-sops ist das Werkzeug, auf das skill file-sops-core fuer genau diesen Fall verweist. Es baut sops mit `go install`. Ohne Go-Toolchain -- und auf dieser Maschine gibt es keine -- bricht es mit exit 1 ab und DRUCKT die Anleitung, das Prebuilt-Binary von Hand von GitHub zu holen. Der Fallback ist also vorhanden, aber als Text an den Menschen, nicht als Code.
+
+Gemessen: `curl -sSL https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 -o /tmp/sops && chmod +x` liefert in wenigen Sekunden genau das Binary, das die Suite erwartet (`sops 3.13.3`), ohne jede Toolchain. Der Weg, den das Skript dem Menschen empfiehlt, ist der, den es auch selbst gehen koennte.
+
+ZWEITER, GROESSERER PUNKT -- das Ziel. DEST ist $HOME/bin, aber die Suite sucht $SOPS_BIN, dann PATH, dann /tmp/sops, und in der Praxis liegt das Binary hier unter /tmp/sops. /tmp ueberlebt keinen Neustart und keine Aufraeumung. Genau das ist heute passiert, und der Preis war nicht der erneute Download (Sekunden), sondern dass NICHTS es gemeldet hat: prove meldet All tests successful, und die 218 fehlenden Tests muss man zaehlen, um sie zu sehen.
+
+VORSCHLAG, klein und in maint/, also kein behavior-relevanter Code:
+ 1. Ohne Go: das Release-Binary fuer die erkannte Plattform herunterladen statt
+    abzubrechen. Checksum gegen die von getsops veroeffentlichte pruefen, sonst
+    laedt das Skript ungeprueft ein Binary aus dem Netz.
+ 2. Nach $HOME/bin installieren wie heute, aber /tmp/sops nicht mehr als
+    empfohlenen Ort behandeln -- die Suche in t/ findet PATH vor /tmp.
+ 3. Erwaegen: ein Hinweis in der Testausgabe, wenn die Suite ohne Binary laeuft,
+    der die TESTZAHL nennt statt nur skipped. Das ist die Zahl, die den
+    Unterschied sichtbar macht, und sie steht heute nirgends.
+
+Punkt 3 beruehrt t/ und ist damit test-writer-Lane; 1 und 2 sind reines maint/.
+
+Nicht dringend, aber es ist die Sorte Ticket, deren Kosten erst auffallen, wenn jemand einen gruenen Lauf als Kompatibilitaetsbeleg meldet, der keiner war. Genau das ist laut file-sops-core schon zweimal in ein Release gelangt.
+
+VERIFIZIERT (Hauptagent, 2026-08-22): die Lage stimmt -- kein go im PATH, kein sops im PATH, nur /tmp/sops. Volle Suite mit Binary: 67 Dateien, 1325 Tests. Punkt 2 des Vorschlags bestaetigt durch t/04-interop.t:42 (PATH vor /tmp). Eine Praezisierung: ein GESETZTES, aber ungueltiges SOPS_BIN ist bereits laut -- t/04-interop.t:35-39 stirbt absichtlich statt durchzufallen (bei mir 829 Tests + FAIL). Die stille Luecke ist ausschliesslich der Fall "gar kein Binary irgendwo", den Punkt 3 adressiert.
