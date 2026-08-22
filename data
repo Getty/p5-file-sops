@@ -1,0 +1,91 @@
+---
+claimed_at: 2026-08-21T11:53:41Z
+claimed_by: fmt-159
+class: standard
+completed: 2026-08-22T13:53:31Z
+created: 2026-08-21T09:25:02Z
+id: 159
+priority: medium
+started: 2026-08-21T11:23:04Z
+status: done
+tags:
+- yaml
+- metadata
+- interop
+- format
+title: An UNQUOTED lastmodified is refused by sops and read here; the plain/quoted
+  state lives in the YAML handler
+updated: 2026-08-22T13:53:31Z
+---
+
+Split out of karr #144 (docs/adr/0044), which fixed that ticket's FIRST direction (the AAD is Go's re-format of the timestamp, not the document text) and left this one open because it cannot be implemented where that fix lives.
+
+MEASURED, sops 3.13.3, on a document written by File::SOPS->encrypt with only the lastmodified line unquoted:
+
+  lastmodified: "2026-08-21T09:05:08Z"   sops -d exit 0   File::SOPS ok
+  lastmodified: 2026-08-21T09:05:08Z     sops -d exit 1   File::SOPS ok
+        decoding failed due to the following error(s):
+        'lastmodified' expected type 'string', got unconvertible type 'time.Time'
+
+go-yaml v3 resolves a bare RFC3339 scalar as !!timestamp, and mapstructure wants a string. We accept it. PERMISSIVE - nothing is decrypted wrongly, and this library never WRITES such a document: File::SOPS::Format::YAML quotes the timestamp on the way out and t/06-wire-format-regressions.t pins that.
+
+WHY IT IS NOT IN METADATA.PM: from_hash sees a Perl string either way. ADR 0038 measured that a bare and a quoted YAML scalar arrive as the SAME Perl string, so no decision in Metadata.pm can tell them apart. The distinction lives in the source text, which is the format handler's - the same cross-phase plain/quoted state ADR 0038 named when it handed karr #135 over, and which _restore_plain_infinities already carries for one token family.
+
+NOTE, since ADR 0044 widened it by one family: a document that is BOTH unquoted AND non-canonical (bare lastmodified: 2026-08-21T09:05:08+00:00) used to fail here for the AAD reason while sops refused it for the resolver reason. It now reads here and is still refused there.
+
+BEFORE IMPLEMENTING: check whether a refusal would hit documents sops accepts. That is exactly why karr #145 was closed as documented-not-fixed, and it is the same question here - a bare scalar that is not a timestamp at all must keep working.
+
+t/58-lastmodified-is-re-formatted-before-it-is-the-aad.t already pins both halves of the divergence, gated on the binary.
+
+Lane: format.
+
+DONE -- implemented as a WARNING, docs/adr/0050, t/64-a-plain-lastmodified-is-warned-about-not-refused.t.
+
+DOES THE ADR 0026 MECHANISM CARRY? No, and that is measured. ADR 0026 asks
+YAML::PP as a RESOLVER, and for .inf that answer IS the plain/quoted answer
+(Core schema: plain .inf -> float, quoted -> string). YAML 1.2's Core schema has
+no timestamp type, so YAML::PP hands back the IDENTICAL Perl string for
+`lastmodified: 2026-08-21T09:05:08Z` and the quoted form. What carries is the
+QUESTION. YAML::PP's PARSER answers it directly -- the scalar event's style --
+which is the oracle _plain_boolean_tagged_scalars (ADR 0030) and
+_merge_tagged_scalars (ADR 0028) already use in this file. Measured exact over
+17 spellings, including three a regex would miss: a plain scalar on the line
+BELOW its key, inside a flow mapping, and behind an explicit `? key`.
+
+DO WE REFUSE SOMETHING SOPS ACCEPTS? No -- measured, not assumed, and it is also
+why this is not a refusal at all.
+  * All 15 RFC3339 spellings sops reads QUOTED (exit 0) are refused BARE
+    (exit 1, unconvertible type 'time.Time'). There is no accepted bare
+    spelling.
+  * ONE trap found: `!!str <bare timestamp>` is style-plain and sops reads it at
+    exit 0, because an explicit tag stops go-yaml's implicit resolver before
+    parseTimestamp. A guard on style alone would have fired on a document sops
+    opens -- exactly karr #145's condition. Hence the tag check.
+  * A plain scalar go-yaml does NOT resolve as a timestamp (hello, 2026, true,
+    3.14, null, ~, `...T09:05:08` with no zone) is left alone: mapstructure
+    decodes weakly and turns int/float/bool/null into strings, so sops refuses
+    all of those at time.Parse whether they are quoted or not. Quoting is not
+    the discriminator there, so it is not this family -- it is ADR 0044's
+    pass-through.
+  * _go_timestamp vs go-yaml's parseTimestamp disagree on 2 of 29 spellings,
+    both in the safe direction: `,123Z` (a comma fraction) is a timestamp to
+    go-yaml and not to the model -> quiet on a document sops refuses; `+25:00`
+    is the other way round -> fires on a document sops refuses anyway.
+
+WHY A WARNING AND NOT A REFUSAL. Measured: rotate on such a document produces
+one `sops -d` reads at exit 0, and so does decrypt_file + encrypt_file, because
+every write path re-stamps and quotes the timestamp. A refusal would take the
+one tool that can still repair the file and leave it openable by nothing --
+which in a secrets library is worse than the permissive gap it closes. Same
+shape as ADR 0018 and ADR 0019.
+
+Nothing on the wire moves, no digest changes, no document is read differently.
+t/58's third subtest inverted: 'sops refuses it, we read it' -> '... and say
+so'. Net: 32 assertions across 4 of its 12 subtests fall without the mechanism.
+63 files / 1286 tests PASS at HEAD, 64 / 1298 PASS with this; t/04-interop.t
+RAN, 32/32, sops 3.13.3 at /tmp/sops.
+
+Files: lib/File/SOPS/Format/YAML.pm, t/64-..., t/58-... (one subtest),
+docs/adr/0050-..., Changes.
+
+2026-08-21 11:53 Implemented as a warning; ADR 0050, t/64 (32 assertions fall without it), t/58 subtest inverted. Interop RAN: t/04 32/32, sops 3.13.3. Suite at HEAD+change: 64 files / 1298 tests PASS.
