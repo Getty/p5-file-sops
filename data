@@ -1,0 +1,41 @@
+---
+claimed_at: 2026-08-22T04:59:38Z
+claimed_by: api-171
+class: standard
+completed: 2026-08-22T16:03:43Z
+created: 2026-08-21T10:34:27Z
+id: 163
+priority: medium
+started: 2026-08-22T04:37:06Z
+status: done
+tags:
+- api
+- pod
+- docs
+title: 'SOPS.pm POD still says the RE2 dialect divergence is open (karr #161)'
+updated: 2026-08-22T16:03:43Z
+---
+
+lib/File/SOPS.pm, in the `rotate` POD (around line 1728 at f9c2f8b), says:
+
+    ... so C<< unencrypted_regex => '^\w+$' >> classifies a key with a
+    non-ASCII character differently in the two implementations, and sops
+    encrypts a value this library then thought was never encrypted. That
+    divergence is open and is karr #161; this refusal is what stops it
+    costing a secret in the meantime.
+
+karr #161 closed it (docs/adr/0048): the two rule patterns are compiled /a, and
+that exact example now classifies the same way on both sides. The paragraph is
+now wrong on its own terms, and the sentence after it -- "this refusal is what
+stops it costing a secret in the meantime" -- describes a guard that no longer
+has that job for this case.
+
+Also worth revisiting in the same pass: t/60's last interop subtest was
+rewritten for the same reason and now pins that rotate goes THROUGH.
+
+Not fixed with karr #161 because lib/File/SOPS.pm was being changed by the INI
+lane (karr #37) at the time and was outside that change's file boundary.
+
+2026-08-22 04:59 The quoted paragraph no longer exists: 085773e had already rewritten that whole rotate section for docs/adr/0049, so there was no 'karr #161 is open' text left to correct. Read in place rather than trusted. What the section DID lack afterwards is that rotate refuses a rule regex the two dialects do not share -- added under 'Files rotate refuses', naming the deliberate asymmetry (decrypt/extract still read such a document). Also corrected in Metadata.pm POD: the claim that decrypt never consults the rule (false since 0049), and the (?U)-listed-as-taken-by-both line.
+
+REVIEW (Hauptagent, 2026-08-22): POD gegengelesen. Kein "karr #161 ist offen"-Text mehr in SOPS.pm oder Metadata.pm; der Abschnitt "Files rotate refuses" benennt die zweite Refusal und die bewusste Asymmetrie zu decrypt/extract mit Verweis auf docs/adr/0051. xt/author/pod-links.t gruen.
