@@ -1,0 +1,99 @@
+---
+claimed_at: 2026-08-21T11:53:47Z
+claimed_by: fmt-159
+class: standard
+completed: 2026-08-22T13:53:24Z
+created: 2026-08-21T08:37:44Z
+id: 148
+priority: low
+started: 2026-08-21T11:23:11Z
+status: done
+tags:
+- wire
+- format
+- roadmap
+title: A comment above a mapping key is still lost, in both directions
+updated: 2026-08-22T13:53:24Z
+---
+
+Die offene Haelfte von karr #76 nach docs/adr/0041. Dort ist die SEQUENZ-Position geloest (Kommentar-Leaf wird erhalten); die MAPPING-Position ist es nicht, und zwar in beide Richtungen:
+
+LESEN: sops schreibt einen Kommentar ueber einem Mapping-Key als echte
+Kommentarzeile (#ENC[...,type:comment]). YAML::XS verwirft sie, bevor
+Format::YAML::parse einen Baum sieht. Wir sehen den Kommentar also nie.
+
+SCHREIBEN: YAML::XS kann ueberhaupt keinen Kommentar emittieren, also koennten
+wir ihn auch nicht zurueckschreiben, wenn wir ihn haetten.
+
+HARMLOS, aber verlustig: das Dokument liest sich korrekt (sops hasht den
+Kommentar nicht, wir auch nicht), nur geht der Kommentar bei jedem
+Schreibpfad verloren -- rotate, edit, encrypt_in_place, decrypt_file +
+encrypt_file. Das war schon immer so und ADR 0024 wie ADR 0041 sagen es
+ausdruecklich.
+
+WAS ES BRAUCHT: einen Parser, der Kommentare erhaelt, UND einen Emitter, der
+sie an den folgenden Knoten zurueckhaengt. YAML::PP kann das Erste nicht als
+Baum-Feature; YAML::XS kann das Zweite gar nicht. Textchirurgie auf dem
+fertigen Dokument ist die, die ADR 0019 abgelehnt hat (beliebiger Key-Pfad in
+beliebiger Verschachtelung, auf dem Schreibpfad, ein Fehltreffer schreibt eine
+kaputte Datei) -- ADR 0028s Bedingungen fuer erlaubte Textchirurgie erfuellt
+sie in keinem Punkt.
+
+Fuer JSON gibt es nichts zu tun: sops selbst verwirft Mapping-Kommentare beim
+Schreiben nach JSON (gemessen, sops 3.13.3).
+
+Lane: format, mit wire als Zweitleser -- ein erhaltener Kommentar muesste
+denselben Platz im Baum bekommen, den ADR 0041 fuer die Sequenzposition
+gebaut hat, und derselbe Digest-Ausschluss gilt.
+
+MEASURED, NOT IMPLEMENTED -- and the ticket's two "no"s are both confirmed, one
+of them for a stronger reason than the body gives. Nothing in lib/ changed for
+this; the POD under Format::YAML::parse now carries the finding, and
+docs/adr/0050 records it under "What this leaves open".
+
+WHAT YAML::PP CAN REALLY DO (v0.41.0, the version this distribution loads):
+  * Its LOADER cannot preserve comments. PRESERVE_ORDER, PRESERVE_SCALAR_STYLE,
+    PRESERVE_FLOW_STYLE and PRESERVE_ALIAS are the whole preserve set -- there
+    is no comment flag -- and YAML::PP's own POD lists a comment-preserving
+    parse tree as a TODO ("I would like to generate a complete parse tree ...
+    including all whitespaces and comments").
+  * Its PARSER does keep the text. YAML::PP::Parser->tokens holds the comment
+    inside EOL tokens -- measured, a three-comment document yields all three
+    verbatim. So the READ half is mechanically reachable, which is more than
+    the ticket body says. Two caveats: ->tokens is an undocumented accessor
+    (YAML::PP::Parser has NO pod at all), and a token carries no attachment to
+    a node, so correlating it with the event stream would be new machinery.
+
+WHY THE READ HALF ALONE IS WORTHLESS HERE: there is nowhere to put a recovered
+mapping-position comment. ADR 0041 could preserve a SEQUENCE comment because a
+sequence element is a slot the tree model already has. A mapping-position
+comment sits BEFORE a key, and a Perl hash has no slot before a key. Holding it
+needs an ordered/annotated mapping model -- a data-model change, not a parser
+change -- or the text surgery ADR 0019 and ADR 0041 both rejected.
+
+THE WRITE HALF IS A WALL, NOT A LANE HANDOFF, and this is the part that settles
+the ticket. It is not "our emitter lacks an option" (karr #99): NO emitter
+available to this distribution can write a comment at all.
+  * YAML::XS is libyaml, whose emitter has no comment concept.
+  * YAML::PP::Emitter has no comment event either -- its event set is the
+    standard YAML one (mapping/sequence/scalar/alias/document/stream), same
+    TODO as above.
+So even swapping the emitter -- which would be a wire change and the wire lane's
+-- would not buy the write half. I did not touch the emitter.
+
+NEW MEASUREMENT, sops 3.13.3, worth having on the record. sops writes a
+mapping-position comment and a file-leading comment as `#ENC[...,type:comment]`
+LINES and a sequence one as an ELEMENT; `sops -d` returns all of them intact.
+Here the two positions behave DIFFERENTLY:
+  * comment as a sequence element  -> decrypt_file/edit REFUSE the document,
+    loudly, naming the path (ADR 0041's guard).
+  * comment above a mapping key, and nothing else -> decrypt_file SUCCEEDS and
+    writes the plaintext WITHOUT it, silently.
+That asymmetry is filed separately rather than fixed here -- see the new ticket
+referenced below.
+
+VERDICT: not solvable today, and not by this lane at any point, because the
+write half has no implementation to reach for. Recommend closing as
+documented-not-fixed and reopening only if YAML::PP ships its parse tree.
+
+2026-08-21 11:53 Measured, not implemented: the write half is a wall (no Perl YAML emitter can write a comment), the read half is reachable via YAML::PP's undocumented token stream but has nowhere to put the result. Recommend documented-not-fixed. Asymmetry found while measuring is karr #169.
