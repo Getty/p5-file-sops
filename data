@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-08-23T04:57:38Z
+claimed_by: debt-send
+class: standard
+completed: 2026-08-23T04:56:52Z
+created: 2026-08-23T04:34:41Z
+id: 179
+priority: low
+started: 2026-08-23T04:47:51Z
+status: done
+tags:
+- wire
+- format
+- noise
+title: Format::YAML::_go_repair_int_leaves still warns Deep recursion on the same
+  265-level fixture
+updated: 2026-08-23T04:57:38Z
+---
+
+Found while landing karr #120 (silence the walks outside SOPS.pm).
+
+The ticket listed Encrypted::_canonical_floats and Format::YAML::_restring_non_finite_leaves as the two remaining noisy walks. Measured baseline on t/45's 265-level alias chain: 503 deep-recursion warnings from THREE sources -- _canonical_floats (the listed one), _restring_non_finite_leaves (the listed one), and _go_repair_int_leaves (NOT listed, missed by the survey).
+
+After karr #120: 167 warnings left, all from _go_repair_int_leaves. The walk is structurally identical to _restring_non_finite_leaves -- carries a $seen hash for cycle protection, recurses on HASH and ARRAY branches, no path -- so the fix is the same one-line no warnings 'recursion' addition. The diag block in t/45 keeps reporting it until this is closed.
+
+Scope: a single line in lib/File/SOPS/Format/YAML.pm at line 738 (`sub _go_repair_int_leaves {`), no other change. The t/45 diag block's reference needs updating from 'karr #120' to point here.
+
+Owner: lib/File/SOPS/Format/YAML.pm. Lane: wire (or format, since the sub is in Format::YAML).
+
+Closed: 3 commits on karr-179 branch (bc72979 BEHAVIOUR, d10ff3b TEST, df80bd8 DOCS). Measured baseline 167 warnings, after 0; structurally identical to _restring_non_finite_leaves; t/45 diag deleted; ADR 0057 + ADR 0029 Revised line + Changes entry. Suite: Files=73, Tests=1361, all PASS with SOPS_BIN=/tmp/sops; t/04-interop.t executed 32/32.
