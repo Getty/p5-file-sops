@@ -999,6 +999,22 @@ sub assert_representable {
     # is derived from the number, so that text would be dropped without a
     # trace, and choosing between a scalar's two halves is the guess
     # docs/adr/0012 refuses to make.
+    #
+    # NARROWED AGAIN for karr #141 / docs/adr/0060, and this time by PUBLIC PV.
+    # All of the above is about a leaf WITH a public PV -- the case where the
+    # scalar already states a string half. A leaf WITHOUT one (a bare NV, like
+    # `9**9**9`) has only the number to say what it is, and docs/adr/0037's
+    # _non_finite_token_leaf manufactures the carrying dualvar for it in YAML:
+    # the carrier consults go-yaml's own twelve tokens and the YAML emitter
+    # writes the token the digest covers. JSON has no such carrier, and the
+    # refusal there is the emit walk's croak -- where the question of "can this
+    # format spell this number" actually belongs, not in assert_representable,
+    # which sees both formats the same.
+    #
+    # What stays refused in an unencrypted slot is the same shape that stayed
+    # refused in an encrypted slot: a public PV that contradicts its number.
+    # A caller who constructs dualvar(+Inf, 'banana') by hand -- no parse and
+    # no decryption produces one -- is told which half they meant.
     if (_sv_kind($value) eq 'float') {
         my $form = _non_finite_bytes($value);
 
@@ -1015,21 +1031,17 @@ sub assert_representable {
             if $args{encrypted} && defined $form && _has_public_pv($value)
             && !_carries_go_non_finite_token($value, $form);
 
-        croak "value is a non-finite float ($form) and no SOPS document can "
-            . "carry it: the JSON emitter writes it as null, the YAML emitter "
-            . "writes a bare Inf / -Inf / NaN, which Go's yaml.v3 resolves as "
-            . "a string, and what one writes the other cannot read back. sops "
-            . "itself writes type:float +Inf / NaN, but only because Go has a "
-            . "strconv.FormatFloat rule that does not survive the round-trip "
-            . "through Perl's encoder. Two answers, and which one you want is "
-            . "yours to say: store the value as a string (type:str), which is "
-            . "written verbatim and round-trips exactly through both "
-            . "implementations -- or, in an unencrypted YAML slot, give the "
-            . "scalar the plain token go-yaml reads as this same double, which "
-            . "is a Scalar::Util::dualvar and is what parsing a sops-written "
-            . "document hands back here. Then it is written and read as a "
-            . "float by both."
-            if !$args{encrypted} && defined $form
+        croak "value is a non-finite float ($form) that also states a string "
+            . "half of its own, and an unencrypted slot can carry only one "
+            . "of them: the wire holds the token the emitter writes -- the "
+            . "public PV when it is one of go-yaml's twelve non-finite "
+            . "tokens, and a token the YAML carrier manufactures for a bare "
+            . "number. Yours is neither, so the text beside it would be "
+            . "dropped without a trace. Which half you meant is yours to say "
+            . "-- pass the number on its own to let the carrier write, or "
+            . "pass the text as a string (type:str), which is written verbatim "
+            . "and round-trips exactly through both."
+            if !$args{encrypted} && defined $form && _has_public_pv($value)
             && !_carries_go_non_finite_token($value, $form);
     }
 
