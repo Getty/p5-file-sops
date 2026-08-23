@@ -1,0 +1,46 @@
+---
+claimed_at: 2026-08-23T15:37:40Z
+claimed_by: myth-seen
+class: standard
+completed: 2026-08-23T15:37:40Z
+created: 2026-08-21T10:35:31Z
+id: 165
+priority: medium
+started: 2026-08-23T15:12:31Z
+status: done
+tags:
+- api
+- interop
+- metadata
+title: 'Three RE2/Perl regex divergences survive karr #161, all measured'
+updated: 2026-08-23T15:37:40Z
+---
+
+docs/adr/0048 closed 28 of the 29 measured (rule, key) disagreements between unencrypted_regex/encrypted_regex as Perl matches them and as RE2 matches them. Three shapes survive and are recorded as Limits there rather than fixed:
+
+1. FULL CASE FOLDING. Perl (?i) folds U+00DF to "ss" and RE2 does simple
+   folding only. Measured: `unencrypted_regex: (?i)^ss$` over a key U+00DF --
+   sops ENCRYPTS the value, we leave it READABLE. That is the secret-bare
+   direction and it is the one row of the 43 still divergent after #161.
+   Perl has no simple-fold-only flag: /aa suppresses it and suppresses the
+   k/U+212A and s/U+017F folds RE2 DOES perform along with it (measured both
+   ways), so /aa is one-for-two in the wrong direction.
+
+2. $ BEFORE A TRAILING NEWLINE. Perl $ is (?=\n?\z), RE2 $ is \z. Measured:
+   key "foo\n" (a legal double-quoted YAML key) under `unencrypted_regex:
+   ^foo$` -- sops encrypts, we leave bare. Not refused, on purpose: ^foo$ is
+   a pattern sops takes and reads back, so ADR 0038 discriminator says
+   refusing it is wrong. Any fix has to rewrite the pattern ($ -> \z outside
+   a class, outside an escape, not under (?m)), which is a mini-parser on the
+   rule text.
+
+3. \p{NAME} WITH A NAME GO DOES NOT HAVE. Measured through the .sops.yaml
+   path_regex oracle: \p{Word}, \p{Alpha}, \p{IsAlpha}, \p{XPosixAlpha} are
+   RE2 "invalid character class range" -- so the rule matches nothing at sops
+   -- while \p{Greek} and \p{Lu} are accepted by both. #161 accepts \p and \P
+   unconditionally rather than refuse \p{Greek}, which sops takes. An exact
+   fix needs Go unicode category and script table on this side.
+
+None of the three is reachable by an ASCII rule over ASCII keys.
+
+2026-08-23 15:25 All three shapes accepted as limits (karr #165 / docs/adr/0065). No code change. Shape 1 (full case folding (?i)^ss$ / ß): accept -- no Perl flag reproduces RE2 simple folding without breaking the k/KELVIN and s/LONG-S folds RE2 DOES perform. Shape 2 ($ before trailing newline, ^foo$ / foo<NL>): accept -- the pattern-text rewrite $ -> \z outside a class, outside an escape, not under (?m) is a mini-parser out of proportion to a rule nobody has been seen to write, and ADR 0038 forbids refusing ^foo$ because sops reads it back. Shape 3 (\p{NAME} Go does not have, \p{Word} / Word): accept -- Go's Unicode category and script table is the only exact fix, out of proportion. None reachable by an ASCII rule over ASCII keys. 3 commits in order: ARBITRATION (Changes), TEST (t/77-three-re2perl-shapes-measured.t, 11 subtests pinning 4 cells per shape -- Perl-side, ASCII control, rule-not-refused, and the inverse sops measurement), DOCS (docs/adr/0065). Measured against sops 3.13.3 at /tmp/sops on 2026-08-23: 77 files, 1395 tests, all PASS, with t/04-interop.t and t/77 executed against the binary rather than skipped. Commit SHAs: 697d84d ARBITRATION, 0d0a55b TEST, 0373348 DOCS.
