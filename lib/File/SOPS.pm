@@ -628,6 +628,21 @@ my %FORMATS = (
     ini    => 'File::SOPS::Format::INI',
 );
 
+# Whether a top-level `sops` entry in $data collides with the format's
+# metadata namespace. YAML and JSON write their metadata section under that
+# exact key, so a caller-supplied value would be overwritten -- the failure
+# mode karr #18 describes. ENV and INI do not: ENV's metadata is in flat
+# `sops_*` keys, INI's is in a `[sops]` section, so `data->{sops}` is a
+# legitimate entry there (karr #157). Each handler's own serialize-time
+# guard is the defensive double-check for direct callers of `serialize`;
+# this hash is the source of truth for the format-blind guard in encrypt().
+my %RESERVES_SOPS_KEY = (
+    'File::SOPS::Format::YAML' => 1,
+    'File::SOPS::Format::JSON' => 1,
+    'File::SOPS::Format::ENV'  => 0,
+    'File::SOPS::Format::INI'  => 0,
+);
+
 # Everything that describes HOW a document gets encrypted, as opposed to what
 # gets encrypted or for whom. encrypt and encrypt_file must accept exactly the
 # same set or the file API silently offers less than the string API does.
@@ -645,7 +660,14 @@ sub encrypt {
 
     croak "data must be a hash ref" unless ref($data) eq 'HASH';
     croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
-    croak _sops_key_reserved('data') if exists $data->{sops};
+
+    # Resolved BEFORE the sops-key guard: the guard defers to the format handler
+    # to decide whether a top-level `sops` entry collides with its metadata
+    # namespace. YAML and JSON reserve that exact name; ENV and INI do not
+    # (karr #157), so a bare `sops` data key is legitimate there.
+    my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
+    croak _sops_key_reserved('data') if exists $data->{sops}
+        && $RESERVES_SOPS_KEY{$format_class};
 
     # Before anything is generated or wrapped: a tree that contains itself has
     # no document to write, and every walk below this point would recurse until
@@ -679,7 +701,6 @@ sub encrypt {
     my $encrypted_data = _encrypt_tree($data, $data_key, $metadata, []);
 
     # Serialize
-    my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
     return $format_class->serialize(
         data     => $encrypted_data,
         metadata => $metadata,
@@ -717,12 +738,16 @@ write to a C<:raw> handle. See L</Character encoding>.
 The C<recipients> parameter must be an ArrayRef of age public keys (starting
 with C<age1...>).
 
-B<Dies if C<data> has a top-level C<sops> key.> That name is reserved for the
-metadata section; there is nowhere else to put the metadata, so a document
-using it cannot be encrypted. Until 0.003 the user's value was silently
-replaced by the metadata -- and since the digest had already covered it, the
-resulting document failed its own MAC on the next read. sops refuses such a
-file too, with exit code 203, and its advice applies here: rename the entry.
+B<Dies if C<data> has a top-level C<sops> key, in YAML or JSON.> That name is
+where those formats put the metadata section, so a caller-supplied value at
+that key would be overwritten -- after the digest had already covered it,
+which leaves a document that fails its own MAC on the next read. Until 0.003
+the user's value was silently replaced by the metadata, for every format,
+and the resulting document failed its own MAC; for ENV and INI the
+overwrite did not happen (the metadata lives in flat C<sops_> keys and in a
+C<[sops]> section respectively), so C<sops> is a legitimate data key there.
+sops refuses such a file too, with exit code 203, and its advice applies
+here: rename the entry.
 
 Supported formats: C<yaml>, C<yml>, C<json>, C<env>, C<ini>. C<dotenv> is
 accepted as an alias for C<env>, which is the name sops itself uses for the
@@ -2821,16 +2846,21 @@ sub _wait_status {
 # It makes no distinction between "already encrypted" and "a user key that
 # happens to be called sops" -- and neither do we, because from the outside
 # they are the same document.
+#
+# The advice deliberately names NEITHER `edit` NOR `rotate`: the same guard
+# fires from inside both (rotate via the encrypt() below, edit by the same
+# path), and pointing the user at the method that just refused them is worse
+# than not pointing at anything. The remedies are documented under those
+# methods; the message here says what is wrong and what to do about it.
 sub _sops_key_reserved {
     my ($what) = @_;
     return
         "$what contains a top-level 'sops' entry, which is reserved for the "
       . "SOPS metadata section. Encrypting would overwrite it and produce a "
       . "document that fails its own MAC verification. This usually means the "
-      . "input is already encrypted -- use edit to change its contents or "
-      . "rotate to re-key it, or decrypt it first. If it really is plaintext, "
-      . "rename the entry. (sops refuses such a file too, with exit code 203, "
-      . "and points at its editor mode for the same reason.)";
+      . "input is already encrypted -- decrypt it first if you want to change "
+      . "its contents or re-key it. If it really is plaintext, rename the "
+      . "entry. (sops refuses such a file too, with exit code 203.)";
 }
 
 # The same refusal for text that came back from an editor, which is a different
