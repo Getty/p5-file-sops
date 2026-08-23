@@ -3411,6 +3411,34 @@ sub _encrypt_tree {
     else {
         # A leaf the rules exclude is written as it stands. It is still
         # covered by the MAC, so it is readable but authenticated.
+        #
+        # EXCEPT a leaf whose text parses as ENC[...,type:comment]: the
+        # encrypt side writes it as a plain type:str and hashes its text
+        # into the digest, but on the read side _is_comment_leaf (with
+        # $data_key defined) treats the same text as a comment and drops
+        # it from the digest -- a document that fails its own MAC, produced
+        # by this library at exit 0. The File::SOPS::Comment half of the
+        # same shape is caught by the mapping-loop guard above (ADR 0041);
+        # this one is the wire half, reached because the caller passed a
+        # plain string rather than a Comment object. docs/adr/0056,
+        # karr #168.
+        croak _at_path($path, "a caller string whose text parses as an "
+            . "ENC[...,type:comment] token cannot stand as a value at a "
+            . "path the encryption rule EXCLUDES: this library writes the "
+            . "literal as a plain type:str and hashes its text into the "
+            . "MAC, but the read side (_is_comment_leaf with \$data_key "
+            . "defined) drops the same text from the digest, so the "
+            . "document fails its own MAC at the next decrypt. sops reads "
+            . "the document but ignores the leaf at the same level -- "
+            . "which is why the symptom on decrypt is 'Authentication "
+            . "failed' rather than 'MAC mismatch'. Replace the string "
+            . "with a File::SOPS::Comment in a SEQUENCE position, or "
+            . "rename the key so the rule no longer excludes it")
+            if !$metadata->should_encrypt_path($path)
+                && !ref $node
+                && (File::SOPS::Encrypted->encrypted_type($node) // '')
+                   eq 'comment';
+
         return $node unless $metadata->should_encrypt_path($path);
 
         # Leaf value - encrypt it
