@@ -12,6 +12,22 @@ Revision history for File-SOPS
     points at karr #179, which closed the survey gap (Format::YAML::_go_repair_int_leaves
     was missed by #120's survey and is the last recursive walk outside SOPS.pm).
     No wire byte moves -- this is performance and noise. See karr #120.
+  - BEHAVIOUR CHANGE: a caller string whose text parses as
+    `ENC[...,type:comment]` in a slot the encryption rule EXCLUDES is
+    refused at write time in `_encrypt_tree`, so this library can no
+    longer produce a file it cannot read back. Previously the literal
+    reached the document as a plain `type:str` value and the read side
+    (`_is_comment_leaf` with `$data_key` defined) dropped the same text
+    from the digest, where the encrypt side had already hashed it -- a
+    document that failed its own MAC at the next decrypt. The symptom on
+    decrypt was `Authentication failed` from `_decrypt_tree`'s line-3557
+    guard rather than silent corruption, which is why this is a guard
+    rather than an emergency fix. The new guard is the twin of the
+    `File::SOPS::Comment` mapping-value guard at line 3396 (ADR 0041)
+    and applies only when `should_encrypt_path($path)` is false; the
+    existing rule-SELECTS encrypt path, the mapping-value Comment-object
+    guard, and the `_decrypt_tree` line-3480 read-side guard are
+    unchanged. See docs/adr/0056, karr #168, and t/72.
   - BEHAVIOUR CHANGE: `_path_to_aad` answers `:` for an empty path, the
     document ROOT, where Go's `strings.Join([], ":") + ":"` produces `:`.
     The previous early return answered `""` for both an undef path and
