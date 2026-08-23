@@ -22,6 +22,33 @@ Revision history for File-SOPS
     `parse` already names the asymmetry in the "A comment inside a list
     is kept" section. Pinned by `t/74-a-mapping-position-yaml-comment-is-dropped-silently.t`.
     No code change, no wire byte. See docs/adr/0060 and karr #169.
+  - BEHAVIOUR CHANGE: a top-level `sops` data key is now refused only for
+    the formats that reserve that name as their metadata namespace root
+    -- YAML and JSON. ENV's metadata lives in flat `sops_*` keys and
+    INI's lives in a `[sops]` section, so a caller data key called
+    `sops` does not collide with the metadata there, and a sops-written
+    env file carrying `sops=1` (which the binary encrypts and decrypts
+    without comment) round-trips through this library end-to-end. The
+    format-blind guard `encrypt` carried before this change refused such
+    a document before any byte was produced, so an env document sops
+    wrote could be read here but never re-encrypted. The guard now
+    consults `%RESERVES_SOPS_KEY` in `File::SOPS`, which records which
+    format classes reserve the bare `sops` name as their namespace
+    root; format class resolution moves ahead of the guard, which is
+    the only structural change in `encrypt`. The format handlers' own
+    serialize-time guards (`Format::ENV` against `sops_*` keys, `Format::INI`
+    against a `[sops]` section) are kept as defense in depth for direct
+    callers of `serialize`. The `_sops_key_reserved` wording drops the
+    "use edit or rotate" advice -- the same guard fires from inside
+    both (`rotate` via the `encrypt` below it, `edit` by the same
+    path), so the previous message named the method that had just
+    refused the caller; the new message says what is wrong and what to
+    do without pointing at a method that may itself have failed. No
+    wire bytes move; the YAML/JSON case is unchanged, every existing
+    test that pins the `karr #18` failure mode passes byte-for-byte,
+    and `t/74-flat-format-keeps-its-own-sops-key.t` (run with sops on
+    PATH) round-trips an env file with `sops=1` in both directions.
+    See docs/adr/0061 and karr #157.
   - BEHAVIOUR CHANGE: the last recursive walk outside `SOPS.pm` is silenced,
     closing the survey gap karr #120 left behind. `Format::YAML::_go_repair_int_leaves`
     gains `no warnings 'recursion';` -- structurally identical to the change
