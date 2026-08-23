@@ -1,0 +1,32 @@
+---
+class: standard
+completed: 2026-08-23T04:22:17Z
+created: 2026-08-21T09:20:32Z
+id: 156
+priority: low
+started: 2026-08-23T04:15:56Z
+status: done
+tags:
+- wire
+- mac
+- aad
+- env
+title: _path_to_aad answers '' for an empty path where Go answers ':'
+updated: 2026-08-23T04:22:26Z
+---
+
+Measured at karr #36 (docs/adr/0044, measurement 3), against sops 3.13.3.
+
+Go builds the AAD as strings.Join(path, ":") + ":", so a leaf at the DOCUMENT ROOT authenticates under ":". File::SOPS::_path_to_aad has an early return:
+
+    return "" unless $path && @$path;
+
+so it answers the empty string for the same leaf. Measured on real documents: an env comment (root) decrypts under ":" and NOT under ""; a YAML comment on the first line of a file is also ":"; inside map: it is "map:" and inside list: it is "list:", which _path_to_aad already reproduces.
+
+WHY NOTHING IS BROKEN TODAY. A leaf at the root is unreachable in YAML and JSON -- a document is a mapping, so every leaf has at least one key. The one place it occurs is an env comment, and Format::ENV puts those under the EMPTY KEY, so the path is [""] and _path_to_aad returns ":" correctly. The divergence is latent, not live.
+
+IT IS STILL A DIVERGENCE, and it is in the shared derivation. Whoever adds a format whose document can be a bare scalar, or a store that walks the root, will meet it. Two options, both wire lane: change the early return to "" only for an undef path (measure first -- something may depend on the current answer), or record the rule at _path_to_aad so the next reader does not have to re-measure it. The second is cheap and safe.
+
+Not fixed in #36 because it is SOPS.pm's MAC path and the ENV handler does not need it changed.
+
+CLOSED via docs/adr/0055. 3 commits on karr-156 branch, fast-forwarded to main on 2026-08-23 (commit f2828f5). The latent divergence is closed by narrowing the early return from 'undef OR empty' to 'undef only', and the existing join produces ':' for an empty arrayref -- matching Go's strings.Join([], ':') + ':'. undef still answers '' deliberately, so a caller bug surfaces as a loud AAD mismatch. No file f-sops wrote changes its MAC: the empty arrayref case was unreachable (every format builds at least one key path before a leaf), and an undef path was a caller bug nobody relied on. New t/70 pins the four answers (document ROOT, env comment, multi-component, undef) plus the byte-faithful rule that a ':' inside a component is taken literally. Full suite green: 71 files, 1351 tests, all PASS. SOPS_BIN=/tmp/sops prove -lv t/04-interop.t executed (32/32), not skipped. Lane: wire. One file touched: lib/File/SOPS.pm _path_to_aad. Format::ENV and Format::INI POD notes that documented the divergence can be tightened when next they are touched; their behaviour does not move.
