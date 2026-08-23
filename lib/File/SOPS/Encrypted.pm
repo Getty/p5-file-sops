@@ -383,6 +383,22 @@ through untouched -- and which is how a caller says that a scalar really is
 bytes rather than characters. See L</value_to_bytes> and
 L<docs/adr/0003|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0003-value-encoding-is-unconditional-like-the-aad.md>.
 
+B<Known limitation as of sops 3.13.3:> a document that contains a C<type:bytes>
+cell cannot be opened by the reference implementation. C<sops -d> exits 2 with
+C<panic: runtime error: hash of unhashable type []uint8> in C<aes/stashKey> on
+the very first such leaf -- measured against sops 3.13.3 on YAML, dotenv and
+INI, on payloads of "hello" and a 4-byte blob, all identical. The label is what
+trips it: the same payload under C<type:str> reads back at exit 0. No sops store
+produces a C<type:bytes> cell (YAML's C<!!binary> and the binary input store
+both surface as C<type:str>), so this is a sops-side bug we can only warn
+about: a caller who uses the documented C<type =E<gt> 'bytes'> escape hatch
+above writes a document sops cannot open in any format, as of 3.13.3. The
+B<read> path is unaffected -- a foreign C<type:bytes> cell decrypts correctly
+through L</decrypt_value> -- because the panic is sops's own aes cache, keyed by
+plaintext, refusing to index on a byte slice. See karr #136 and the "Known
+limitation" section of
+L<docs/adr/0003|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0003-value-encoding-is-unconditional-like-the-aad.md>.
+
 Type is auto-detected from the value if not specified, by L</detect_type>.
 
 Passing C<type> explicitly overrides the B<label> only, never the bytes: those
@@ -1307,6 +1323,13 @@ SOPS's binary type, so it is not text, and it is the only way to tell this
 module that an unflagged scalar really is a byte string rather than a Perl
 string that happens to be stored as bytes -- a distinction Perl itself does not
 make. Everything else is encoded unconditionally; see L</encrypt_value>.
+
+B<Sops 3.13.3 cannot read a document that contains a C<type:bytes> cell.> The
+write-side escape hatch this paragraph describes therefore produces a document
+sops cannot open in any format -- exit 2 with C<panic: runtime error: hash of
+unhashable type []uint8> in C<aes/stashKey>, on the first such leaf, regardless
+of payload. The label is what trips it. See L</encrypt_value> for the full
+warning, and karr #136.
 
 So a Perl string is never renormalised -- C<'007'> stays C<007> and C<'1.50'>
 stays C<1.50> -- while a Perl number always is. A document that gets this

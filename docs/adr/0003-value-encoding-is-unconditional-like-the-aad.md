@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-09
+- Revised: 2026-08-23 — Known limitation recorded on the write path of `type:bytes` (karr #136): sops 3.13.3 panics on the read path. The decision stands; the warning is documented here, in the POD, and in t/71.
 - Tags: encoding, mac, interop, wire-format
 - Completes the encoding rule begun in commit 11658c3 (AAD) and depends on ADR 0002
 
@@ -209,3 +210,56 @@ reachable with the default configuration and must fail on any machine. Failure
 2 needs the binary and lives in `t/04-interop.t`, in both directions — it is
 the half that no amount of self-consistency can catch, since a document this
 library wrote and read back agreed with itself perfectly while sops saw binary.
+
+## A known limitation on the write path: sops 3.13.3 cannot read a `type:bytes` cell
+
+Measured against sops 3.13.3 on 2026-08-21 during the karr #77 / karr #136
+investigation, where the same finding was first named as a neighbouring
+paragraph in the Notes section of
+[ADR 0035](https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0035-an-untyped-stores-unencrypted-leaf-is-written-as-the-bytes-the-digest-covers.md):
+
+```
+$ sops -d doc.yaml        # any doc with a type:bytes cell
+panic: runtime error: hash of unhashable type []uint8
+
+goroutine 1 [running]:
+type:.hash.github.com/getsops/sops/v3/aes.stashKey(...)
+github.com/getsops/sops/v3/aes.Cipher.Decrypt(...)
+    github.com/getsops/sops/v3/aes/cipher.go:123
+...
+exit 2
+```
+
+Same panic in dotenv and INI; same panic in YAML. The payload is irrelevant —
+the same document under `type:str` reads at exit 0 with the bytes intact. The
+label is what trips it. No sops store produces a `type:bytes` cell: YAML's
+`!!binary` lands as `type:str` with the decoded bytes in the value, and so does
+the whole-file `binary` input store. `type:bytes` is therefore a label sops
+3.13.3 can write *into* its own model and cannot read *from* a file. The aes
+package's `stashKey` cache is keyed by plaintext, and a byte slice is not a
+hashable type in Go — that is where the panic comes from.
+
+The decision above is unaffected: `type => 'bytes'` is still the right escape
+hatch for a caller who genuinely has bytes rather than characters, and the
+document File::SOPS writes for such a value is still the document sops would
+write if sops wrote one. The decision being recorded here is the one karr #136
+explicitly asked for — **warn, do not refuse**:
+
+- A document that contains a `type:bytes` cell cannot be opened by `sops 3.13.3`
+  in any format, by either direction of `sops -d` or by `sops edit`. The panic
+  happens before sops returns anything — exit 2, no partial plaintext.
+- The read path is unaffected. `File::SOPS::Encrypted->decrypt_value` returns
+  the bytes the caller put in, verbatim, and a foreign `type:bytes` cell in a
+  document produced elsewhere decrypts correctly here. The panic is in sops's
+  own aes cache, not in any parser.
+- Option (b) — refuse the write path — would be a behaviour change at a
+  documented escape hatch, and so requires its own ADR. The maintainer chose
+  option (a) (this section) for that reason; the refusal is filed as a separate
+  decision.
+- No fix is on the sops side at the time of writing. The sops repo's issue
+  tracker is the only place that can land one.
+
+Cross-references: karr #136, `t/71-sops-3133-panics-on-type-bytes.t`, the POD
+warnings at `File::SOPS::Encrypted::encrypt_value` and `value_to_bytes`, and
+the neighbouring-finding paragraph in ADR 0035 that recorded the same
+measurement before the decision went in.

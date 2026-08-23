@@ -11,6 +11,19 @@ Revision history for File-SOPS
     produces `:` for an empty arrayref. No YAML, JSON, INI or ENV leaf
     is at the ROOT today, so no file f-sops wrote changes its MAC. See
     docs/adr/0055 (forthcoming) and karr #156.
+  - DOCS: a `type => 'bytes'` cell written by File::SOPS is not readable
+    by sops 3.13.3 -- the binary panics at exit 2 with
+    `hash of unhashable type []uint8` in the aes package, on the
+    document's first encrypted leaf, regardless of format. The sops
+    store produces no `type:bytes` cell, so this is a sops-side bug
+    that f-sops can only warn about: a caller who uses the
+    documented `type => 'bytes'` escape hatch from ADR 0003 writes a
+    document sops cannot open in any format. The read path (decrypting
+    a foreign `type:bytes` cell) is unaffected. POD warnings added at
+    `File::SOPS::Encrypted::encrypt_value` and `value_to_bytes`;
+    ADR 0003 extended with a "Known limitation" section;
+    `t/71-sops-3133-panics-on-type-bytes.t` pins the panic against the
+    binary. See docs/adr/0003 and karr #136.
   - BEHAVIOUR CHANGE: a bare leading-zero YAML integer is repaired to Go's
     resolution on the parse path, so `0755` reads back as `493` and not `755`
     from a YAML document, and the digest moves silently. libyaml marks a
