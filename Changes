@@ -1,6 +1,29 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a bare leading-zero YAML integer is repaired to Go's
+    resolution on the parse path, so `0755` reads back as `493` and not `755`
+    from a YAML document, and the digest moves silently. libyaml marks a
+    leading-zero integer as POK+IOK with the source text in PV and the decimal
+    value in IV; Go's yaml.v3 resolves the same spelling as octal, and the
+    two implementations used to read different numbers out of the same leaf.
+    `File::SOPS::Format::YAML::parse` now narrows the spellings to
+    `/\A[+-]?0\d+\z/`, asks the existing `_go_scalar_bytes` helper what Go
+    parses them to, and rewrites the leaf to a plain int whenever the
+    helper's answer disagrees with libyaml's IV. The plaintext byte
+    sequence changes from the spelling to the integer Go reads (e.g.
+    `0755` -> `493`); the encrypted digest does not move (it already
+    covered `493`). Three observable effects for callers. A `decrypt_file`
+    output now writes `493`, not `0755`, for a leading-zero integer the
+    leaf was unencrypted -- a tool reading the plaintext file will see the
+    integer. The encrypted slot's `sops_mac` is unchanged. The direct API
+    (`File::SOPS->encrypt(data => { v => $dualvar })`) is not changed: a
+    caller passing a libyaml dualvar still hits `assert_representable` and
+    still gets the warning t/34 documents, because that path does not go
+    through `parse`. Measured over 217 YAML scalars against sops 3.13.3:
+    66 of which used to diverge at the value level -- all 66 now produce
+    the same integer here that sops produces; the remaining 151 are
+    unaffected; 0 move an existing MAC. See docs/adr/0054 and karr #127.
   - NEW DIAGNOSTIC: a MAC verification failure on an env or ini document
     whose tree carries an unencrypted value with a Go display form sops wrote
     into a typed-value slot (bool, null, integral float, or one printed in

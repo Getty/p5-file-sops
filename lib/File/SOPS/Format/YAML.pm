@@ -178,6 +178,12 @@ sub parse {
     # HashRef check, so there is a tree to walk. See _restring_non_finite_leaf.
     _restring_non_finite_leaves($data, {});
 
+    # Same position shape: AFTER _restring_non_finite_leaves, because that walk
+    # produces its own dualvar and reads SVf_NOK; this one reads SVf_IOK and
+    # produces another dualvar. So they cannot collide, but the dualvars they
+    # each leave must be the only ones anyone sees -- hence the order.
+    _go_repair_int_leaves($data, {});
+
     # AFTER _restring_non_finite_leaves, and that order is load-bearing: the
     # walk above turns a leaf whose PUBLIC NOK and POK are both set and whose
     # NV is non-finite back into its string half, which is exactly the shape of
@@ -683,6 +689,100 @@ sub _restring_non_finite_leaf {
     return unless length $pv;
 
     $_[0] = $pv;
+    return;
+}
+
+###############################################################################
+# A bare leading-zero integer libyaml and Go disagree about (karr #127, docs/adr/0054)
+#
+# `v: 0755` is parsed by YAML::XS as a Perl dualvar: POK with PV="0755", IOK
+# with IV=755. go-yaml's resolver reads `0755` through strconv.ParseInt(_, 0, 64),
+# which interprets a leading zero as octal and reads it as 493. sops digests the
+# bytes Go produced -- so a document f-sops wrote (data:"755") and a document
+# sops wrote (data:"493") were both verified by their own readers, and neither
+# could read the other; on a wire that crosses implementations the encrypted-slot
+# value was silently different.
+#
+# The fix is the same shape _restring_non_finite_leaves uses -- a tree walk that
+# reads the SV's own flags and rewrites the integer leaves whose PV is a bare
+# leading-zero token, leaving a non-disagreeing leaf alone. The whole scalar is
+# replaced with the integer Go reads, dropping the source spelling: a
+# dualvar(493, "0755") is exactly the shape Encrypted::assert_representable
+# refuses (a value that carries its own, different string form), so carrying
+# the PV across would just trade today's silent value divergence for today's
+# loud dualvar refusal. The repaired leaf is a plain integer Go's number, the
+# digest covers Go's number, the emitter writes Go's number, and the whole
+# chain is one value the MAC covers and sops reads -- which is the entire
+# shape the encrypted slot has been missing, and the unencrypted slot gets as
+# a side effect because the slot is the slot the parse handed back.
+#
+# PREDICATE, measured, on eight spellings of the same family:
+#
+#   "0755"  POK+IOK+PV="0755"+IV=755  => becomes 493, plain int   (the ticket)
+#   "010"   POK+IOK+PV="010"+IV=8     => already agrees, no-op
+#   "017"   POK+IOK+PV="017"+IV=15    => already agrees, no-op
+#   "007"   POK+IOK+PV="007"+IV=7     => already agrees (7 is 7 in both bases)
+#   "0o10"  POK-only (PV="0o10")      => predicate skips, no repair (string PV)
+#   "0x1f"  POK-only (PV="0x1f")      => predicate skips, no repair
+#   "1_000" POK-only (PV="1_000")     => predicate skips, no repair (string PV)
+#   "0755e0" POK+IOK+NOK+PV="0755e0" => predicate skips (not bare integer syntax)
+#
+# So the predicate is exactly: scalar with SVf_IOK, PV present, PV matches
+# /\A[+-]?0\d+\z/, _go_scalar_bytes(PV) returns a decimal that does not equal
+# IV. Anything else is left alone. The mirror order to the call below is
+# exactly the order from _restring_non_finite_leaves -- AFTER the non-finite
+# repair, which can produce its own dualvar and which reads NOK+POK, never IOK,
+# so the two predicates do not collide.
+
+sub _go_repair_int_leaves {
+    my ($node, $seen) = @_;
+
+    return if $seen->{refaddr($node)}++;
+
+    if (ref $node eq 'HASH') {
+        for my $key (keys %$node) {
+            ref $node->{$key}
+                ? _go_repair_int_leaves($node->{$key}, $seen)
+                : _go_repair_int_leaf($node->{$key});
+        }
+    }
+    elsif (ref $node eq 'ARRAY') {
+        for my $entry (@$node) {
+            ref $entry
+                ? _go_repair_int_leaves($entry, $seen)
+                : _go_repair_int_leaf($entry);
+        }
+    }
+
+    return;
+}
+
+# $_[0] is the caller's slot by alias, deliberately, and the rewrite is
+# written back into the same place. The PV is dropped, not kept as a dualvar:
+# a dualvar(493, "0755") is exactly the shape Encrypted::assert_representable
+# refuses (a "value that carries its own, different string form" -- YAML::XS
+# writes the string half, the digest covers the int, and the two disagree).
+# So the repaired scalar is a plain integer Go's number, with no public PV,
+# and the assert_representable check at Encrypted.pm line 1596 skips it
+# entirely: _has_public_pv is false and the int branch is bypassed. The same
+# is what sops itself does on the parse side -- it loses the source spelling
+# of `0755` because Go's resolver reads it as the integer 493, and that is
+# the trailing edge of karr #127.
+sub _go_repair_int_leaf {
+    return unless defined $_[0] and !ref $_[0];
+
+    my $sv = B::svref_2object(\$_[0]);
+    return unless $sv->FLAGS & B::SVf_IOK;
+
+    my $pv = $sv->PV;
+    return unless length $pv;
+    return unless $pv =~ /\A[+-]?0\d+\z/;
+
+    my $go_bytes = _go_scalar_bytes($pv);
+    return unless defined $go_bytes && $go_bytes =~ /\A-?\d+\z/;
+    return if $go_bytes + 0 == $sv->IV;       # already agrees; no-op
+
+    $_[0] = $go_bytes + 0;
     return;
 }
 

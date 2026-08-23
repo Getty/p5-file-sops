@@ -30,6 +30,16 @@ use Crypt::Age;
 # Most of this file needs no binary -- that a warning is raised, where, and for
 # which leaves is visible from inside Perl. The last subtest is the part that is
 # a claim about sops, and it is skipped without one.
+#
+# Subtests 1 to 6 and 8 still pin what the previous paragraph describes -- the
+# direct API (encrypt with `data => ...`) hands YAML::XS's own dualvars to the
+# encrypt path and the warning is the only safety net there. Subtests 7 and 9
+# used to pin the round-trip divergence on the FILE path: an `encrypt` output
+# written to disk and read back through `decrypt_file` gave 493 to sops and
+# 0755/755 to us, with no warning in between. karr #127 / docs/adr/0054 closed
+# that -- the parse path now repairs the same spellings to Go's resolution, so
+# both readers see the same value. Subtests 7 and 9 were rewritten to pin the
+# NEW claim (silent on read; the same value out as sops reads in).
 # ----------------------------------------------------------------------------
 
 sub _find_on_path {
@@ -172,7 +182,10 @@ subtest 'the plaintext emitters stay silent' => sub {
     # decrypt_file and edit write a document with no MAC and no second reader.
     # ADR 0013 keeps the refusal out of there; the warning has no more business
     # in it, and a caller cannot act on a warning about a file they are
-    # DECRYPTING.
+    # DECRYPTING. The file path goes through Format::YAML::parse, which now
+    # repairs a leading-zero integer to Go's resolution (karr #127 /
+    # docs/adr/0054) -- so the spelling that the direct encrypt API just wrote
+    # is the one we do NOT see again, and the test pins that.
     my ($document, $died, $warnings) = encrypt_capturing(
         data => { mode_unencrypted => yaml_leaf('0755'), s => 'x' },
         mac_only_encrypted => 1);
@@ -188,8 +201,8 @@ subtest 'the plaintext emitters stay silent' => sub {
                                  identities => [$secret]);
     }
     is_deeply(\@on_read, [], 'and reading it back says nothing');
-    like(read_file($out), qr/^mode_unencrypted: 0755$/m,
-        'with the spelling written straight back out');
+    like(read_file($out), qr/^mode_unencrypted: 493$/m,
+        'with Go\'s number written straight back out, not the spelling');
 
     my @on_emit;
     {
@@ -214,16 +227,18 @@ subtest 'the sops metadata section is not walked' => sub {
 
 SKIP: {
     skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "claim that sops reads a DIFFERENT value out of the warned document "
+       . "claim that sops reads the same value out of this document as we do "
        . "is a claim about the binary and cannot be made without it. Fix: set "
        . "SOPS_BIN=/path/to/sops.", 1
         unless $sops_bin;
 
-    subtest 'sops accepts the warned document and reads another value' => sub {
+    subtest 'sops accepts the warned document and reads the same value' => sub {
         my ($document, $died, $warnings) = encrypt_capturing(
             data => { mode_unencrypted => yaml_leaf('0755'), s => 'x' },
             mac_only_encrypted => 1);
-        is(scalar @$warnings, 1, 'the warning was raised');
+        is(scalar @$warnings, 1, 'the warning was raised -- the direct-API '
+                                . 'path still warns, only the FILE path no '
+                                . 'longer diverges');
 
         my $file = "$tempdir/warned.yaml";
         write_file($file, $document);
@@ -231,12 +246,15 @@ SKIP: {
         is($? >> 8, 0, 'and sops -d accepts the document') or diag("sops: $out");
         like($out, qr/^mode_unencrypted: 493$/m, 'reading the leaf as 493');
 
+        # The decrypt path goes through Format::YAML::parse, which repaired
+        # the leading-zero integer to Go's resolution (karr #127 /
+        # docs/adr/0054). The two implementations now agree on the same
+        # number; the warning that encrypt raised is the only remaining trace
+        # of what would have been a value-level divergence.
         my $ours = File::SOPS->decrypt(encrypted => $document,
                                        identities => [$secret]);
-        # The leaf keeps the source text it was parsed from, so its two halves
-        # say `0755` and 755. Neither half is 493, which is the whole point.
-        is("$ours->{mode_unencrypted}", '0755', 'while this module hands back 0755');
-        cmp_ok($ours->{mode_unencrypted}, '==', 755, 'which is the number 755');
+        is("$ours->{mode_unencrypted}", '493', 'and this module hands back 493');
+        cmp_ok($ours->{mode_unencrypted}, '==', 493, 'which is the number 493');
     };
 }
 
