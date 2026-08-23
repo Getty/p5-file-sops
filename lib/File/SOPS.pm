@@ -3907,6 +3907,18 @@ sub _verify_mac {
     # not added for any other format. See docs/adr/0052 and karr #174.
     my $hint = _mac_failure_sops_display_hint($args{data}, $metadata, $args{format_class});
 
+    # A second hedged hint for the sops-written bare `-0` case: any float
+    # that underflows to negative zero on Go's side is written as `-0` (or
+    # `-0.0`), and yaml.v3 / json.v2 read `-0` back as int 0, so the file
+    # fails its own MAC and `sops -d` refuses it too. We never write this
+    # shape (ADR 0014 ships `-0.0`), so the hint only fires for files
+    # sops produced. Scans raw document text, not the parsed tree -- by
+    # the time the tree is in hand the `-0` has become int 0 and the
+    # signal is gone. See docs/adr/0063 and karr #121.
+    if ($hint eq '') {
+        $hint = _mac_failure_sops_negzero_hint($args{document}, $args{format_class});
+    }
+
     croak sprintf(
         "MAC verification failed: the digest over %d leaf value%s in %s "
         . "order does not match the one stored in the sops section%s. The "
@@ -3972,6 +3984,53 @@ sub _mac_failure_sops_display_hint {
         . 'cause, not a confirmed one.',
         $where, $text, $name,
     );
+}
+
+# Hedged hint for the sops-written bare `-0` case (karr #121 / docs/adr/0063).
+# Go's float printer writes any underflowed negative zero as the bare token
+# `-0` (or `-0.0`); yaml.v3 and json.v2 read `-0` back as int 0, so the
+# document fails its own MAC and `sops -d` reports exit 51. We never emit
+# this shape (ADR 0014 ships `-0.0`), so the hint only fires for files sops
+# produced -- the signal is in the document text, not the parsed tree (the
+# tree has int 0 and the original sign is gone).
+#
+# Two qualifications keep the wording a "consistent with" rather than a
+# finding, matching _mac_failure_sops_display_hint:
+#
+#   1. The regex matches the literal token `-0(\.0+)?` anywhere in the
+#      document text. A user with a key named `lastoffset: -0` would match
+#      the regex but for a different reason; the hint names the sops bug
+#      without claiming it is the cause.
+#   2. ENV and INI carry values as plain strings, so a bare `-0` there is
+#      the string "-0" and the digest agrees with what gets read. Only
+#      yaml and json have typed values, so only those formats can carry the
+#      bug.
+#
+# Returns the empty string for every other format or shape.
+sub _mac_failure_sops_negzero_hint {
+    my ($document, $format_class) = @_;
+
+    return '' unless $format_class && $format_class->can('format_name');
+    my $name = $format_class->format_name;
+    return '' unless $name eq 'yaml' || $name eq 'json';
+
+    # The sops section itself does not carry this shape: age recipients are
+    # base32, the mac is ENC[...], the lastmodified is ISO 8601, the version
+    # is a dotted triplet, and base64 alphabet is A-Za-z0-9+/= (no `-`).
+    # So a raw substring match over the whole document is safe.
+    #
+    # The lookahead (?![0-9.eE]) keeps a digit, a period, or an exponent
+    # marker right after the candidate from being part of the same token:
+    # -01, -0.5, -0e3, -0E3 are NOT the bug shape and must not match.
+    # -0.0 / -0.00 / -0.000 all match (the .0+ repeat consumes every
+    # trailing zero, then the lookahead sees a token boundary).
+    return '' unless defined $document
+        && $document =~ /-0(?:\.0+)*(?![0-9.eE])/;
+
+    return 'The document also carries a bare `-0` token in an unencrypted '
+         . 'value -- a known sops shape: any float that underflows to '
+         . 'negative zero is written as `-0` but parses back as int 0, '
+         . 'so the file fails its own MAC and `sops -d` also refuses it.';
 }
 
 sub _scan_sops_display_forms {

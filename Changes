@@ -1,6 +1,24 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: a hedged hint is appended to the MAC verification
+    failure message when the raw document text carries a bare `-0` token
+    (or `-0.0` / `-0.000` / ...) in a YAML or JSON unencrypted slot. The
+    hint names the sops shape -- any float that underflows to negative
+    zero is written as `-0` but parses back as int 0, so the file fails
+    its own MAC and `sops -d` also refuses it -- and points at
+    `ignore_mac => 1` as the existing escape. The hint only fires when
+    the primary MAC check fails, only for yaml / json (env and ini have
+    no typed values), and is phrased "consistent with" rather than as a
+    confirmed cause; documents without the bare `-0` token still see
+    the same opaque refusal they did before. The MAC bytes themselves
+    do not move. We never write the broken shape (ADR 0014 ships
+    `-0.0`), so this is the only signal a reader of a sops-produced
+    document gets that the file was already unopenable before it
+    reached us. Pinned by `t/75-bare-negative-zero-mac-mismatch-hints.t`
+    (run with sops on PATH); one line in the MAC failure croak path,
+    one sibling sub next to `_mac_failure_sops_display_hint`. See
+    docs/adr/0063 and karr #121.
   - DOCS: the asymmetry between the two positions a sops comment can occupy
     is recorded as deliberate. `decrypt_file` / `edit` already REFUSE a
     document whose comment is a sequence element (ADR 0041): the leaf is
