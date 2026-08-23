@@ -1,6 +1,17 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: the deep-recursion noise left after karr #117 (ADR 0029)
+    is silenced in the two remaining walks. `File::SOPS::Encrypted::_canonical_floats`
+    gains `no warnings 'recursion';` and stops copying the key path per level
+    -- the per-level `[ @$path, $_ ]` was quadratic in depth: measured in
+    `SOPS.pm`'s `_sorted_leaves`, 4000 levels took 101s and 410 MB, the
+    push/pop form reaches 10000 levels in 17ms and 24 MB. `Format::YAML::_restring_non_finite_leaves`
+    gains the same silencing (it does not carry a path). t/45 section 2's
+    TODO block becomes a real assertion, and the residual-warning diag now
+    points at karr #179, which closed the survey gap (Format::YAML::_go_repair_int_leaves
+    was missed by #120's survey and is the last recursive walk outside SOPS.pm).
+    No wire byte moves -- this is performance and noise. See karr #120.
   - BEHAVIOUR CHANGE: `_path_to_aad` answers `:` for an empty path, the
     document ROOT, where Go's `strings.Join([], ":") + ":"` produces `:`.
     The previous early return answered `""` for both an undef path and

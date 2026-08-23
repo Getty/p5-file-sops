@@ -189,11 +189,8 @@ for my $walk (@WALKS) {
 # ---------------------------------------------------------------------------
 # 2. The same through the public API.
 #
-# The encrypt itself is asserted here and now. The quiet is not: every
-# remaining warning comes from File::SOPS::Encrypted::_canonical_floats, which
-# runs inside every emit and belongs to a file this ticket could not touch.
-# 505 lines before, 168 after, all of them from there. karr #120 removes the
-# rest; when it does, this stops being TODO.
+# Section 2 was completed by karr #120: every remaining walk outside SOPS.pm is
+# now silenced and shares a single key-path rather than copying it per level.
 
 my ($deep_encrypted, $deep_back);
 {
@@ -218,17 +215,13 @@ like($deep_encrypted, qr/^sops:/m,
 is($deep_back->{a1}{v}, '1', 'and decrypts back, MAC and all');
 
 
-TODO: {
-    local $TODO = 'walks outside SOPS.pm still warn -- karr #120';
-
-    is(deep_recursion(sub {
-        File::SOPS->encrypt(
-            data       => $DEEP_ALIASED,
-            recipients => [$public],
-            format     => 'yaml',
-        );
-    }), undef, 'encrypt writes no deep-recursion warning at all');
-}
+is(deep_recursion(sub {
+    File::SOPS->encrypt(
+        data       => $DEEP_ALIASED,
+        recipients => [$public],
+        format     => 'yaml',
+    );
+}), undef, 'encrypt writes no deep-recursion warning at all');
 
 # ---------------------------------------------------------------------------
 # 3. Every walk carries the bound.
@@ -359,12 +352,11 @@ SKIP: {
 }
 
 # ---------------------------------------------------------------------------
-# What is still noisy, said out loud rather than left on STDERR. When karr #120
-# lands this goes quiet and the TODO in section 2 starts passing.
+# What is still noisy, said out loud rather than left on STDERR.
 
 my $residual_total = 0;
 $residual_total += $_ for values %residual;
-diag(sprintf('%d deep-recursion warnings left, from %s -- karr #120',
+diag(sprintf('%d deep-recursion warnings left, from %s -- karr #179',
     $residual_total, join(', ', sort keys %residual)))
     if $residual_total;
 

@@ -1540,19 +1540,32 @@ sub _non_finite_token_leaf {
 }
 
 sub _canonical_floats {
+    no warnings 'recursion';
     my ($node, $roundtrips, $carrier, $reject, $reject_scalar, $mac_covered,
         $path) = @_;
 
-    return { map { $_ => _canonical_floats($node->{$_}, $roundtrips, $carrier,
-                                           $reject, $reject_scalar, $mac_covered,
-                                           [ @$path, $_ ]) }
-                 keys %$node }
-        if ref $node eq 'HASH';
-    return [ map { _canonical_floats($node->[$_], $roundtrips, $carrier,
-                                     $reject, $reject_scalar, $mac_covered,
-                                     [ @$path, $_ ]) }
-                 0 .. $#$node ]
-        if ref $node eq 'ARRAY';
+    if (ref $node eq 'HASH') {
+        return { map {
+                    push @$path, $_;
+                    my $result = _canonical_floats($node->{$_}, $roundtrips,
+                                                   $carrier, $reject,
+                                                   $reject_scalar, $mac_covered,
+                                                   $path);
+                    pop @$path;
+                    $_ => $result;
+                } keys %$node };
+    }
+    if (ref $node eq 'ARRAY') {
+        return [ map {
+                    push @$path, $_;
+                    my $result = _canonical_floats($node->[$_], $roundtrips,
+                                                   $carrier, $reject,
+                                                   $reject_scalar, $mac_covered,
+                                                   $path);
+                    pop @$path;
+                    $result;
+                } 0 .. $#$node ];
+    }
 
     # Blessed leaves (JSON::PP::Boolean) and anything else with a reference are
     # not floats and must reach the emitter untouched -- unless the caller's

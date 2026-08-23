@@ -639,6 +639,7 @@ sub _first_unreadable_tag {
 my $POSITIVE_INFINITY = 9**9**9;
 
 sub _restring_non_finite_leaves {
+    no warnings 'recursion';
     my ($node, $seen) = @_;
 
     # A recursive YAML anchor (`root: &a\n  b: *a`) really does come back from
