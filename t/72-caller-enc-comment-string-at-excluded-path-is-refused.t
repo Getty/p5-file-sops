@@ -180,13 +180,22 @@ subtest 'a File::SOPS::Comment in a mapping value is still refused' => sub {
 };
 
 ###############################################################################
-# 5. The ticket reproducer -- a type:comment string nested inside an
-#    excluded mapping under an empty-key sub-mapping inside a sequence.
-#    The guard must fire at the leaf, where the path is whatever the walk
-#    builds, and name it.
+# 5. The bucket-list case. Once the bucket predicate recognises a list of
+#    ENC-comment strings (karr #172 / docs/adr/0059) the walk returns the
+#    bucket as-is, so this shape is now ACCEPTED -- it is a comment bucket
+#    in the wire tree, the same way a list of File::SOPS::Comment objects
+#    is a comment bucket in the plaintext tree. The karr #168 leaf guard
+#    never reaches the items because the walk no longer descends into one.
+#
+#    This replaces an earlier assertion that the same shape was REFUSED.
+#    That assertion was correct under karr #168 alone; karr #172 narrows
+#    the guard's reach deliberately, because a bucket of ENC-comment
+#    strings is what a previous encrypt wrote, and re-encrypt must keep
+#    the comment line as-is. The non-bucket shape (subtests 1 and 4 above)
+#    is still refused.
 ###############################################################################
 
-subtest 'the ticket reproducer: nested under a deeper excluded subtree' => sub {
+subtest 'the bucket-list case is accepted, not refused' => sub {
     my $got = eval { File::SOPS->encrypt(
         data => {
             db_unencrypted => { q{} => [ $COMMENT_TOKEN ] },
@@ -195,10 +204,15 @@ subtest 'the ticket reproducer: nested under a deeper excluded subtree' => sub {
         recipients => [$public],
         format     => 'yaml',
     ) };
-    ok(!defined $got, 'refuses the nested shape too')
-        or diag('encrypt returned: '.($got // 'undef'));
-    like($@, qr/type:comment/s, 'naming the shape');
-    like($@, qr/db_unencrypted:/, 'naming the excluded subtree at least');
+    ok(defined $got, 'a bucket of ENC-comment strings at an excluded path '
+        . 'writes (karr #172)')
+        or diag('encrypt died: '.($@ // 'undef'));
+    like($got, qr/,type:comment\]/,
+        'the comment strings are PRESERVED as type:comment -- the bucket '
+        . 'predicate keeps them as-is instead of letting the leaf walk '
+        . 'rewrite them as type:str');
+    unlike($got, qr/,type:str\]\s*\n[^\n]*ENC\[AES256_GCM,[^\]]* a comment/s,
+        'and the original token does not reappear as a re-encrypted type:str');
 };
 
 done_testing();

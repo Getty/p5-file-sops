@@ -3317,22 +3317,37 @@ sub _encryption_options {
 ###############################################################################
 our $COMMENT_BUCKET_KEY = '';
 
-# $on_the_wire says which shape a comment wears in THIS tree, and it is the
-# same discriminator _is_comment_leaf takes -- never key material, nothing is
-# decrypted by it. In the document's own tree a comment is an
-# ENC[...,type:comment] string; in a plaintext tree it is a
-# File::SOPS::Comment. The decrypt side spells it with the data key because it
-# has one; a walk over the document's own tree that has no key passes a bare
-# truth instead, because it needs none.
+# Two shapes for a comment leaf, both load-bearing for the bucket predicate:
 #
-# Passing nothing on the ENCRYPT side is what stops a caller's plain string
-# that merely SPELLS a comment leaf from moving the path its neighbours are
-# encrypted under.
+#   * a File::SOPS::Comment object -- the plaintext tree's spelling;
+#   * a plain string whose text parses as ENC[...,type:comment] -- the wire
+#     tree's spelling, and what decrypt returns at a path the encryption
+#     rule EXCLUDES (rule-first decrypt, ADR 0049).
+#
+# Both have to answer YES here, for the same reason: the walks agree about
+# the path they build. Where the bucket predicate returns NO the bucket key
+# ADDS a path component, and the two walks answer `should_encrypt_path`
+# about different paths. A plain value at `db:` is one AAD; the same value
+# at `db::` (the bucket key appended) is another. The leaf walks don't
+# share the bucket predicate -- one sub rather than two -- because a path
+# they disagree on writes a document this library writes and then cannot
+# read (measured, with `^$`: rotate declined a file encrypt had just
+# written). The Comment-object half is recognised by _is_comment_leaf
+# regardless of the data-key gate; the wire half is recognised by the same
+# predicate karr #168 added to the leaf guard -- `!ref && encrypted_type
+# eq 'comment'` -- which the data-key gate does not need because the
+# predicate never decrypts. docs/adr/0059, karr #172.
 sub _is_comment_bucket {
-    my ($value, $on_the_wire) = @_;
+    my ($value) = @_;
 
     return 0 unless ref $value eq 'ARRAY' && @$value;
-    _is_comment_leaf($_, $on_the_wire) or return 0 for @$value;
+    for my $item (@$value) {
+        next if File::SOPS::Encrypted->is_comment($item);
+        next if !ref $item
+            && (File::SOPS::Encrypted->encrypted_type($item) // '')
+                eq 'comment';
+        return 0;
+    }
     return 1;
 }
 
@@ -3350,7 +3365,7 @@ sub _adds_no_path_component {
 
     return $key eq $COMMENT_BUCKET_KEY
         && @$path
-        && _is_comment_bucket($value, $on_the_wire);
+        && _is_comment_bucket($value);
 }
 
 sub _encrypt_tree {
@@ -3401,6 +3416,27 @@ sub _encrypt_tree {
         return \%result;
     }
     elsif (ref $node eq 'ARRAY') {
+        # A wire-bucket of ENC[...,type:comment] strings must NOT descend into
+        # the list -- the leaf code path would fire karr #168 on every item
+        # the rule EXCLUDES (because each item is a plain string whose text
+        # spells an ENC-comment token), and at any path it would re-encrypt
+        # the token as a plain type:str and lose the comment label. Both
+        # halves of that break a comment line this library previously wrote,
+        # so the walk returns the bucket list as-is. The Comment-object half
+        # is intentionally NOT in scope here: a Comment object at a SELECTED
+        # path still descends so the walk can encrypt it, which is what
+        # makes the round trip produce ENC-comment strings on the way out.
+        # docs/adr/0059, karr #172.
+        my $is_wire_bucket = 1;
+        for my $item (@$node) {
+            if (ref $item
+                || (File::SOPS::Encrypted->encrypted_type($item) // '')
+                    ne 'comment') {
+                $is_wire_bucket = 0;
+                last;
+            }
+        }
+        return $node if $is_wire_bucket;
         my @result;
         for my $item (@$node) {
             # SOPS does NOT add array index to path - all array elements share parent's path
