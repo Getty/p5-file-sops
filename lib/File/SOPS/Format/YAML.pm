@@ -736,6 +736,7 @@ sub _restring_non_finite_leaf {
 # so the two predicates do not collide.
 
 sub _go_repair_int_leaves {
+    no warnings 'recursion';
     my ($node, $seen) = @_;
 
     return if $seen->{refaddr($node)}++;
