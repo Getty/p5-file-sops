@@ -48,7 +48,7 @@ use Crypt::Age;
 # decision about that slot's bytes and not about this walk, which never sees
 # an encrypted leaf at all.)
 #
-# karr #141 / docs/adr/0060 NARROWED the unencrypted-slot refusal by PUBLIC
+# karr #141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC
 # PV: a bare non-finite float (no public PV at all) is no longer refused
 # here, because the YAML carrier manufactures the carrying dualvar. Section 5
 # below is the row that moved -- the bare-NV rows there now write in YAML
@@ -337,7 +337,7 @@ subtest 'a stated string half that IS the go-yaml token still passes through' =>
 #    Nothing a caller can construct becomes writable there that was not
 #    writable before -- except: a BARE non-finite float now WRITES in YAML,
 #    because docs/adr/0037's YAML carrier manufactures the carrying dualvar.
-#    The karr #141 / docs/adr/0060 narrowing by PUBLIC PV is the reason: a
+#    The karr #141 / docs/adr/0062 narrowing by PUBLIC PV is the reason: a
 #    bare NV has no PV at all, so the gate does not fire and the carrier is
 #    called instead. JSON has no carrier, so JSON still refuses (from the
 #    emit walk's mac_covered croak). The contradiction rows are unchanged:
@@ -554,7 +554,7 @@ SKIP: {
 # 9. ADR 0034's ROWS MUST NOT MOVE. The unencrypted slot was closed three
 #    commits before this one and has nothing to do with the emit fix; if any of
 #    this moves, the repair has started keying on something other than the
-#    absence of a string half. karr #141 / docs/adr/0060 NARROWED the guard
+#    absence of a string half. karr #141 / docs/adr/0062 NARROWED the guard
 #    by public PV: a leaf whose public PV is clear (a bare NV, no token of its
 #    own) is no longer refused by assert_representable in the unencrypted
 #    slot, but the carrier still manufactures the carrying dualvar, so the

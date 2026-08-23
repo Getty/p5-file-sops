@@ -49,6 +49,52 @@ Revision history for File-SOPS
     and `t/74-flat-format-keeps-its-own-sops-key.t` (run with sops on
     PATH) round-trips an env file with `sops=1` in both directions.
     See docs/adr/0061 and karr #157.
+  - BEHAVIOUR CHANGE: a bare non-finite float in an UNENCRYPTED slot is no
+    longer refused by `File::SOPS::Encrypted::assert_representable`. The
+    `encrypted => 0` branch of the karr #59 / ADR 0031 guard gains the same
+    `_has_public_pv` conjunct the `encrypted => 1` branch already had
+    (ADR 0040): the refusal fires only when the leaf ALSO states a string
+    half of its own, and a bare NV has no half to contradict. The leaf
+    then reaches the carrier docs/adr/0037's `_non_finite_token_leaf`
+    consults -- the YAML carrier manufactures `dualvar($double, $token)`
+    for the twelve go-yaml tokens and the YAML emitter writes the token
+    the digest covers, so a bare `9**9**9` reaches a sops-written YAML
+    document as `.inf` (and `-9**9**9` as `-.inf`, `NaN` as `.nan`),
+    byte-identical to what `sops -d` itself writes for the same value,
+    and `sops -d` reads it back at exit 0 as the float it is. JSON has
+    no carrier for a non-finite float at all, so the same call still
+    croaks -- the croak moves from the karr #59 message to the JSON
+    carrier's `_non_finite_token_leaf` message, which names the key
+    path, and `sops -d --output-type json` exits 51 / 4 on the same
+    document. Three observable effects for callers. `rotate` of a
+    sops-written YAML document with a bare `.inf` / `-.inf` / `.nan`
+    in an unencrypted slot now writes, where it croaked at exit 1 with
+    the karr #59 message before. `encrypt` / `encrypt_file` of a
+    hand-built tree with a bare `9**9**9` under an unencrypted YAML
+    slot writes `.inf`, where it croaked before. And `decrypt_file` of
+    a sops-written YAML document with the same leaf writes `.inf`,
+    matching `sops -d` byte for byte. THREE THINGS DO NOT MOVE. A
+    contradicting dualvar (`dualvar(+Inf, 'banana')`, `.INf`, `-.inf`)
+    is still refused at this layer in both formats -- the gate is the
+    same one ADR 0031 wrote and the same twelve-row counter-check
+    holds. A bare NV in an ENCRYPTED slot still croaks at
+    `Encrypted::encrypt_value` (karr #122 / ADR 0040), unchanged. And
+    JSON is unchanged in user-visible outcome: the call still croaks,
+    the message now names the key path through the carrier rather than
+    the form through the karr #59 wording, and the reference answer is
+    still `sops -d --output-type json` exit 4. Measured against sops
+    3.13.3, six test sections flipped from RED to GREEN: t/28 section
+    1 (the write-side split), t/39 section 11 (overflow leaf), t/42
+    section 11 (plain `.inf` parses to the leaf this ADR no longer
+    refuses), t/46 sections 4-5 (`assert_representable` answers per
+    slot), t/52 section 9 (ADR 0037's twelve-row encrypt-path counter-
+    check), and t/54 sections 1 / 4 / 5 (the encrypt-side consult and
+    the encrypt-path table). The full suite is 74 files, 1364 tests,
+    all PASS, with `t/04-interop.t` and the other interop sections
+    executed against the binary rather than skipped. One line in
+    `lib/File/SOPS/Encrypted.pm` (the conjunct and a message reword
+    that points at the carrier), six test sections updated, no other
+    file changed. See docs/adr/0062 and karr #141.
   - BEHAVIOUR CHANGE: the last recursive walk outside `SOPS.pm` is silenced,
     closing the survey gap karr #120 left behind. `Format::YAML::_go_repair_int_leaves`
     gains `no warnings 'recursion';` -- structurally identical to the change

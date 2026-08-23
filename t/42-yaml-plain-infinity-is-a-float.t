@@ -250,7 +250,7 @@ subtest 'the repaired leaf is emitted as the token it came from' => sub {
 
 ###############################################################################
 # 6. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied BARE non-finite
-#    float is NO LONGER refused here -- karr #141 / docs/adr/0060 removed the
+#    float is NO LONGER refused here -- karr #141 / docs/adr/0062 removed the
 #    refusal because docs/adr/0037's YAML carrier manufactures the carrying
 #    dualvar for it. JSON still refuses (sops writes null), but from the
 #    emit walk, where the question of "can this format spell this number"

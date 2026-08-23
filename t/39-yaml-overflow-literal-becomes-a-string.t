@@ -270,7 +270,7 @@ subtest 'the sops section is split off before the walk runs' => sub {
 ###############################################################################
 # 4. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied bare non-finite NV
 #    used to be refused in the unencrypted slot too, with the message below
-#    the next subtest name. karr #141 / docs/adr/0060 removed that refusal,
+#    the next subtest name. karr #141 / docs/adr/0062 removed that refusal,
 #    because docs/adr/0037's YAML carrier manufactures the carrying dualvar
 #    for it: the carrier consults go-yaml's own twelve tokens and the YAML
 #    emitter writes the token the digest covers, so the leaf now reaches the
@@ -304,7 +304,7 @@ subtest 'a real non-finite float is written in YAML, as both slots it can reach'
         my ($name, $value, $token) = @$case;
 
         # Unencrypted slot, YAML: the carrier writes the token. This USED to
-        # refuse with the karr #59 message; karr #141 / docs/adr/0060 removed
+        # refuse with the karr #59 message; karr #141 / docs/adr/0062 removed
         # the refusal because the YAML carrier spells the same token the
         # digest covers.
         my $unencrypted = File::SOPS->encrypt(

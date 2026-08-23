@@ -34,7 +34,7 @@ use Crypt::Age;
 #   * section 2 is the contradiction -- dualvar(+Inf, '-.inf') and friends.
 #     Both halves have to agree, the same rule ADR 0012 gives an integer.
 #   * section 3 is the bare NV, refused in JSON and written in YAML. karr
-#     #141 / docs/adr/0060 removed assert_representable's refusal of a bare
+#     #141 / docs/adr/0062 removed assert_representable's refusal of a bare
 #     NV in the unencrypted slot (the YAML carrier now manufactures the
 #     carrying dualvar), so the bare NV is accepted HERE for YAML and the
 #     JSON refusal moves to the emit walk -- which is what section 3 splits
@@ -163,7 +163,7 @@ subtest 'a spelling go-yaml does not resolve is refused' => sub {
 #    in both formats -- that is what karr #59 was written for, measured, `Inf`
 #    in an unencrypted YAML slot is sops -d exit 51, and `-Inf` / `NaN` are
 #    exit 0 with the leaf silently retyped from a float to a string, which
-#    is worse. karr #141 / docs/adr/0060 removed the assert_representable
+#    is worse. karr #141 / docs/adr/0062 removed the assert_representable
 #    refusal for the BARE case in the unencrypted slot: docs/adr/0037's
 #    YAML carrier manufactures the carrying dualvar, and the leaf now
 #    reaches the document as `.inf` / `-.inf` / `.nan`. JSON has no such
@@ -194,7 +194,7 @@ subtest 'a bare non-finite float is still refused, in the format where it must b
         'and so is one that was only stringified: the public POK stays clear');
 };
 
-# karr #141 / docs/adr/0060 split the slot answer by FORMAT. An ENCRYPTED
+# karr #141 / docs/adr/0062 split the slot answer by FORMAT. An ENCRYPTED
 # slot carries a bare non-finite float as type:float and the plaintext +Inf,
 # which is what `sops -e` writes in both formats -- unchanged since karr #122
 # / docs/adr/0040. The UNENCRYPTED slot -- the one this whole file is about,
@@ -253,7 +253,7 @@ subtest 'a bare non-finite float: YAML writes it, JSON refuses it from the emit 
 #    --output-type yaml. The disagreement is between OUTPUT formats. So the
 #    leaf is written, in both, and what this section pins now is that the
 #    TOKEN plays no part in it -- the same bytes reach the wire whether the
-#    scalar carries one or not. karr #141 / docs/adr/0060 did not change any
+#    scalar carries one or not. karr #141 / docs/adr/0062 did not change any
 #    of this: the unencrypted-slot narrowing is the only move.
 ###############################################################################
 
@@ -300,7 +300,7 @@ subtest 'encrypt_value writes it directly, and the token is not on the wire'
 #    exactly the trap karr #62 sprang the last time a YAML fix was measured
 #    without JSON.
 #
-#    karr #141 / docs/adr/0060 re-organised this: a token-CARRYING leaf still
+#    karr #141 / docs/adr/0062 re-organised this: a token-CARRYING leaf still
 #    gets refused in JSON (the emit walk's mac_covered croak, which a
 #    dualvar with its token still triggers, see below). A BARE non-finite
 #    float in JSON is also refused, but now by the emit walk rather than the

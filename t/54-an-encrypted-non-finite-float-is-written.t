@@ -134,7 +134,7 @@ sub sops_run {
 #    questions differently depending on which slot the leaf is going into, and
 #    the default is the strict answer every existing caller already had.
 #
-#    karr #141 / docs/adr/0060 NARROWED the non-finite refusal by PUBLIC PV.
+#    karr #141 / docs/adr/0062 NARROWED the non-finite refusal by PUBLIC PV.
 #    A bare non-finite float has no public PV at all -- the number is its only
 #    form -- so neither of the croaks fires and the leaf passes in BOTH slots
 #    AND with no slot given. The "default to strict" promise is now narrow:
@@ -154,7 +154,7 @@ sub sops_run {
 subtest 'assert_representable answers per slot, and defaults to strict' => sub {
     # BARE non-finite floats now pass -- in both slots and with no slot given.
     # The strict answer they used to refuse them with is gone: karr #141 /
-    # docs/adr/0060 narrowed the guard by public PV, and a bare NV has none.
+    # docs/adr/0062 narrowed the guard by public PV, and a bare NV has none.
     for my $case (@NON_FINITE) {
         my $v = $case->{double};
 
@@ -277,7 +277,7 @@ subtest 'a contradictory string half is refused in an encrypted slot' => sub {
 
 ###############################################################################
 # 4. THE UNENCRYPTED SLOT DOES NOT MOVE, except for the one cell karr #141 /
-#    docs/adr/0060 narrowed: a bare NV (no public PV) is now written in YAML
+#    docs/adr/0062 narrowed: a bare NV (no public PV) is now written in YAML
 #    (the carrier manufactures the dualvar) and still refused in JSON (the
 #    emit walk's mac_covered croak). The contradicting rows are unchanged.
 #    Reproduced here because this is the cell that was most at risk of moving
@@ -334,7 +334,7 @@ subtest 'the unencrypted slot answers exactly as it did, except for the bare NV'
 #    The encrypted half is unchanged: $INF (bare NV) goes to the encrypted
 #    slot in both formats -- karr #122 / docs/adr/0040 made that explicit.
 #
-#    The unencrypted half had to move with karr #141 / docs/adr/0060: a bare
+#    The unencrypted half had to move with karr #141 / docs/adr/0062: a bare
 #    NV in the unencrypted slot is now WRITTEN in YAML (the carrier
 #    manufactures the dualvar), and what still refuses at this layer is a
 #    CONTRADICTING scalar. So the unencrypted side here uses a dualvar

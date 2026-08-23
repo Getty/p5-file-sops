@@ -23,7 +23,7 @@ use Crypt::Age;
 # accepted by _deserialize_value today (and sops writes it), and stays
 # accepted.
 #
-# karr #141 / docs/adr/0060 NARROWED the unencrypted-slot refusal by PUBLIC PV:
+# karr #141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC PV:
 # a leaf WITHOUT one (a bare NV, like `9**9**9`) is no longer refused here.
 # docs/adr/0037's _non_finite_token_leaf manufactures the carrying dualvar for
 # it in YAML (the carrier consults go-yaml's own twelve tokens and the YAML
@@ -64,7 +64,7 @@ my %cases = (
 ###############################################################################
 # 1. WRITE-SIDE SPLIT. A bare NV (no public PV) used to be refused by
 #    assert_representable's unencrypted-slot guard in both formats (karr #59).
-#    karr #141 / docs/adr/0060 removed that refusal: the YAML carrier
+#    karr #141 / docs/adr/0062 removed that refusal: the YAML carrier
 #    (docs/adr/0037) manufactures the carrying dualvar `.inf` / `-.inf` /
 #    `.nan`, and the leaf now reaches the document as that token. JSON has no
 #    such carrier, and the refusal moves to the emit walk's mac_covered croak.
