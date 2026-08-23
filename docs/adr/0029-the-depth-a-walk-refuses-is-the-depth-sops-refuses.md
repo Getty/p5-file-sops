@@ -2,9 +2,19 @@
 
 - Status: accepted
 - Date: 2026-08-21
+- Revised: 2026-08-23 — Survey gap closed by ADR 0057 (karr #179): a third walk
+  outside `SOPS.pm`, `Format::YAML::_go_repair_int_leaves` (added at karr #127
+  / ADR 0054, after karr #120's survey shipped), was missed by the karr #120
+  survey and was the source of the 167 deep-recursion warnings t/45's `What
+  is still noisy` diag kept reporting. The fix is the same one-line
+  `no warnings 'recursion';` karr #120 applied to its two walks, since
+  `_go_repair_int_leaves` is structurally identical to
+  `_restring_non_finite_leaves`. After the change: zero residue; the open
+  bullet below closes.
 - Tags: api, guards, robustness, diagnostics, interop
 - Resolves karr #117
-- Opens karr #120 (the walks outside `SOPS.pm` still warn)
+- Opens karr #120 (the walks outside `SOPS.pm` still warn); ADR 0057 closes
+  the survey gap that karr #120 left behind
 - Related: ADR 0025 (a document that contains itself is refused — this bound is
   what stops the same walks when that guard is not the one asking), ADR 0027
   (the alias budget is go-yaml's ratio — same rule about whose number a

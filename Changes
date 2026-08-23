@@ -1,6 +1,18 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - BEHAVIOUR CHANGE: the last recursive walk outside `SOPS.pm` is silenced,
+    closing the survey gap karr #120 left behind. `Format::YAML::_go_repair_int_leaves`
+    gains `no warnings 'recursion';` -- structurally identical to the change
+    karr #120 applied to `_restring_non_finite_leaves` (same `($node, $seen)`
+    walk, recurses on HASH and ARRAY, no path). Measured on t/45's 265-level
+    alias-chain fixture: 167 deep-recursion warnings from this walk before the
+    change (the residue karr #120's survey missed, because this walk was added
+    in karr #127 / ADR 0054 after the survey shipped), zero after. The t/45
+    `What is still noisy` diag block is deleted -- the `count_residual`
+    regression net stays. No wire byte moves; no AAD or MAC moves; the
+    predicate, ordering and `$seen` cycle guard are unchanged. See
+    docs/adr/0057 and karr #179.
   - BEHAVIOUR CHANGE: the deep-recursion noise left after karr #117 (ADR 0029)
     is silenced in the two remaining walks. `File::SOPS::Encrypted::_canonical_floats`
     gains `no warnings 'recursion';` and stops copying the key path per level
