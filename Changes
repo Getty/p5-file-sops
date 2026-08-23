@@ -1,6 +1,27 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - DOCS: the asymmetry between the two positions a sops comment can occupy
+    is recorded as deliberate. `decrypt_file` / `edit` already REFUSE a
+    document whose comment is a sequence element (ADR 0041): the leaf is
+    in the tree as an `ENC[...,type:comment]` string and YAML::XS cannot
+    emit it, so the guard names the path and writes nothing. The
+    mapping-position comment (above a mapping key, and the file-leading
+    comment sops writes the same way) is dropped SILENTLY at exit 0:
+    YAML::XS discards comment text before `parse` ever sees a tree, so
+    there is no leaf for a guard to refuse, and the write path simply
+    has no comment to emit. Both documents verify at sops 3.13.3
+    (`sops -d` returns every comment intact in both cases), and the
+    asymmetry is already sops's own: `sops -e --output-type json` drops
+    mapping-position comments too. Making the mapping-position case loud
+    would refuse a document sops reads, and would need the read half of
+    karr #148 (YAML::PP's raw token stream) purely to power a refusal --
+    the recovery has nowhere to put the comment, since a mapping-position
+    comment sits before a key, where a Perl hash has no slot. Today's
+    behaviour is the answer. The POD in `File::SOPS::Format::YAML` /
+    `parse` already names the asymmetry in the "A comment inside a list
+    is kept" section. Pinned by `t/74-a-mapping-position-yaml-comment-is-dropped-silently.t`.
+    No code change, no wire byte. See docs/adr/0060 and karr #169.
   - BEHAVIOUR CHANGE: the last recursive walk outside `SOPS.pm` is silenced,
     closing the survey gap karr #120 left behind. `Format::YAML::_go_repair_int_leaves`
     gains `no warnings 'recursion';` -- structurally identical to the change
