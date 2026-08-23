@@ -351,13 +351,4 @@ SKIP: {
         or diag($plain);
 }
 
-# ---------------------------------------------------------------------------
-# What is still noisy, said out loud rather than left on STDERR.
-
-my $residual_total = 0;
-$residual_total += $_ for values %residual;
-diag(sprintf('%d deep-recursion warnings left, from %s -- karr #179',
-    $residual_total, join(', ', sort keys %residual)))
-    if $residual_total;
-
 done_testing;
