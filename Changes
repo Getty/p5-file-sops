@@ -1,6 +1,27 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - ARBITRATION: the three RE2/Perl regex divergences that survived
+    docs/adr/0048's fix are recorded as limits rather than closed. (1)
+    `unencrypted_regex: '(?i)^ss$'` over a key U+00DF (ß) leaves the
+    value readable here (Perl full case folding: ß -> ss) and encrypted
+    at sops (RE2 simple folding does not fold ß -> ss); Perl has no
+    simple-fold-only flag, and `/aa` would suppress the ß fold AND the
+    k/KELVIN and s/LONG-S folds RE2 does perform. (2) `unencrypted_regex:
+    '^foo$'` over a key "foo\n" leaves the value readable here (Perl `$`
+    is `(?=\n?\z)`) and encrypted at sops (RE2 `$` is `\z`); the
+    pattern-text rewrite `$` -> `\z` (outside a class, outside an
+    escape, not under `(?m)`) is a mini-parser on the rule text that is
+    out of proportion to a rule nobody has been seen to write, and ADR
+    0038 forbids refusing a rule sops reads back. (3)
+    `unencrypted_regex: '\p{Word}'` over a key "Word" leaves the value
+    readable here (Perl has `\p{Word}`) and encrypted at sops (RE2
+    "invalid character class range"; sops discards the compile error
+    and the rule matches nothing); reproducing Go's Unicode category
+    and script table on this side is the only exact fix. None of the
+    three is reachable by an ASCII rule over ASCII keys. No code change.
+    Pinned by `t/77-three-re2perl-shapes-measured.t`. See docs/adr/0065
+    and karr #165.
   - ARBITRATION: the surrogate-pair divergence between `Cpanel::JSON::XS`
     (which combines `😀` to U+1F600) and `YAML::PP` (which
     keeps the two lone surrogates) is accepted as a limit. sops 3.13.3
