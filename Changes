@@ -28,6 +28,25 @@ Revision history for File-SOPS
     POD, the `version` attribute POD, and the `from_hash` "Every write
     path stamps a fresh `3.7.3`" bullet all name the divergence and point
     at the ADR. No code change, no test, no wire byte.
+  - BEHAVIOUR CHANGE: a list of `ENC[...,type:comment]` strings under an
+    empty `''` key in an INI section the encryption rule EXCLUDES is now
+    recognised as a comment bucket, both when the rule is read (the walk
+    reaches the list because ADR 0049 returns the wire half at excluded
+    paths) and when the rule is written (the bucket predicate widens to
+    cover the wire half, and the ARRAY branch in `_encrypt_tree` returns
+    the list as-is so the leaf walk no longer re-encrypts the strings as
+    `type:str`). The Comment-object half of the predicate is unchanged;
+    a list of `File::SOPS::Comment` objects at the same slot still
+    encrypts and reads back as Comment objects. The karr #168 leaf guard
+    (ADR 0056) still fires on a plain `ENC[...,type:comment]` string at
+    an excluded LEAF path -- only the bucket-list case is unblocked.
+    A misruled INI file whose `[db]` section holds an ENC-comment bucket
+    now rotates under `ignore_mac => 1` (the previous behaviour died at
+    the karr #168 guard inside the bucket). No wire bytes move for any
+    document that did not carry the bad shape -- the short-circuit
+    returns the bucket list as-is, so the bucket items this library
+    previously wrote are preserved verbatim. See docs/adr/0059, karr
+    #172, and t/73.
   - BEHAVIOUR CHANGE: the deep-recursion noise left after karr #117 (ADR 0029)
     is silenced in the two remaining walks. `File::SOPS::Encrypted::_canonical_floats`
     gains `no warnings 'recursion';` and stops copying the key path per level
