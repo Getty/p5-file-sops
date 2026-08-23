@@ -201,8 +201,10 @@ each exit 1. L</from_hash> accepts all of them and defaults an absent one to
 C<3.7.3>, which is a deliberate divergence in the permissive direction:
 nothing here reads the field, and no value read out of a document is ever
 written back into one, because L</policy_args> does not carry it across a
-re-encryption. See L</from_hash> for the measured table and why a partial
-check would be worse than none.
+re-encryption -- the divergence from sops here is that sops preserves the
+document's own version verbatim on a rotate while we stamp C<3.7.3> instead.
+See L</policy_args>, F<docs/adr/0058> (karr #151) and L</from_hash> for the
+measured table and why a partial check would be worse than none.
 
 =cut
 
@@ -600,9 +602,24 @@ Deliberately B<not> included is everything that describes B<what> encrypted
 this particular document, because none of it survives a re-encryption: the
 per-backend key material (L</age>, L</pgp>, L</kms> and friends) wraps a data
 key that is about to be replaced, L</mac> authenticates values that are about
-to be rewritten, L</lastmodified> is the AAD of that MAC, and L</version>
-names the implementation doing the writing rather than the one that wrote the
-file before.
+to be rewritten, and L</lastmodified> is the AAD of that MAC.
+
+B<L</version> is also deliberately not carried>, and this is a divergence from
+the reference implementation: sops preserves the document's own version
+verbatim across a C<sops rotate> (measured: C<3.7.3> stays C<3.7.3>, C<3.13.3>
+stays C<3.13.3>, and so do C<v3.13.3>, C<1.2.3> and C<3.13.3-rc.1>);
+L<File::SOPS/rotate> instead constructs a fresh
+L<File::SOPS::Metadata> object, whose L</version> defaults to C<$SOPS_VERSION>
+(C<3.7.3>), so a document written by sops 3.13.3 reads back here with
+C<version: 3.7.3> after a rotation. The
+stamp is a provenance field that goes backwards rather than forwards, and
+nothing here reads it -- no MAC, no AAD, no decryption decision depends on
+L</version> -- so the divergence is silent. A document whose version sops
+itself refuses (which L</from_hash> accepts permissively, per
+L<docs/adr/0043>) would be rewritten still refused, but no version sops
+currently writes is in that set. The decision to keep the stamp rather than
+carry the document's own value across is recorded in F<docs/adr/0058> (karr
+#151).
 
 This is what L<File::SOPS/rotate> passes to L<File::SOPS/encrypt> so that a
 rotated file keeps the rules it was written under.
@@ -1246,7 +1263,9 @@ against its binary version.
 
 =item * B<Every write path stamps a fresh C<3.7.3>>, which sops accepts.
 L</policy_args> does not carry L</version> across a re-encryption, so a value
-read out of a document never reaches a document.
+read out of a document never reaches a document -- a divergence from sops,
+which preserves the document's own version verbatim on a rotate; the
+decision is recorded in F<docs/adr/0058>.
 
 =item * B<A partial check would be worse than none.> Refusing what does not
 look like C<N.N.N> would refuse C<v3.13.3>, C<3.13.3-rc.1>, C<3.13.3+build.5>

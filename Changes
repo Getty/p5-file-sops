@@ -13,6 +13,21 @@ Revision history for File-SOPS
     regression net stays. No wire byte moves; no AAD or MAC moves; the
     predicate, ordering and `$seen` cycle guard are unchanged. See
     docs/adr/0057 and karr #179.
+  - DOCS: `File::SOPS::Metadata->policy_args` is now explicit about a
+    divergence from sops on the `sops.version` field: sops preserves the
+    document's own version verbatim across a `sops rotate`, while this
+    library stamps `3.7.3` (its own `SOPS_VERSION`). Measured against
+    sops 3.13.3: `3.7.3` stays `3.7.3`, `3.13.3` stays `3.13.3`, and so do
+    `v3.13.3`, `1.2.3` and `3.13.3-rc.1` on the binary side; here, every
+    rotate produces `version: 3.7.3` regardless of what the document
+    carried. The field is unobserved on this side -- nothing reads it,
+    including the MAC, the AAD and every decryption decision -- and `3.7.3`
+    is a version sops itself accepts, so the divergence is silent. The
+    decision to keep the stamp rather than carry the document's value
+    across is recorded in docs/adr/0058 (karr #151); the `policy_args`
+    POD, the `version` attribute POD, and the `from_hash` "Every write
+    path stamps a fresh `3.7.3`" bullet all name the divergence and point
+    at the ADR. No code change, no test, no wire byte.
   - BEHAVIOUR CHANGE: the deep-recursion noise left after karr #117 (ADR 0029)
     is silenced in the two remaining walks. `File::SOPS::Encrypted::_canonical_floats`
     gains `no warnings 'recursion';` and stops copying the key path per level
