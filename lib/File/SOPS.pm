@@ -3568,7 +3568,15 @@ sub _decrypt_tree {
 
 sub _path_to_aad {
     my ($path) = @_;
-    return '' unless $path && @$path;
+    # Go builds the AAD as strings.Join(path, ":") + ":". An undef path is a
+    # caller bug (the walks always pass an arrayref, possibly empty); answering
+    # "" there keeps a missing argument from masking the bug as a quiet AAD
+    # mismatch. An empty arrayref is the document ROOT, where Go answers ":"
+    # and this routine answers ":" -- the join below produces it. The four
+    # format handlers all build a non-empty path before they reach a leaf, so
+    # the empty case is unreachable today, but a future format that walks the
+    # root would land here and the answer has to match sops.
+    return '' unless defined $path;
     # SOPS format: path components joined with ":" plus trailing ":"
     #
     # This is a CHARACTER string -- the components are keys straight out of the
