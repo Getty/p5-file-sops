@@ -133,27 +133,67 @@ sub sops_run {
 # 1. THE GUARD TAKES THE SLOT. assert_representable answers one of its three
 #    questions differently depending on which slot the leaf is going into, and
 #    the default is the strict answer every existing caller already had.
+#
+#    karr #141 / docs/adr/0060 NARROWED the non-finite refusal by PUBLIC PV.
+#    A bare non-finite float has no public PV at all -- the number is its only
+#    form -- so neither of the croaks fires and the leaf passes in BOTH slots
+#    AND with no slot given. The "default to strict" promise is now narrow:
+#    strict still refuses the contradictory cases (dualvar(+Inf, 'banana'),
+#    the JSON literal of 400 zeros whose text is its digits -- ADR 0020).
+#    What stops is the bare-NV refusal, which karr #59 was written for but
+#    which the YAML carrier (ADR 0037) and the JSON emit walk's mac_covered
+#    croak together make redundant: YAML manufactures the carrying dualvar,
+#    JSON refuses at the format-specific layer where the question of "can
+#    this format spell this number" actually belongs.
+#
+#    A leaf WITH a public PV (dualvar(+Inf, 'banana'), dualvar(+Inf, '.INf'))
+#    still fails both gates with the same karr #59 message, and the slot
+#    difference for those is unchanged.
 ###############################################################################
 
 subtest 'assert_representable answers per slot, and defaults to strict' => sub {
+    # BARE non-finite floats now pass -- in both slots and with no slot given.
+    # The strict answer they used to refuse them with is gone: karr #141 /
+    # docs/adr/0060 narrowed the guard by public PV, and a bare NV has none.
     for my $case (@NON_FINITE) {
         my $v = $case->{double};
 
         my $strict = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v) });
-        ok($strict, "[$case->{name}] refused with no slot given");
-        like($strict, qr/non-finite float/,
-            "[$case->{name}] from the non-finite guard");
+        is($strict, '',
+            "[$case->{name}] a bare NV is accepted with no slot given (karr #141)");
 
         my $unenc = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v,
                       encrypted => 0) });
-        ok($unenc, "[$case->{name}] refused for an unencrypted slot");
+        is($unenc, '',
+            "[$case->{name}] a bare NV is accepted for an unencrypted slot (karr #141)");
 
         my $enc = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v,
                       encrypted => 1) });
         is($enc, '', "[$case->{name}] accepted for an encrypted slot");
+    }
+
+    # The contradictory cases still fail in both slots -- same gate, same
+    # answer. The slot difference the original section 1 was about does
+    # not apply here (no slot ever carries both halves).
+    for my $row (
+        [ 'dualvar(+Inf, banana)'  => dualvar($INF,  'banana') ],
+        [ 'dualvar(+Inf, .INf)'    => dualvar($INF,  '.INf')   ],
+        [ 'dualvar(+Inf, -.inf)'   => dualvar($INF,  '-.inf')  ],
+        [ 'dualvar(-Inf, .inf)'    => dualvar(-$INF, '.inf')   ],
+    ) {
+        my ($name, $value) = @$row;
+        for my $slot (0, 1) {
+            my $err = error_from(sub {
+                File::SOPS::Encrypted->assert_representable($value,
+                    encrypted => $slot);
+            });
+            ok($err, "[$name/encrypted=$slot] still refused");
+            like($err, qr/string half/,
+                "[$name/encrypted=$slot] and says why");
+        }
     }
 
     # The other two questions are slot-blind and stay that way.
@@ -236,33 +276,41 @@ subtest 'a contradictory string half is refused in an encrypted slot' => sub {
 };
 
 ###############################################################################
-# 4. THE UNENCRYPTED SLOT DOES NOT MOVE. This is ADR 0037's own counter-check,
-#    reproduced here because this change is the one that could break it: seven
-#    leaves x two formats, and the only cell that writes anything is the one
-#    ADR 0031 opened.
+# 4. THE UNENCRYPTED SLOT DOES NOT MOVE, except for the one cell karr #141 /
+#    docs/adr/0060 narrowed: a bare NV (no public PV) is now written in YAML
+#    (the carrier manufactures the dualvar) and still refused in JSON (the
+#    emit walk's mac_covered croak). The contradicting rows are unchanged.
+#    Reproduced here because this is the cell that was most at risk of moving
+#    the wrong way: seven leaves x two formats, and the bare-NV row is the
+#    only cell that now writes in YAML.
 ###############################################################################
 
-subtest 'the unencrypted slot answers exactly as it did' => sub {
+subtest 'the unencrypted slot answers exactly as it did, except for the bare NV' => sub {
+    # [name, value, yaml_ok, expected_token] -- the third column moved for
+    # the bare-NV rows: a bare NV is now written in YAML (the carrier's
+    # token) and still refused in JSON. The contradicting rows are unchanged.
     my @rows = (
-        [ 'bare +Inf'              => $INF,                   0 ],
-        [ 'bare NaN'               => $NAN,                   0 ],
-        [ 'dualvar(+Inf, banana)'  => dualvar($INF, 'banana'), 0 ],
-        [ 'dualvar(+Inf, .INf)'    => dualvar($INF, '.INf'),  0 ],
-        [ 'dualvar(+Inf, -.inf)'   => dualvar($INF, '-.inf'), 0 ],
-        [ 'dualvar(-Inf, .inf)'    => dualvar(-$INF, '.inf'), 0 ],
-        [ 'dualvar(+Inf, .inf)'    => dualvar($INF, '.inf'),  1 ],
+        [ 'bare +Inf'              => $INF,                   1, '.inf'  ],
+        [ 'bare NaN'               => $NAN,                   1, '.nan'  ],
+        [ 'dualvar(+Inf, banana)'  => dualvar($INF, 'banana'), 0, undef   ],
+        [ 'dualvar(+Inf, .INf)'    => dualvar($INF, '.INf'),  0, undef   ],
+        [ 'dualvar(+Inf, -.inf)'   => dualvar($INF, '-.inf'), 0, undef   ],
+        [ 'dualvar(-Inf, .inf)'    => dualvar(-$INF, '.inf'), 0, undef   ],
+        [ 'dualvar(+Inf, .inf)'    => dualvar($INF, '.inf'),  1, '.inf'  ],
     );
 
     for my $row (@rows) {
-        my ($name, $value, $yaml_ok) = @$row;
+        my ($name, $value, $yaml_ok, $token) = @$row;
 
         my $yaml = eval {
             File::SOPS->encrypt(data => { v_unencrypted => $value },
                 recipients => [$public], format => 'yaml');
         };
         if ($yaml_ok) {
-            ok($yaml, "[$name] YAML writes it");
-            like($yaml, qr/^v_unencrypted: \.inf$/m, "[$name] as the token");
+            ok($yaml, "[$name] YAML writes it") or diag("died: $@");
+            like($yaml, qr/^v_unencrypted: \Q$token\E$/m,
+                "[$name] as the carrier's token ($token)")
+                or diag("got: $yaml");
         }
         else {
             ok(!defined $yaml, "[$name] YAML refuses it");
@@ -282,6 +330,16 @@ subtest 'the unencrypted slot answers exactly as it did' => sub {
 #    asks should_encrypt_path, which is the predicate _encrypt_tree encrypts
 #    by, so a document with encrypted_regex or encrypted_suffix set answers
 #    about the leaves THAT document encrypts.
+#
+#    The encrypted half is unchanged: $INF (bare NV) goes to the encrypted
+#    slot in both formats -- karr #122 / docs/adr/0040 made that explicit.
+#
+#    The unencrypted half had to move with karr #141 / docs/adr/0060: a bare
+#    NV in the unencrypted slot is now WRITTEN in YAML (the carrier
+#    manufactures the dualvar), and what still refuses at this layer is a
+#    CONTRADICTING scalar. So the unencrypted side here uses a dualvar
+#    whose halves disagree (dualvar(+Inf, 'banana')) -- the shape that still
+#    refuses, exactly as before.
 ###############################################################################
 
 subtest 'the slot comes from the encryption rules, not from a name' => sub {
@@ -290,6 +348,10 @@ subtest 'the slot comes from the encryption rules, not from a name' => sub {
         [ encrypted_suffix => '_enc',  'a_enc',  'plain'  ],
         [ unencrypted_regex => '^pub', 'other',  'pub_x'  ],
     );
+    # A leaf the rule does NOT encrypt: a contradicting scalar, since the
+    # unencrypted slot is now what karr #141 narrowed (bare NV writes in
+    # YAML; only the contradicting case still refuses at this layer).
+    my $unencrypted_value = dualvar($INF, 'banana');
 
     for my $rule (@rules) {
         my ($name, $value, $encrypted_key, $unencrypted_key) = @$rule;
@@ -306,10 +368,11 @@ subtest 'the slot comes from the encryption rules, not from a name' => sub {
 
         my $err = error_from(sub {
             File::SOPS->encrypt(
-                data       => { $unencrypted_key => $INF, keepme => 'x' },
+                data       => { $unencrypted_key => $unencrypted_value, keepme => 'x' },
                 recipients => [$public], format => 'yaml', $name => $value);
         });
-        ok($err, "[$name] the leaf it does not encrypt is still refused");
+        ok($err,
+            "[$name] a contradicting scalar in the unencrypted slot is still refused");
         like($err, qr/\Q$unencrypted_key\E/, "[$name] naming that key path");
     }
 };

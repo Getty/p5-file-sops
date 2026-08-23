@@ -249,22 +249,41 @@ subtest 'the repaired leaf is emitted as the token it came from' => sub {
 };
 
 ###############################################################################
-# 6. THE karr #59 GUARD, NARROWED. A caller's own non-finite float is still
-#    refused -- that is what the guard was written for and it is untouched.
-#    The leaf this walk produces is not: karr #113 / docs/adr/0031 measured
-#    that a float carrying go-yaml's own token has a wire form after all, and
+# 6. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied BARE non-finite
+#    float is NO LONGER refused here -- karr #141 / docs/adr/0060 removed the
+#    refusal because docs/adr/0037's YAML carrier manufactures the carrying
+#    dualvar for it. JSON still refuses (sops writes null), but from the
+#    emit walk, where the question of "can this format spell this number"
+#    actually belongs.
+#
+#    What stays refused here is a caller-supplied dualvar whose public PV
+#    contradicts its number -- dualvar(+Inf, 'banana') and the like. The
+#    reach is narrower than the karr #59 it replaced: no parse and no
+#    decryption produces such a dualvar, so this is medium and not high.
+#
+#    The leaf this walk produces (a dualvar carrying go-yaml's own token) is
+#    still accepted, the same answer karr #113 / docs/adr/0031 measured and
 #    t/46 is that decision's corpus. Both halves are pinned here because this
 #    file is where the scalar comes from.
 ###############################################################################
 
-subtest 'a caller-supplied non-finite float is still refused' => sub {
+subtest 'a caller-supplied non-finite float whose PV contradicts its number is refused' => sub {
     my $inf = 9**9**9;
-    for my $value ($inf, -$inf, $inf - $inf) {
+    my @rows = (
+        [ '+Inf with "banana"' => dualvar($inf,  'banana')  ],
+        [ '+Inf with ".INf"'   => dualvar($inf,  '.INf')    ],
+        [ '+Inf with "-.inf"'  => dualvar($inf,  '-.inf')   ],
+        [ '-Inf with ".inf"'   => dualvar(-$inf, '.inf')    ],
+        [ 'NaN with ".inf"'    => dualvar($inf - $inf, '.inf') ],
+    );
+
+    for my $row (@rows) {
+        my ($name, $leaf) = @$row;
         my $ok = eval {
-            File::SOPS::Encrypted->assert_representable($value); 1
+            File::SOPS::Encrypted->assert_representable($leaf); 1
         };
-        ok(!$ok, 'assert_representable refuses it');
-        like($@, qr/non-finite float/, 'and says why');
+        ok(!$ok, "[$name] assert_representable refuses it");
+        like($@, qr/non-finite float/, "[$name] and says why") if !$ok;
     }
 };
 

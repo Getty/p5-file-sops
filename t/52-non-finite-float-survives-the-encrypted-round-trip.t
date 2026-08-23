@@ -48,6 +48,13 @@ use Crypt::Age;
 # decision about that slot's bytes and not about this walk, which never sees
 # an encrypted leaf at all.)
 #
+# karr #141 / docs/adr/0060 NARROWED the unencrypted-slot refusal by PUBLIC
+# PV: a bare non-finite float (no public PV at all) is no longer refused
+# here, because the YAML carrier manufactures the carrying dualvar. Section 5
+# below is the row that moved -- the bare-NV rows there now write in YAML
+# (the carrier's token) and still refuse in JSON. The contradicting-string
+# rows are unchanged. The encrypted slot did not move either way.
+#
 # Sections 1 to 5 need no binary; sections 6 to 9 are the compatibility claim
 # and are skipped without one.
 # ----------------------------------------------------------------------------
@@ -328,31 +335,41 @@ subtest 'a stated string half that IS the go-yaml token still passes through' =>
 ###############################################################################
 # 5. WHAT MUST NOT MOVE, part two: the encrypt path into an UNENCRYPTED slot.
 #    Nothing a caller can construct becomes writable there that was not
-#    writable before -- assert_representable runs first, from _compute_mac's
-#    leaf sweep, and neither this change nor karr #122's touches that answer.
+#    writable before -- except: a BARE non-finite float now WRITES in YAML,
+#    because docs/adr/0037's YAML carrier manufactures the carrying dualvar.
+#    The karr #141 / docs/adr/0060 narrowing by PUBLIC PV is the reason: a
+#    bare NV has no PV at all, so the gate does not fire and the carrier is
+#    called instead. JSON has no carrier, so JSON still refuses (from the
+#    emit walk's mac_covered croak). The contradiction rows are unchanged:
+#    a leaf with a string half still has to agree with its number.
 ###############################################################################
 
 subtest 'the encrypt path answers exactly as it did' => sub {
+    # [name, value, yaml_ok, expected_token] -- yaml_ok is the only column
+    # that moved: a bare NV is now written in YAML (carrier manufactures
+    # the token) and still refused in JSON.
     my @rows = (
-        [ 'bare +Inf'              => $INF,                   0 ],
-        [ 'bare NaN'               => $NAN,                   0 ],
-        [ 'dualvar(+Inf, banana)'  => dualvar($INF, 'banana'), 0 ],
-        [ 'dualvar(+Inf, .INf)'    => dualvar($INF, '.INf'),  0 ],
-        [ 'dualvar(+Inf, -.inf)'   => dualvar($INF, '-.inf'), 0 ],
-        [ 'dualvar(-Inf, .inf)'    => dualvar(-$INF, '.inf'), 0 ],
-        [ 'dualvar(+Inf, .inf)'    => dualvar($INF, '.inf'),  1 ],
+        [ 'bare +Inf'              => $INF,                   1, '.inf'  ],
+        [ 'bare NaN'               => $NAN,                   1, '.nan'  ],
+        [ 'dualvar(+Inf, banana)'  => dualvar($INF, 'banana'), 0, undef   ],
+        [ 'dualvar(+Inf, .INf)'    => dualvar($INF, '.INf'),  0, undef   ],
+        [ 'dualvar(+Inf, -.inf)'   => dualvar($INF, '-.inf'), 0, undef   ],
+        [ 'dualvar(-Inf, .inf)'    => dualvar(-$INF, '.inf'), 0, undef   ],
+        [ 'dualvar(+Inf, .inf)'    => dualvar($INF, '.inf'),  1, '.inf'  ],
     );
 
     for my $row (@rows) {
-        my ($name, $value, $yaml_ok) = @$row;
+        my ($name, $value, $yaml_ok, $token) = @$row;
 
         my $yaml = eval {
             File::SOPS->encrypt(data => { v_unencrypted => $value },
                 recipients => [$public], format => 'yaml');
         };
         if ($yaml_ok) {
-            ok($yaml, "[$name] YAML writes it");
-            like($yaml, qr/^v_unencrypted: \.inf$/m, "[$name] as the token");
+            ok($yaml, "[$name] YAML writes it") or diag("died: $@");
+            like($yaml, qr/^v_unencrypted: \Q$token\E$/m,
+                "[$name] as the carrier's token ($token)")
+                or diag("got: $yaml");
         }
         else {
             ok(!defined $yaml, "[$name] YAML refuses it");
@@ -537,7 +554,12 @@ SKIP: {
 # 9. ADR 0034's ROWS MUST NOT MOVE. The unencrypted slot was closed three
 #    commits before this one and has nothing to do with the emit fix; if any of
 #    this moves, the repair has started keying on something other than the
-#    absence of a string half.
+#    absence of a string half. karr #141 / docs/adr/0060 NARROWED the guard
+#    by public PV: a leaf whose public PV is clear (a bare NV, no token of its
+#    own) is no longer refused by assert_representable in the unencrypted
+#    slot, but the carrier still manufactures the carrying dualvar, so the
+#    round trip below -- which sends a TOKEN through edit, not a bare NV --
+#    behaves exactly as it did. This section proves that much.
 ###############################################################################
 
     subtest 'an unencrypted plain token still round-trips through edit' => sub {

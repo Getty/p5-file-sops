@@ -23,12 +23,30 @@ use Crypt::Age;
 # accepted by _deserialize_value today (and sops writes it), and stays
 # accepted.
 #
-# Every subtest below is a Perl-level guarantee ("encrypt dies, decrypt
-# never sees the value"), not a byte-level one -- the byte-level question
-# is what the emitters USED TO DO, and assert_representable closes that
-# path before it can be exercised. The sops binary is unnecessary here and
-# is deliberately not used: this test's claim is "this lib refuses on its
-# own, and the read path still accepts a Go round-trip file".
+# karr #141 / docs/adr/0060 NARROWED the unencrypted-slot refusal by PUBLIC PV:
+# a leaf WITHOUT one (a bare NV, like `9**9**9`) is no longer refused here.
+# docs/adr/0037's _non_finite_token_leaf manufactures the carrying dualvar for
+# it in YAML (the carrier consults go-yaml's own twelve tokens and the YAML
+# emitter writes the token the digest covers), so the leaf now reaches the
+# document as `.inf` / `-.inf` / `.nan`. JSON has no such carrier, and the
+# refusal there moves to the emit walk's mac_covered croak -- where the
+# question of "can this format spell this number" actually belongs, and which
+# the section 1 split below mirrors: YAML writes it, JSON still refuses it.
+#
+# What stays refused at this layer is a leaf WITH a public PV whose bytes are
+# not one of go-yaml's twelve non-finite tokens -- dualvar(+Inf, 'banana'),
+# and the JSON literal of 400 zeros whose text is its digits (docs/adr/0020).
+# The wire is the token the emitter writes, so a contradicting PV would be
+# dropped without a trace, and choosing between a scalar's two halves is the
+# guess docs/adr/0012 refuses to make. t/68 is the plaintext-emit-side claim,
+# and section 2 below pins what the encrypt side did NOT loosen.
+#
+# Every subtest below is a Perl-level guarantee ("encrypt writes or dies,
+# decrypt never sees a value it should not"), not a byte-level one -- the
+# byte-level question is what the emitters USED TO DO, and assert_representable
+# closes that path before it can be exercised. The sops binary is unnecessary
+# here and is deliberately not used: this test's claim is "this lib refuses on
+# its own, and the read path still accepts a Go round-trip file".
 # ----------------------------------------------------------------------------
 
 my ($public, $secret) = Crypt::Age->generate_keypair();
@@ -44,32 +62,57 @@ my %cases = (
 );
 
 ###############################################################################
-# 1. WRITE-SIDE REFUSAL: encrypt() refuses every non-finite float, in both
-#    formats, with a message that names the form and points at type:str.
+# 1. WRITE-SIDE SPLIT. A bare NV (no public PV) used to be refused by
+#    assert_representable's unencrypted-slot guard in both formats (karr #59).
+#    karr #141 / docs/adr/0060 removed that refusal: the YAML carrier
+#    (docs/adr/0037) manufactures the carrying dualvar `.inf` / `-.inf` /
+#    `.nan`, and the leaf now reaches the document as that token. JSON has no
+#    such carrier, and the refusal moves to the emit walk's mac_covered croak.
+#
+#    Same value, same slot, two different answers -- the YAML carrier is the
+#    ONLY difference, which is why this section splits by format rather than
+#    asserting the same answer twice.
 ###############################################################################
 
-for my $format (qw(yaml json)) {
-    for my $name (sort keys %cases) {
-        my $value = $cases{$name};
+# What the YAML carrier spells for each form. Verified against sops 3.13.3:
+# `sops -e` normalises to the same three spellings.
+my %CARRIER_TOKEN = ('+Inf' => '.inf', '-Inf' => '-.inf', 'NaN' => '.nan');
 
-        subtest "[$format] encrypt() refuses a non-finite float ($name) with the karr #59 message" => sub {
-            my $encrypted = eval {
-                File::SOPS->encrypt(
-                    data       => { x_unencrypted => $value, secret => 'shh' },
-                    recipients => [$public],
-                    format     => $format,
-                );
-            };
+for my $name (sort keys %cases) {
+    my $value = $cases{$name};
+    my $token = $CARRIER_TOKEN{$name};
 
-            ok(!defined $encrypted, 'encrypt() does not return a document');
-            like($@, qr/non-finite float \Q($name\E/,
-                'and dies with the karr #59 message, naming the form')
-                or diag("died: $@");
-            like($@, qr/store the value as a string/i,
-                'and tells the caller what to do instead')
-                or diag("died: $@");
+    subtest "[yaml] encrypt() writes a bare non-finite float ($name) as the carrier's token" => sub {
+        my $encrypted = File::SOPS->encrypt(
+            data       => { x_unencrypted => $value, secret => 'shh' },
+            recipients => [$public],
+            format     => 'yaml',
+        );
+
+        ok(defined $encrypted, 'encrypt() returns a document')
+            or diag("died: $encrypted");
+        like($encrypted, qr/^x_unencrypted: \Q$token\E$/m,
+            "and x_unencrypted holds the carrier's $token spelling")
+            or diag("got: $encrypted");
+    };
+
+    subtest "[json] encrypt() refuses a bare non-finite float ($name) from the emit walk" => sub {
+        my $encrypted = eval {
+            File::SOPS->encrypt(
+                data       => { x_unencrypted => $value, secret => 'shh' },
+                recipients => [$public],
+                format     => 'json',
+            );
         };
-    }
+
+        ok(!defined $encrypted, 'encrypt() does not return a document');
+        like($@, qr/cannot write a non-finite float to this SOPS document/,
+            'and dies with the emit walk\'s message, not the karr #59 one')
+            or diag("died: $@");
+        like($@, qr/\bx_unencrypted\b/,
+            'and names the leaf path')
+            or diag("died: $@");
+    };
 }
 
 ###############################################################################

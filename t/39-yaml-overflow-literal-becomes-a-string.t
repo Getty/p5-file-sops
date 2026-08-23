@@ -268,40 +268,63 @@ subtest 'the sops section is split off before the walk runs' => sub {
 };
 
 ###############################################################################
-# 4. THE GUARD FROM karr #59 IS UNTOUCHED WHERE IT IS ABOUT THIS WALK. This
-#    change removes an artefact of the parser; it does not loosen a rule about
-#    values, and a caller who hands encrypt() a real non-finite float still
-#    gets the refusal in the slot that walk writes into -- the UNENCRYPTED one.
+# 4. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied bare non-finite NV
+#    used to be refused in the unencrypted slot too, with the message below
+#    the next subtest name. karr #141 / docs/adr/0060 removed that refusal,
+#    because docs/adr/0037's YAML carrier manufactures the carrying dualvar
+#    for it: the carrier consults go-yaml's own twelve tokens and the YAML
+#    emitter writes the token the digest covers, so the leaf now reaches the
+#    document as `.inf` / `-.inf` / `.nan`. JSON has no such carrier, and the
+#    refusal there moves to the emit walk's mac_covered croak -- which is
+#    where the question of "can this format spell this number" actually
+#    belongs, not in assert_representable, which sees both formats the same.
 #
-#    karr #122 / docs/adr/0040 narrowed the guard by SLOT: an encrypted slot
-#    carries type:float and the plaintext +Inf, which is what `sops -e` writes
-#    in both formats, so the same value is written there. That is the other
-#    half of the pair, and it is asserted here rather than dropped, because
-#    what this section is really pinning is that the two answers are about the
-#    SLOT and not about this walk.
+#    What stays refused in an unencrypted slot is exactly what stayed refused
+#    before: a leaf whose public PV contradicts its number (the dualvar
+#    shape, t/68). A caller who hands encrypt() a real non-finite NV no longer
+#    gets the refusal in this slot.
+#
+#    The ENCRYPTED slot still carries type:float and the plaintext +Inf, which
+#    is what `sops -e` writes in both formats. That has not moved since karr
+#    #122 / docs/adr/0040, and is asserted here rather than dropped, because
+#    what this section is really pinning is that the two answers are about
+#    the SLOT and not about this walk.
 ###############################################################################
 
-subtest 'a real non-finite float is refused in the slot this walk writes' => sub {
+subtest 'a real non-finite float is written in YAML, as both slots it can reach'
+    => sub {
     my $inf = 9**9**9;
-    my @values = ( [ '+Inf', $inf ], [ '-Inf', -$inf ], [ 'NaN', $inf - $inf ] );
+    my @values = (
+        [ '+Inf', $inf,        '.inf'  ],
+        [ '-Inf', -$inf,       '-.inf' ],
+        [ 'NaN',  $inf - $inf, '.nan'  ],
+    );
 
     for my $case (@values) {
-        my ($name, $value) = @$case;
+        my ($name, $value, $token) = @$case;
 
-        my $unencrypted = eval { File::SOPS->encrypt(
+        # Unencrypted slot, YAML: the carrier writes the token. This USED to
+        # refuse with the karr #59 message; karr #141 / docs/adr/0060 removed
+        # the refusal because the YAML carrier spells the same token the
+        # digest covers.
+        my $unencrypted = File::SOPS->encrypt(
             data       => { v_unencrypted => $value, keep => 'x' },
             recipients => [$public],
             format     => 'yaml',
-        ) };
-        ok(!defined $unencrypted, "[$name in v_unencrypted] refused");
-        like($@, qr/\Qvalue is a non-finite float\E/,
-            "[$name in v_unencrypted] with the karr #59 message");
+        );
+        ok(defined $unencrypted,
+            "[$name in v_unencrypted] YAML writes it (karr #141)")
+            or diag("died: " . ($unencrypted // $@));
+        like($unencrypted, qr/^v_unencrypted: \Q$token\E$/m,
+            "[$name in v_unencrypted] as the carrier's $token token");
 
-        my $encrypted = eval { File::SOPS->encrypt(
+        # Encrypted slot: unchanged. type:float in both formats, the plaintext
+        # derived from the number, no token on the wire at all (karr #122).
+        my $encrypted = File::SOPS->encrypt(
             data       => { v => $value, keep => 'x' },
             recipients => [$public],
             format     => 'yaml',
-        ) };
+        );
         ok(defined $encrypted, "[$name in v] written, as sops writes it")
             or diag($@);
         like($encrypted // '', qr/^v: ENC\[[^\n]*type:float\]$/m,
