@@ -1,6 +1,23 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - ARBITRATION: a rule pattern NEITHER dialect can compile is refused
+    on the read path, where sops reads it, and that residue is accepted
+    as a limit rather than closed. `unencrypted_regex: "fo("` is the
+    measured one: RE2 rejects it (`missing closing ): fo(`) so sops
+    discards the compile error, the rule matches nothing, and `sops -d`
+    reads the document at exit 0; Perl also rejects it, and there is
+    nothing to tell that apart from `(?U)fo+` -- a pattern RE2 DOES
+    compile and this side must not guess at -- so it is refused, naming
+    the pattern. The only exact fix is an escape- and class-aware
+    paren-balance mini-parser beside _re2_divergent_construct, whose
+    false positives would make this side lenient on a rule sops uses --
+    the one silent failure docs/adr/0051 avoided -- and that is out of
+    proportion to a malformed rule nobody has been seen to write. The
+    failure is loud either way, which is why it is low. No code change.
+    Pinned by
+    t/79-a-pattern-neither-dialect-compiles-is-read-by-sops-and-refused-here.t.
+    See docs/adr/0066 and karr #176.
   - PERFORMANCE: should_encrypt_path reads each rule attribute once
     rather than twice and matches the two suffix rules through a
     qr/\Q$suffix\E$/ cached by value in the same store the regex rules
