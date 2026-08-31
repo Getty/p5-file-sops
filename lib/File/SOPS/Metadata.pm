@@ -1792,20 +1792,39 @@ sub should_encrypt_path {
 
     my $encrypted = 1;
 
-    if (defined $self->unencrypted_suffix && length $self->unencrypted_suffix) {
-        $encrypted = 0 if grep { /\Q$self->{unencrypted_suffix}\E$/ } @$path;
+    # Each rule attribute is read once. unencrypted_suffix is lazy, so it must
+    # go through its accessor to fire the builder; the other three are plain rw
+    # fields whose accessor is just a hash read, so reading them directly --
+    # the same way should_encrypt_key and the grep below already read these
+    # fields -- drops three sub calls from the common single-rule path without
+    # changing what is read. The two suffix rules match through a qr cached by
+    # value in _rule_matchers -- the same store, keying and rw-invalidation
+    # _rule_matcher uses for the regex rules, so a changed attribute gets a
+    # fresh matcher -- rather than recompiling qr/\Q$suffix\E$/ on every call;
+    # the suffix and regex field names are disjoint, so they share the store
+    # without colliding. Order and later-overrides-earlier are unchanged.
+    my $us = $self->unencrypted_suffix;
+    if (defined $us && length $us) {
+        my $qr = $self->{_rule_matchers}{unencrypted_suffix}{$us}
+            ||= qr/\Q$us\E$/;
+        $encrypted = 0 if grep { $_ =~ $qr } @$path;
     }
 
-    if (defined $self->encrypted_suffix && length $self->encrypted_suffix) {
-        $encrypted = (grep { /\Q$self->{encrypted_suffix}\E$/ } @$path) ? 1 : 0;
+    my $es = $self->{encrypted_suffix};
+    if (defined $es && length $es) {
+        my $qr = $self->{_rule_matchers}{encrypted_suffix}{$es}
+            ||= qr/\Q$es\E$/;
+        $encrypted = (grep { $_ =~ $qr } @$path) ? 1 : 0;
     }
 
-    if (defined $self->unencrypted_regex && length $self->unencrypted_regex) {
+    my $ur = $self->{unencrypted_regex};
+    if (defined $ur && length $ur) {
         my $qr = $self->_rule_matcher('unencrypted_regex');
         $encrypted = 0 if grep { $_ =~ $qr } @$path;
     }
 
-    if (defined $self->encrypted_regex && length $self->encrypted_regex) {
+    my $er = $self->{encrypted_regex};
+    if (defined $er && length $er) {
         my $qr = $self->_rule_matcher('encrypted_regex');
         $encrypted = (grep { $_ =~ $qr } @$path) ? 1 : 0;
     }
