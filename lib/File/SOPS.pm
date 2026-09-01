@@ -2,7 +2,7 @@ package File::SOPS;
 # ABSTRACT: Perl implementation of Mozilla SOPS encrypted file format
 
 use Moo;
-use Carp qw(croak);
+use Carp qw(carp croak);
 use Cwd ();
 use Fcntl qw(O_CREAT O_EXCL O_WRONLY);
 use File::Basename qw(basename);
@@ -3628,7 +3628,32 @@ sub _decrypt_tree {
         # and JSON->false eq '' is true.
         return $node if !defined $node;
         return $node if !ref $node && $node eq '';
-        return $node if File::SOPS::Encrypted->is_comment($node);
+        if (File::SOPS::Encrypted->is_comment($node)) {
+            # A PLAINTEXT comment stands in a slot the rule ENCRYPTS. sops keeps
+            # it at exit 0 -- one of the four bare shapes above -- but it also
+            # warns, because a comment in an encrypted slot can hold a secret in
+            # the clear and there is nothing to authenticate it. Measured on
+            # sops 3.13.3 (yaml, ini, dotenv): warning on the DECRYPT path only,
+            # `Found possibly unencrypted comment in file`; the encrypt path
+            # encrypts it into a type:comment leaf and says nothing. This is the
+            # decrypt path, so this is where the warning belongs. Advisory only:
+            # nothing here moves -- the comment is returned unchanged and the MAC
+            # walk never reaches this branch. docs/adr/0067; the carp precedent
+            # is docs/adr/0018 and the OUTCOME (the comment is kept) is one of
+            # docs/adr/0049's four exceptions. The comment TEXT is NOT quoted --
+            # it may be the secret this warns about, and a value that leaks into
+            # a log was not encrypted for any practical purpose.
+            carp _at_path($path, "a plaintext comment stands in a slot this "
+                . "document's encryption rule marks as encrypted. It is kept "
+                . "as it stands, but it is not encrypted and not "
+                . "authenticated, so it may hold a secret in the clear. sops "
+                . "reads the same document at exit 0 and warns the same way "
+                . "(measured against sops 3.13.3: `Found possibly unencrypted "
+                . "comment in file`). Re-encrypting the document (rotate, edit, "
+                . "encrypt_in_place, or decrypt_file plus encrypt_file) turns "
+                . "the comment into an encrypted type:comment leaf");
+            return $node;
+        }
 
         # The other direction of the same disagreement, and the one sops's
         # walk reaches first: bare where the rule says encrypted. Read as a

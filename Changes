@@ -1,6 +1,15 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - decrypt now carps when a plaintext comment stands in a slot the
+    encryption rule marks as encrypted, matching sops' "Found possibly
+    unencrypted comment in file" warning. Advisory only: the comment is
+    kept unchanged, the MAC and the value round-trip do not move, and the
+    comment text is never quoted (it may be the secret being warned
+    about). Reaches dotenv and ini, whose handlers keep a plaintext
+    comment as a leaf; yaml cannot reach it because YAML::XS discards
+    plaintext comments before this library sees a tree (docs/adr/0060).
+    See docs/adr/0067 and karr #173.
   - File::SOPS::Comment is now a Moo class like every other class in this
     distribution, reversing ADR 0041's hand-written bless (a move, not a
     behaviour change): its three constructor refusals -- missing text, a
