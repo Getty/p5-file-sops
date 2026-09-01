@@ -217,7 +217,8 @@ subtest 'the plaintext emitters stay silent' => sub {
     {
         local $SIG{__WARN__} = sub { push @on_emit, $_[0] };
         my $out = File::SOPS::Format::YAML->emit({ flag => yaml_leaf('True') });
-        like($out, qr/^flag: True$/m, 'emit writes the spelling straight out');
+        like($out, qr/^flag: "True"$/m,
+            'emit force-quotes the safe set on the plaintext path too (docs/adr/0071, karr #186)');
     }
     is_deeply(\@on_emit, [], 'and says nothing');
 
