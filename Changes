@@ -14,6 +14,17 @@ Revision history for File-SOPS
     count and the target, rather than silently dropping documents as sops does.
     edit on a stream is deliberately not enabled yet (karr #41). Single-document
     files are byte-identical. (docs/adr/0033, karr #31)
+  - Nine divergent string leaves that this distribution used to warn about or
+    refuse are now WRITTEN, double-quoted, exactly as sops writes them: a "True"
+    or "False" string (which was written bare and read back by Go as a boolean --
+    the divergence disappears) and the seven non-finite spellings ".inf", ".Inf",
+    ".INF", "+.inf", "-.inf", ".nan", ".NaN". The quote is placed by fail-closed
+    sentinel substitution on the encrypted YAML write path -- if the surgery
+    cannot be verified, the leaf falls back to the previous warn/refusal rather
+    than shipping an altered file, and no other leaf's bytes move. The sixteen
+    remaining ambiguous spellings (1_000, dates, 0x/0o/0b, Null/NULL/TRUE/FALSE,
+    0xffffffffffffffff) stay refused, pending a full karr #127. (docs/adr/0070,
+    karr #99)
   - ARBITRATION: a caller-supplied integer SV in the int64..uint64 window (a
     Perl UV literal, a computed integer, or a scalar out of a YAML parse -- not
     one read through Format::JSON::parse, which docs/adr/0021 fixed) is refused

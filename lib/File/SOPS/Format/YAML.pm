@@ -1910,28 +1910,87 @@ and karr #87.
 # Consequence, deliberately accepted: this sub is on the wire path. Changing
 # what it emits changes the encrypted document too, so it is not a plaintext
 # formatting knob.
+# The safely-quotable non-finite spellings (docs/adr/0070), scoped to EXACTLY
+# the seven ADR 0038/0039 measured. A str leaf whose value is one of these came
+# unambiguously from a QUOTED source or a caller's own Perl string, because
+# _restore_plain_infinities (docs/adr/0026, 0034) already resolved a bare one to
+# a float at parse -- so writing it double-quoted states the type it already
+# has, and sops writes and reads the same bytes (measured, sops -d exit 0). The
+# other five non-finite tokens in %GO_CONSTANT (`+.Inf +.INF -.Inf -.INF .NAN`)
+# are deliberately NOT here: the corpus did not measure them, and "no wider than
+# the nine rows" keeps them refused as they are today.
+my %QUOTABLE_NON_FINITE =
+    map { $_ => 1 } ( '.inf', '.Inf', '.INF', '+.inf', '-.inf', '.nan', '.NaN' );
+
 sub emit {
     my ($class, $data, %args) = @_;
     croak "data required" unless defined $data;
 
     # A multi-document stream is an ArrayRef of document trees (docs/adr/0033,
-    # karr #31). A bare HashRef is one document and stays byte-identical: a
-    # one-element list reduces to the SAME single Dump call, so a single-document
-    # write produces exactly today's bytes. Each document is run through
-    # canonical_float_tree -- and the per-leaf foreign-resolution guard, when the
-    # caller set one -- on its own, so each keeps its own sorted key order (the
-    # MAC's encrypt side rides on that, docs/adr/0001), and YAML::XS::Dump then
-    # emits the whole list as one stream.
-    #
-    # YAML::XS::Dump prepends `---` to EVERY document it writes, so N documents
-    # come out joined by `---` with no leading empty document -- which is exactly
-    # the separator rule (docs/adr/0033 point 5: a leading `---` is dropped, a
-    # trailing one is a real empty trailing document already present in the
-    # list). An empty document in the list is a real, empty mapping and Dump
-    # writes it as `--- {}` (point 6). Separators are not authenticated (point
-    # N3), so joining with `---` moves no digest byte.
+    # karr #31). A bare HashRef is one document and stays byte-identical.
     my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
     croak "data required" unless @docs;
+
+    # Only a document that a reader re-derives values from has anything to
+    # disagree with. serialize sets one of these; the plaintext emitters
+    # (decrypt_file, edit) set neither, and must not -- refusing there would
+    # refuse to WRITE OUT a document this module reads correctly, and warning
+    # would warn about a file with no MAC and no second reader. The two differ in
+    # the verdict only: croak where the MAC covers the leaf, carp where
+    # mac_only_encrypted means it does not. See docs/adr/0013 and docs/adr/0018.
+    my $reject_scalar =
+        $args{mac_covered}             ? \&_reject_foreign_resolution
+      : $args{warn_foreign_resolution} ? \&_warn_foreign_resolution
+      :                                  undef;
+
+    # docs/adr/0070: force-quoting is the MAC-covered path only. There a
+    # divergent leaf makes the file fail its own MAC (the non-finite class) or
+    # silently retypes a caller's string (the True/False class), and quoting the
+    # safe subset is what lets such a document be written at all. The plaintext
+    # path (no guard) and the mac_only_encrypted (warn) path are unchanged --
+    # there the leaf is not covered by the MAC, the document already works, and
+    # ADR 0070 scoped the change to the MAC-covered path -- so both go straight
+    # to the one Dump below, byte-identical to before.
+    return _emit_docs($class, \@docs, $reject_scalar) unless $args{mac_covered};
+
+    # Replace exactly the safely-quotable divergent leaves (the True/False type
+    # divergence, and the seven parse-unambiguous non-finite str leaves) with
+    # unique random sentinels, in a COPY of each document. A sentinel is an
+    # ordinary string the guard passes; every OTHER divergent leaf is left in
+    # place and still reaches the guard below and is refused. The digest was
+    # computed over the original tree in File::SOPS::_compute_mac before emit, so
+    # this copy touches no digest byte and no key's sort position.
+    my %sentinel;
+    my @quoted = map {
+        _sentinel_quotable_leaves($docs[$_], \%sentinel, [], $_)
+    } 0 .. $#docs;
+
+    # Nothing to quote -> today's single Dump, byte-identical.
+    return _emit_docs($class, \@docs, $reject_scalar) unless %sentinel;
+
+    # The guard runs here on the sentinel'd copy. A remaining non-safe divergent
+    # leaf croaks exactly as today -- a refused document is refused whether or not
+    # it also held a quotable leaf -- and that croak propagates unchanged.
+    my $yaml = _emit_docs($class, \@quoted, $reject_scalar);
+
+    # Surgery + FAIL-CLOSED verification (docs/adr/0070). On any miss the whole
+    # surgery is abandoned and the ORIGINAL tree is emitted the old way, which
+    # reproduces today's exact refusal/carp for these leaves. A file that failed
+    # verification is never shipped.
+    my $surgical = _quote_sentinels($yaml, \%sentinel);
+    return defined $surgical ? $surgical
+                             : _emit_docs($class, \@docs, $reject_scalar);
+}
+
+# The one Dump call, unchanged from before docs/adr/0070. Each document is run
+# through canonical_float_tree on its own, so each keeps its own sorted key order
+# (the MAC's encrypt side rides on that, docs/adr/0001); YAML::XS::Dump then emits
+# the whole list as one stream, prepending `---` to EVERY document -- N documents
+# joined by `---` with no leading empty document, which is the separator rule
+# (docs/adr/0033 point 5). $reject_scalar is the caller's foreign-resolution
+# guard, or undef for a plaintext emit.
+sub _emit_docs {
+    my ($class, $docs, $reject_scalar) = @_;
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
     return Dump(map {
@@ -1940,20 +1999,169 @@ sub emit {
             roundtrips => \&_float_roundtrips,
             carrier    => \&_float_carrier,
             reject     => \&_reject_unwritable_leaf,
-
-            # Only a document that a reader re-derives values from has anything
-            # to disagree with. serialize sets one of these; the plaintext
-            # emitters (decrypt_file, edit) set neither, and must not -- refusing
-            # there would refuse to WRITE OUT a document this module reads
-            # correctly, and warning would warn about a file with no MAC and no
-            # second reader. The two differ in the verdict only: croak where the
-            # MAC covers the leaf, carp where mac_only_encrypted means it does
-            # not. See docs/adr/0013 and docs/adr/0018.
-            ($args{mac_covered}              ? (reject_scalar => \&_reject_foreign_resolution)
-           : $args{warn_foreign_resolution}  ? (reject_scalar => \&_warn_foreign_resolution)
-           :                                   ()),
+            ($reject_scalar ? (reject_scalar => $reject_scalar) : ()),
         )
-    } @docs);
+    } @$docs);
+}
+
+# docs/adr/0070: a COPY of $node with every safely-quotable leaf replaced by a
+# unique random sentinel, recording sentinel => { value, doc, path } for the
+# post-Dump surgery. Containers are rebuilt (new hashes/arrays); leaves are
+# shared, so the caller's tree is never mutated. No cycle guard: canonical_float_tree
+# has none either, so a cyclic document already hangs downstream (karr #110) and
+# this adds no new behaviour there.
+sub _sentinel_quotable_leaves {
+    no warnings 'recursion';
+    my ($node, $sentinel, $path, $doc) = @_;
+
+    if (ref $node eq 'HASH') {
+        return { map {
+            push @$path, $_;
+            my $r = _sentinel_quotable_leaves($node->{$_}, $sentinel, $path, $doc);
+            pop @$path;
+            ($_ => $r);
+        } keys %$node };
+    }
+    if (ref $node eq 'ARRAY') {
+        return [ map {
+            push @$path, $_;
+            my $r = _sentinel_quotable_leaves($node->[$_], $sentinel, $path, $doc);
+            pop @$path;
+            $r;
+        } 0 .. $#$node ];
+    }
+
+    return $node unless _is_quotable_leaf($node, $path);
+
+    my $token = _fresh_sentinel($sentinel);
+    $sentinel->{$token} = { value => $node, doc => $doc, path => [ @$path ] };
+    return $token;
+}
+
+# Is this leaf one of docs/adr/0070's nine safely-quotable rows? Reuses the
+# guard's own verdict, so there is no second model of Go:
+#
+#   * a `type` divergence -- True/False, a str here and a bool to Go. The digest
+#     bytes already agree (`True` both sides), so quoting is MAC-neutral and only
+#     removes the divergence (docs/adr/0019). Measured: _foreign_resolution_token
+#     returns 'type' for exactly True/False and nothing else, because any other
+#     spelling Go reads as a bool (TRUE, FALSE) disagrees on bytes and is 'mac'.
+#   * a `mac` divergence whose token is one of the seven spellings
+#     %QUOTABLE_NON_FINITE holds and whose leaf is a str -- unambiguously from a
+#     quoted or caller source (docs/adr/0026, 0034), so quoting states its real
+#     type.
+#
+# Everything else -- the sixteen ambiguous rows, an int/float `0755`, and every
+# adversarial neighbour -- returns 0 and is left for the guard.
+sub _is_quotable_leaf {
+    my ($leaf, $path) = @_;
+    return 0 unless defined $leaf;
+
+    my ($token, $kind) = _foreign_resolution_token($leaf, $path, undef);
+    return 0 unless defined $token;
+
+    return 1 if $kind eq 'type';
+    return 1 if $kind eq 'mac'
+             && $QUOTABLE_NON_FINITE{$token}
+             && File::SOPS::Encrypted->detect_type($leaf) eq 'str';
+    return 0;
+}
+
+# A unique random 128-bit sentinel token. Spaceless and alphanumeric, so
+# YAML::XS emits it BARE and on ONE line at any depth (a YAML plain scalar folds
+# only at a space, and there is none), and its first byte `S` is one Go's
+# resolver never looks at, so the guard passes it as an ordinary string.
+# Collision with document text is astronomically improbable at 128 bits AND
+# caught by the occurrence-count check in _quote_sentinels, which fails closed.
+sub _fresh_sentinel {
+    my ($sentinel) = @_;
+    my @hex = (0 .. 9, 'a' .. 'f');
+    while (1) {
+        my $token = 'SOPSQUOTE'
+            . join('', map { $hex[int rand 16] } 1 .. 32)
+            . 'ENDSOPSQUOTE';
+        return $token unless exists $sentinel->{$token};
+    }
+}
+
+# The generalisation of _quote_sops_timestamp: replace each sentinel token in the
+# finished YAML with the original value rendered as a double-quoted scalar, then
+# verify FAIL CLOSED. Returns the surgical text, or undef to fall back to today's
+# refusal/carp -- never a document that did not verify.
+#
+# Two checks, both of which docs/adr/0070 requires:
+#   1. each sentinel occurs exactly once (0 or >1 abandons the whole surgery --
+#      the 0 case is the only way a spaceless sentinel could go missing, e.g. an
+#      emitter that folded it, and a >1 the only way a 128-bit token could
+#      collide);
+#   2. the finished document re-Loads and each forced leaf, at its recorded
+#      position, is byte-for-byte the original string.
+# The second is stronger than a count: it reads the emitted bytes back the way a
+# reader will, so a substitution that produced a different value cannot pass.
+sub _quote_sentinels {
+    my ($yaml, $sentinel) = @_;
+
+    my $out = $yaml;
+    for my $token (keys %$sentinel) {
+        my $count = () = ($out =~ /\Q$token\E/g);
+        return undef unless $count == 1;
+        my $quoted = _yaml_double_quote($sentinel->{$token}{value});
+        $out =~ s/\Q$token\E/$quoted/;
+    }
+
+    my @back = do {
+        local $YAML::XS::Boolean = $BOOLEAN_MODE;
+        my @d = eval { Load($out) };
+        return undef if $@ || !@d;
+        @d;
+    };
+
+    for my $token (keys %$sentinel) {
+        my $entry = $sentinel->{$token};
+        return undef unless $entry->{doc} <= $#back;
+        my $leaf = _navigate_path($back[$entry->{doc}], $entry->{path});
+        return undef unless defined $leaf && !ref $leaf;
+        return undef unless $leaf eq $entry->{value};
+    }
+
+    return $out;
+}
+
+# Walk a re-Loaded tree to the leaf at $path (hash keys and array indices
+# interleaved, as _sentinel_quotable_leaves recorded them). undef on any
+# structural surprise, which fails the verification closed.
+sub _navigate_path {
+    my ($node, $path) = @_;
+    for my $step (@$path) {
+        return undef unless ref $node;
+        if (ref $node eq 'HASH') {
+            return undef unless exists $node->{$step};
+            $node = $node->{$step};
+        }
+        elsif (ref $node eq 'ARRAY') {
+            return undef unless $step <= $#$node;
+            $node = $node->[$step];
+        }
+        else { return undef }
+    }
+    return $node;
+}
+
+# The original value as a YAML double-quoted scalar that Loads back to the exact
+# string. The nine safe rows are all plain ASCII (`.inf`, `True`, ...), so the
+# escape branches below are defensive: a value with a space, quote, backslash or
+# control character never reaches here, because _emitted_plain_scalar returns
+# undef for it (it is not a bare token) and _is_quotable_leaf then returns 0.
+sub _yaml_double_quote {
+    my ($s) = @_;
+    my $out = $s;
+    $out =~ s/\\/\\\\/g;
+    $out =~ s/"/\\"/g;
+    $out =~ s/\t/\\t/g;
+    $out =~ s/\n/\\n/g;
+    $out =~ s/\r/\\r/g;
+    $out =~ s/([\x00-\x08\x0b\x0c\x0e-\x1f])/sprintf('\\x%02X', ord $1)/ge;
+    return '"' . $out . '"';
 }
 
 # A referenced leaf YAML::XS cannot write as the text the digest covers.
