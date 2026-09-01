@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-01T03:27:43Z
+created: 2026-09-01T03:07:11Z
+id: 183
+priority: low
+started: 2026-09-01T03:27:43Z
+status: done
+tags:
+- docs
+- dist-ini
+title: 'dist.ini docs exclusion: briefing text is stale vs actual deliberate shipping
+  of docs/adr'
+updated: 2026-09-01T03:27:43Z
+---
+
+CLAUDE.md and the file-sops-release-checker briefing say docs/ and refs/ are still excluded from the tarball. Actual dist.ini only has gather_exclude_match = ^refs/ ; docs/adr (70 files) ships in the tarball deliberately, per commit bf66e7a Follow the skill librarys rename, ship the ADRs (2026-08-20). Not a bug, the maintainer decision is correct and dzil build/test are clean, but the checker briefing document should be updated to stop describing docs/ as excluded. Found during pre-release audit at HEAD 57f8258.
+
+ERLEDIGT eb0347a: Briefing-Zeile in .claude/agents/file-sops-release-checker.md korrigiert -- docs/ shippt seit bf66e7a absichtlich, nur refs/ noch ausgeschlossen.
