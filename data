@@ -1,0 +1,19 @@
+---
+class: standard
+completed: 2026-09-01T03:27:31Z
+created: 2026-09-01T03:07:04Z
+id: 182
+priority: medium
+started: 2026-09-01T03:27:31Z
+status: done
+tags:
+- docs
+- changes
+title: 'Changes NEXT: superseded guard entry still stands as its own bullet (lines
+  448-467)'
+updated: 2026-09-01T03:27:31Z
+---
+
+Changes:448-467 (rotate and edit no longer write secrets to disk in PLAINTEXT) ends by saying the guard itself is gone with docs/adr/0049 (line 467). The write-path guard it describes has been replaced by the rule-driven decrypt entry at Changes:341-368 (ADR 0049, which opens This REPLACES the guard 0.003 added for the same defect, line 358). The security fix is still true, just via different machinery. Recommend folding 448-467 into a short historical footnote under 341-368, or deleting it, rather than keeping it as a full standalone bullet describing removed machinery. Part of a broader make-Changes-clean-and-compact pass; see also the non-finite-float saga (ADR 0031/0034/0037/0040/0062, about 5 bullets for one features evolution) and the RE2/Perl divergence saga (ADR 0048/0065/0066 plus path_regex, 4 bullets) as further compaction candidates. Found during pre-release audit at HEAD 57f8258.
+
+ERLEDIGT 8f82fe3: {{$NEXT}} von 140 Eintraegen/2445 Zeilen auf 78/410 gestrafft (WAS statt WARUM, (adr,karr)-Spur behalten). Ueberholter 0046-Guard-Bullet in den 0049-Eintrag gefaltet; drei Sagas (non-finite float, RE2/Perl, MAC-hints) auf je einen Endzustand zusammengefasst. Released History byte-identisch zu HEAD verifiziert. Migrations-Warnblock behalten+gekuerzt.
