@@ -18,18 +18,23 @@ use SopsBin qw(find_sops_bin);
 # to sops, and both digest the same bytes -- so the MAC holds, sops -d exits 0,
 # and the guard ADR 0013 built could not see it. What diverges is the TYPE.
 #
-# Measured, sops 3.13.3, leaf in an unencrypted YAML slot:
+# Measured, sops 3.13.3, leaf in an unencrypted YAML slot, BEFORE docs/adr/0070:
 #
 #   document              we read       sops reads   sops -d
 #   x_unencrypted: True   str "True"    bool true    exit 0
 #   x_unencrypted: False  str "False"   bool false   exit 0
 #
-# and it does not survive a sops write-back -- `sops rotate -i`, `sops set` and
-# `sops edit` each rewrite the leaf to a bare `true`, after which THIS module
-# reads a JSON::PP::Boolean where the caller put a string. Nothing fails at any
-# point, which is why it is a carp and not a refusal: refusing it would refuse a
-# document sops reads (measured: 0 of 364 corpus rows stop being written, 4 of
-# them newly warn, and all four really do diverge).
+# and it did not survive a sops write-back -- `sops rotate -i`, `sops set` and
+# `sops edit` each rewrote the leaf to a bare `true`, after which THIS module
+# read a JSON::PP::Boolean where the caller put a string.
+#
+# SINCE docs/adr/0070 (karr #99) the leaf is QUOTED on the way out instead of
+# carped about: `x_unencrypted: "True"`, MAC-neutral (the digest covers `True`
+# either way), and sops now reads a STRING too -- the divergence this file used
+# to document is gone, and a sops write-back keeps it a string (measured: `sops
+# rotate -i` re-writes the same `"True"`, not a bare `true`). What is left to
+# assert is that nothing warns any more under the mac-covered path, and that
+# the mac_only_encrypted path -- out of docs/adr/0070's scope -- is unchanged.
 #
 # Most of this file needs no binary. The write-back is the part that is a claim
 # about sops, and it is skipped without one.
@@ -65,24 +70,21 @@ sub encrypt_capturing {
 my $RETYPED = qr/\Qa string here and a boolean to sops\E/;
 
 ###############################################################################
-# 1. THE WARNING. One per leaf, naming its key path, and the document is
-#    written exactly as it was before -- the bare spelling included.
+# 1. THE QUOTE (docs/adr/0070). One leaf, no warning, and the document carries
+#    the value double-quoted -- the type divergence is removed, not reported.
 ###############################################################################
 
-subtest 'a True string warns and is still written, bare' => sub {
+subtest 'a True string is quoted and written silently (docs/adr/0070)' => sub {
     for my $source (qw( True False )) {
         my ($document, $died, $warnings) = encrypt_capturing(
             data => { flag_unencrypted => yaml_leaf($source), s => 'x' });
 
         is($died, '', "[$source] nothing is refused");
-        like($document, qr/^flag_unencrypted: \Q$source\E$/m,
-            "[$source] and the document carries the spelling, bare and unchanged");
-        is(scalar @$warnings, 1, "[$source] exactly one warning");
-        like($warnings->[0], qr/\Aflag_unencrypted: /,
-            "[$source] which names the leaf by key path");
-        like($warnings->[0], $RETYPED, "[$source] and says what diverges");
-        like($warnings->[0], qr/\Qsops write-back\E/,
-            "[$source] and that a sops write-back rewrites it");
+        like($document, qr/^flag_unencrypted: "\Q$source\E"$/m,
+            "[$source] and the document carries the spelling, double-quoted");
+        is(scalar @$warnings, 0,
+            "[$source] no warning -- docs/adr/0070 quotes it instead of carping")
+            or diag("warned: @$warnings");
     }
 };
 
@@ -91,8 +93,8 @@ subtest 'a caller-supplied Perl string is the same leaf' => sub {
     my ($document, $died, $warnings) = encrypt_capturing(
         data => { flag_unencrypted => 'True', s => 'x' });
     is($died, '', 'written');
-    is(scalar @$warnings, 1, 'and warned about once');
-    like($warnings->[0], $RETYPED, 'with the same message');
+    is(scalar @$warnings, 0, 'and not warned about -- docs/adr/0070');
+    like($document, qr/^flag_unencrypted: "True"$/m, 'and double-quoted');
 };
 
 subtest 'it warns in both MAC modes' => sub {
@@ -107,30 +109,31 @@ subtest 'it warns in both MAC modes' => sub {
     like($warnings->[0], $RETYPED, 'with the same message');
 };
 
-subtest 'a nested leaf is named by its full key path, one warning each' => sub {
+subtest 'a nested leaf is quoted at its full key path, no warning' => sub {
     my ($document, $died, $warnings) = encrypt_capturing(
         data => { db => { a_unencrypted => yaml_leaf('True'),
                           b_unencrypted => yaml_leaf('False') },
                   s  => 'x' });
     is($died, '', 'both are written');
-    is(scalar @$warnings, 2, 'and each one warns');
-    my $joined = join '', sort @$warnings;
-    like($joined, qr/\Qdb:a_unencrypted: \E/, 'the True leaf, by path');
-    like($joined, qr/\Qdb:b_unencrypted: \E/, 'the False leaf, by path');
+    is(scalar @$warnings, 0, 'and neither warns -- docs/adr/0070')
+        or diag("warned: @$warnings");
+    like($document, qr/^\s+a_unencrypted: "True"$/m, 'the True leaf, quoted');
+    like($document, qr/^\s+b_unencrypted: "False"$/m, 'the False leaf, quoted');
 };
 
-subtest 'the warning never carries the value' => sub {
-    # A warning goes to logs, and an unencrypted leaf is not a secret -- but
-    # the rule is the rule, and the message is written to hold for the
-    # type:bytes leaf that reaches this by the same route.
+subtest 'quoting a True/False leaf produces no diagnostic at all' => sub {
+    # Since docs/adr/0070 there is no warning left to check the wording of --
+    # the divergence is removed rather than reported. What is asserted instead
+    # is that the quoting really is silent: no carp, no warn, for either
+    # spelling, which is the property "the warning never carries the value"
+    # used to stand in for.
     my ($document, $died, $warnings) = encrypt_capturing(
         data => { flag_unencrypted => yaml_leaf('True'), s => 'x' });
-    is(scalar @$warnings, 1, 'warned');
-    unlike($warnings->[0], qr/True/, 'and the value is not in the message');
+    is(scalar @$warnings, 0, 'quoting True is silent');
 
     my (undef, undef, $false) = encrypt_capturing(
         data => { flag_unencrypted => yaml_leaf('False'), s => 'x' });
-    unlike($false->[0], qr/False/, 'nor is the other one');
+    is(scalar @$false, 0, 'quoting False is silent too');
 };
 
 ###############################################################################
@@ -239,18 +242,25 @@ SKIP: {
        . "makes about sops was NOT verified", 1
         unless $sops_bin;
 
-    subtest 'sops reads a boolean, and a write-back makes it one here too' => sub {
+    subtest 'sops now reads a STRING, and a write-back keeps it one (docs/adr/0070)' => sub {
+        # This subtest used to pin the divergence ADR 0070 REMOVES: sops read a
+        # boolean out of a bare `True`, and a write-back made this module read
+        # one too. Since ADR 0070 the leaf is quoted on the way out, sops reads
+        # a string, and a write-back changes nothing.
         my ($document, $died, $warnings) = encrypt_capturing(
             data => { flag_unencrypted => yaml_leaf('True'), keep => 'v' });
-        is(scalar @$warnings, 1, 'the encrypt warned once');
+        is(scalar @$warnings, 0,
+            'the encrypt does not warn -- docs/adr/0070 quotes instead');
+        like($document, qr/^flag_unencrypted: "True"$/m,
+            'and the document carries it double-quoted');
 
         my $file = "$tempdir/rt.yaml";
         write_file($file, $document);
 
         my $json = `$sops_bin -d --output-type json $file 2>&1`;
         is($? >> 8, 0, 'sops -d accepts the document') or diag($json);
-        like($json, qr/"flag_unencrypted"\s*:\s*true/,
-            'and reads a BOOLEAN out of it, where this module reads a string');
+        like($json, qr/"flag_unencrypted"\s*:\s*"True"/,
+            'and reads a STRING out of it -- the divergence docs/adr/0070 removes');
 
         my $before = File::SOPS->decrypt(encrypted => $document,
                                          identities => [$secret]);
@@ -260,14 +270,15 @@ SKIP: {
 
         my $out = `$sops_bin rotate -i $file 2>&1`;
         is($? >> 8, 0, 'sops rotate rewrites the document') or diag($out);
-        like(scalar read_file($file), qr/^flag_unencrypted: true$/m,
-            'and writes the leaf back as a bare lowercase true');
+        like(scalar read_file($file), qr/^flag_unencrypted: "True"$/m,
+            'and re-writes the SAME double-quoted token, not a bare boolean');
 
         my $after = File::SOPS->decrypt(encrypted => scalar read_file($file),
                                         identities => [$secret]);
-        is(ref($after->{flag_unencrypted}), 'JSON::PP::Boolean',
-            'after which this module reads a BOOLEAN -- the divergence the '
-          . 'warning is about');
+        is(ref($after->{flag_unencrypted}), '',
+            'and this module still reads a plain string after the write-back');
+        is($after->{flag_unencrypted}, 'True',
+            'the divergence is gone -- no boolean drift after a sops rotate');
     };
 }
 

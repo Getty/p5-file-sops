@@ -112,8 +112,6 @@ my @refused = (
     [ '0b101',      'binary, which libyaml does not resolve' ],
     [ '1_000',      'underscore digit separators, which Go strips' ],
     [ '685_230.15', 'underscore separators in a float' ],
-    [ '.inf',       'a YAML 1.2 infinity' ],
-    [ '.nan',       'a YAML 1.2 NaN' ],
     [ 'Null',       'a null spelling libyaml leaves a string' ],
     [ 'TRUE',       'a boolean spelling libyaml leaves a string' ],
     [ '2015-01-01', 'a date, which Go renders back as 2015-01-01T00:00:00Z' ],
@@ -149,6 +147,46 @@ for my $case (@refused) {
     };
 }
 
+###############################################################################
+# 1b. THE NINE SAFE ROWS (docs/adr/0070). `.inf` and `.nan` are two of the
+#     seven parse-unambiguous non-finite str leaves: they can only have come
+#     from a quoted source or a caller's own Perl string, because
+#     _restore_plain_infinities already resolves a BARE one to a float at
+#     parse (docs/adr/0026, 0034). So the emitter now quotes them instead of
+#     refusing them -- exactly the document sops itself writes and reads back.
+###############################################################################
+
+for my $source (qw(.inf .nan)) {
+    subtest "encrypt() writes \`$source\` double-quoted, not refused (docs/adr/0070)" => sub {
+        my $document = eval {
+            File::SOPS->encrypt(
+                data       => { x_unencrypted => yaml_leaf($source), other => 'kept' },
+                recipients => [$public],
+                format     => 'yaml',
+            );
+        };
+        is($@, '', "[$source] no longer refused") or do { diag("died: $@"); return };
+        like($document, qr/^x_unencrypted: "\Q$source\E"$/m,
+            "[$source] written double-quoted, the token sops itself writes");
+
+        my ($exit, $out) = sops_decrypt($document, 'yaml');
+        is($exit, 0, "[$source] and sops -d accepts the document") or diag("sops: $out");
+        my $back = eval { Load($out) };
+        is($back->{x_unencrypted}, $source,
+            "[$source] and sops reads the string back intact")
+            if $back;
+
+        # sops rotate re-writes the same quoted token (ADR 0070's corpus
+        # check 1: the document is stable across a sops write-back).
+        my $file = scratch_file('yaml');
+        write_file($file, $document);
+        system("$sops_bin rotate -i $file 2>/dev/null");
+        is($? >> 8, 0, "[$source] sops rotate accepts the document");
+        like(scalar read_file($file), qr/^x_unencrypted: "\Q$source\E"$/m,
+            "[$source] and re-writes the same quoted token");
+    };
+}
+
 subtest 'no part of the message is derived from the value' => sub {
     # Two different spellings of one class produce the same sentence, character
     # for character, apart from the key path in front of it. A message that
@@ -156,7 +194,11 @@ subtest 'no part of the message is derived from the value' => sub {
     my %message;
     for my $pair ([ 'octal',    '0755',   '010' ],
                   [ 'prefixed', '0o10',   '0x1f' ],
-                  [ 'constant', '.inf',   'Null' ],
+                  # `.inf` moved out of this class under docs/adr/0070 (it is
+                  # written, quoted, no longer refused); `Null` and `TRUE` are
+                  # both still-refused YAML 1.2 constants, so the pairing still
+                  # holds.
+                  [ 'constant', 'Null',   'TRUE' ],
                   [ 'date',     '2015-01-01', '2016-02-29' ]) {
         my ($class, @sources) = @$pair;
         my @seen;
@@ -186,7 +228,7 @@ subtest 'a caller-supplied Perl string is refused for the same spellings' => sub
     # Nothing about this depends on a YAML parse: the leaf is a plain string and
     # YAML::XS writes it bare, because libyaml's own resolver does not recognise
     # it either. Measured before the guard: exit 51 for each.
-    for my $string (qw(0o10 0x1f 1_000 .inf Null TRUE 2015-01-01)) {
+    for my $string (qw(0o10 0x1f 1_000 Null TRUE 2015-01-01)) {
         my $document = eval {
             File::SOPS->encrypt(data => { x_unencrypted => $string },
                 recipients => [$public], format => 'yaml');
@@ -263,11 +305,11 @@ subtest 'True / False / null keep their measured behaviour' => sub {
     # neither side, so it is asserted rather than assumed.
     #
     # Since karr #92 / ADR 0019, `True` and `False` also diverge on TYPE (str
-    # here, bool to sops) even though the bytes still agree, and this emitter
-    # now carps about it. Asserted here too, at the one place this file already
-    # names these two spellings by their own behaviour: a plain
-    # `$SIG{__WARN__}` that only swallowed the warning would lose the ability
-    # to notice the day it stops firing.
+    # here, bool to sops) even though the bytes still agree -- but since
+    # docs/adr/0070 the emitter QUOTES them instead of carping: the divergence
+    # is removed rather than reported, so no warning fires and the document
+    # carries the double-quoted string. `null`/`~`/`true`/`false` never
+    # diverged and are unaffected.
     for my $source (qw(True False null ~ true false)) {
         my @warnings;
         my $document = eval {
@@ -276,10 +318,13 @@ subtest 'True / False / null keep their measured behaviour' => sub {
                 recipients => [$public], format => 'yaml');
         };
         is($@, '', "[$source] is written") or do { diag("died: $@"); next };
-        my $expect = ($source eq 'True' || $source eq 'False') ? 1 : 0;
-        is(scalar @warnings, $expect,
-            "[$source] warns about the type divergence exactly when it should")
+        is(scalar @warnings, 0,
+            "[$source] no longer warns -- docs/adr/0070 quotes instead")
             or diag("warned: @warnings");
+        if ($source eq 'True' || $source eq 'False') {
+            like($document, qr/^x_unencrypted: "\Q$source\E"$/m,
+                "[$source] written double-quoted");
+        }
         my ($exit, $out) = sops_decrypt($document, 'yaml');
         is($exit, 0, "[$source] and sops -d accepts the document") or diag("sops: $out");
     }

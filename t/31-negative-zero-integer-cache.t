@@ -383,7 +383,7 @@ subtest 'three encrypts of the same tree produce the same value, every round' =>
 ###############################################################################
 
 subtest 'karr #86 still refuses what it refused' => sub {
-    for my $spelling ('0755', '010', '0o10', '0x1f', '1_000', '.inf', 'Null', '2015-01-01') {
+    for my $spelling ('0755', '010', '0o10', '0x1f', '1_000', 'Null', '2015-01-01') {
         my $document = eval {
             File::SOPS->encrypt(
                 data       => { x_unencrypted => parsed($spelling), other => 'kept' },
@@ -396,6 +396,25 @@ subtest 'karr #86 still refuses what it refused' => sub {
         like($error, qr/cannot write this leaf to a SOPS YAML document/,
             "$spelling: with karr #86's message");
     }
+
+    # docs/adr/0070: `.inf` is one of the seven parse-unambiguous non-finite
+    # str leaves, and moved out of the refusal set -- written double-quoted
+    # instead, the token sops itself writes and reads back.
+    my $document = eval {
+        File::SOPS->encrypt(
+            data       => { x_unencrypted => parsed('.inf'), other => 'kept' },
+            recipients => [$public],
+            format     => 'yaml',
+        );
+    };
+    is($@, '', '.inf is no longer refused -- docs/adr/0070') or diag("died: $@");
+    like($document, qr/^x_unencrypted: "\.inf"$/m,
+        '.inf is written double-quoted');
+
+    my $file = scratch_file('yaml');
+    write_file($file, $document);
+    my ($rc, $out) = sops_decrypt($file, 'yaml');
+    is($rc, 0, '.inf: sops -d accepts the document') or diag($out);
 };
 
 subtest 'karr #86 still accepts what it accepted, byte for byte' => sub {

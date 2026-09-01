@@ -137,12 +137,21 @@ subtest 'a boolean is resolved as the token, not as its stringification' => sub 
         my $asked = guard_asked($leaf);
 
         is($asked->{died}, '', "a $token leaf is written");
-        is_deeply($asked->{tokens}, [ $token ],
-            "the guard asked the emitter, and was told $token");
+        # docs/adr/0070: a mac_covered emit() now runs a CLASSIFICATION pass
+        # over every leaf before Dump (to find the safely-quotable ones), and
+        # this leaf is not one of them -- it does not diverge, so it is left
+        # in place and reaches the real reject_scalar guard during Dump too.
+        # Both passes ask the emitter the same question, so the token is seen
+        # twice rather than once; a genuinely quotable leaf (True/False, the
+        # seven non-finite str spellings) is asked only in the classification
+        # pass, because by the time Dump runs it has been replaced by a
+        # sentinel the guard never looks twice at (t/30, t/35 pin that case).
+        is_deeply($asked->{tokens}, [ $token, $token ],
+            "the guard asked the emitter twice, and was told $token both times");
         is(File::SOPS::Encrypted->value_to_bytes($leaf), $digest,
             "and the digest covers $digest");
-        is_deeply($asked->{resolved}, [ $token ],
-            "so what it resolved is $token, and nothing else")
+        is_deeply($asked->{resolved}, [ $token, $token ],
+            "so what it resolved is $token both times, and nothing else")
             or diag('resolved: ' . join(', ', map { "'$_'" } @{$asked->{resolved}}));
     }
 };
@@ -241,7 +250,7 @@ subtest 'a leaf Go ignores still costs nothing but the gate' => sub {
 ###############################################################################
 
 subtest 'the refusals and the acceptances are the ones ADR 0013 measured' => sub {
-    for my $spelling (qw( 0755 010 0o10 0x1f 1_000 .inf Null TRUE ), '2015-01-01') {
+    for my $spelling (qw( 0755 010 0o10 0x1f 1_000 Null TRUE ), '2015-01-01') {
         my $asked = guard_asked(yaml_leaf($spelling));
         like($asked->{died}, qr/\Qcannot write this leaf to a SOPS YAML document\E/,
             "'$spelling' is still refused");
@@ -250,6 +259,15 @@ subtest 'the refusals and the acceptances are the ones ADR 0013 measured' => sub
                           123abc 2024-invoice ), '2015-01-01T12:00:00Z') {
         my $asked = guard_asked(yaml_leaf($spelling));
         is($asked->{died}, '', "'$spelling' is still written");
+    }
+
+    # docs/adr/0070: `.inf`/`.nan` moved OUT of the refusal set -- the two
+    # parse-unambiguous non-finite spellings this file already names above
+    # (they carry no digest divergence a bare source could hide, ADR 0026/
+    # 0034), and the emitter quotes them instead of croaking.
+    for my $spelling (qw( .inf .nan )) {
+        my $asked = guard_asked(yaml_leaf($spelling));
+        is($asked->{died}, '', "'$spelling' is no longer refused -- docs/adr/0070");
     }
 };
 

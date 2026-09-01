@@ -87,6 +87,16 @@ my @STRING_ROWS = (
     'Null', 'NULL', 'TRUE', 'FALSE',
 );
 
+# docs/adr/0070: the seven parse-unambiguous non-finite spellings (the first
+# seven of @STRING_ROWS) moved OUT of the refused set -- the emitter now
+# quotes them, because a str leaf spelled this way can only have come from a
+# quoted source or a caller's own Perl string (docs/adr/0026, 0034). The other
+# fifteen -- a bare and a quoted source arrive as the same Perl string -- stay
+# refused exactly as ADR 0039 measured them.
+my @NOW_QUOTED = ('.inf', '.Inf', '.INF', '+.inf', '-.inf', '.nan', '.NaN');
+my %now_quoted = map { $_ => 1 } @NOW_QUOTED;
+my @STILL_REFUSED_ROWS = grep { !$now_quoted{$_} } @STRING_ROWS;
+
 # A leaf exactly as a YAML parse hands it over -- for `0755` that is an INT
 # carrying its source spelling, which is the leaf the unchanged half of the
 # message is for.
@@ -154,11 +164,18 @@ subtest 'the refusal for a string leaf says what sops really does with a string'
 };
 
 subtest 'every one of the 22 string spellings gets that message' => sub {
-    for my $spelling (@STRING_ROWS) {
+    for my $spelling (@STILL_REFUSED_ROWS) {
         my $error = refusal_for(leaf => $spelling);
         like($error, qr/\Qdoes not resolve a string away\E/,
             "[$spelling] the string half of the message");
         unlike($error, qr/\b493\b/, "[$spelling] and no decimal to pass");
+    }
+
+    # docs/adr/0070: the seven non-finite spellings are no longer refused, so
+    # there is no refusal message to check any more.
+    for my $spelling (@NOW_QUOTED) {
+        my $error = refusal_for(leaf => $spelling);
+        is($error, '', "[$spelling] no longer refused -- docs/adr/0070");
     }
 };
 
@@ -206,20 +223,41 @@ subtest 'the mac_only_encrypted warning splits the same way' => sub {
 };
 
 ###############################################################################
-# 4. MUST NOT MOVE: the refusal itself. THESE ARE PINNED AS A DEFECT (karr
-#    #135): every row is a document sops writes and reads, and this library
-#    still cannot produce one. When karr #99 gives this emitter a way to quote
-#    a scalar, these flip -- visibly, with this file naming the ticket.
+# 4. WHAT MOVED AND WHAT DID NOT (docs/adr/0070, karr #99). Fifteen of the 22
+#    rows are STILL PINNED AS A DEFECT (karr #135): a document sops writes and
+#    reads, and this library still cannot produce one -- the full karr #127 is
+#    still their gate (ADR 0070 corrects ADR 0039's premise that karr #99 +
+#    the landed, leading-zero-only karr #127 would flip all 22; it flips
+#    exactly seven). Those seven -- the non-finite spellings -- now write,
+#    double-quoted, and round-trip through the real binary.
 ###############################################################################
 
-subtest 'all 22 are still refused, and the fifth row is still written' => sub {
-    for my $spelling (@STRING_ROWS) {
+subtest 'the 15 ambiguous rows are still refused; the 7 non-finite are now quoted' => sub {
+    for my $spelling (@STILL_REFUSED_ROWS) {
         my $document = eval {
             File::SOPS->encrypt(data => { x_unencrypted => $spelling },
                 recipients => [$public], format => 'yaml');
         };
         is($document, undef,
             "[$spelling] still refused -- karr #135, docs/adr/0039");
+    }
+
+    for my $spelling (@NOW_QUOTED) {
+        my $document = eval {
+            File::SOPS->encrypt(data => { x_unencrypted => $spelling },
+                recipients => [$public], format => 'yaml');
+        };
+        is($@, '', "[$spelling] no longer refused -- docs/adr/0070")
+            or diag("died: $@");
+        like($document, qr/^x_unencrypted: "\Q$spelling\E"$/m,
+            "[$spelling] written double-quoted");
+
+        my $file = scratch_file('yaml');
+        write_file($file, $document);
+        my $out = `$sops_bin -d --input-type yaml --output-type yaml $file 2>&1`;
+        is($? >> 8, 0, "[$spelling] and sops reads it back") or diag($out);
+        like($out, qr/^x_unencrypted: "\Q$spelling\E"$/m,
+            "[$spelling] as the same quoted string");
     }
 
     # `"0755"` is the same class and is written, because YAML::XS quotes a
