@@ -11,6 +11,8 @@ use File::SOPS::Format::INI;
 use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
 # karr #157: a flat format keeps its own `sops` data key.
@@ -52,26 +54,7 @@ use Crypt::Age;
 #      `sops=1` decrypts cleanly through `sops -d`.
 # ----------------------------------------------------------------------------
 
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 diag("Using sops binary: $sops_bin") if $sops_bin;
 
 my $tempdir = tempdir(CLEANUP => 1);
@@ -326,7 +309,7 @@ subtest 'the YAML/JSON error message no longer names its own caller' => sub {
 ###############################################################################
 
 SKIP: {
-    skip "no sops binary found (\$SOPS_BIN, PATH, /tmp/sops) -- the ENV "
+    skip "no sops binary found (\$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- the ENV "
        . "compatibility assertions did NOT run", 3 unless $sops_bin;
 
     subtest 'sops -d reads an env file this library wrote with `sops=1`' => sub {

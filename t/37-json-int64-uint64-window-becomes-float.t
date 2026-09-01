@@ -12,6 +12,8 @@ use File::SOPS::Encrypted;
 use File::SOPS::Format::JSON;
 use Crypt::Age;
 use YAML::XS ();
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
 # karr #101 / docs/adr/0021: sops -e NORMALISES a bare JSON integer literal in
@@ -35,26 +37,7 @@ use YAML::XS ();
 # total -- when no sops binary is available.
 # ----------------------------------------------------------------------------
 
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 diag("Using sops binary: $sops_bin") if $sops_bin;
 
 my ($public, $secret) = Crypt::Age->generate_keypair();
@@ -351,9 +334,10 @@ subtest 'karr #104 (open, NOT fixed here): a caller-supplied UV in this window s
 ###############################################################################
 
 SKIP: {
-    skip "no sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "compatibility claims in this section were NOT verified. Fix: set "
-       . "SOPS_BIN=/path/to/sops.", 3
+    skip "no sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- the "
+       . "compatibility claims in this section were NOT verified. Fix: run "
+       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
+       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.", 3
         unless $sops_bin;
 
     subtest 'sops -e normalises the window; our rotate no longer croaks and leaves it byte-identical' => sub {

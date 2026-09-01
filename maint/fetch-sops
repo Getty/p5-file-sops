@@ -8,6 +8,11 @@
 # Usage: maint/fetch-sops [install-dir]
 #   install-dir defaults to $HOME/bin. Make sure it ends up on PATH, or
 #   run tests with SOPS_BIN=<install-dir>/sops.
+#
+#   The repo-local convention is `maint/fetch-sops .sops-bin`: that directory
+#   is .gitignore'd and is checked by the test suite automatically, so the
+#   binary survives a /tmp wipe and `prove -lr t/` finds it with no PATH or
+#   $SOPS_BIN fiddling. Prefer it over the old /tmp/sops location.
 
 set -euo pipefail
 

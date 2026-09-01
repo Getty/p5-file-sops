@@ -10,6 +10,8 @@ use YAML::XS qw(Load Dump);
 
 use File::SOPS;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # Resolve which sops binary to use for interop testing, in order:
 #   1. $SOPS_BIN, if set -- an explicit choice always wins. If it is set to
@@ -21,33 +23,15 @@ use Crypt::Age;
 #      picked up with zero configuration.
 #   3. /tmp/sops, kept for backwards compatibility with the old hardcoded
 #      location.
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. ".
-        "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 
 unless ($sops_bin) {
     plan skip_all =>
-        "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- ".
+        "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- ".
         "the ONLY sops-compatibility proof in this suite did NOT run. ".
-        "Fix: run maint/fetch-sops (needs a Go toolchain) to install a ".
-        "pinned sops onto PATH, or set SOPS_BIN=/path/to/sops.";
+        "Fix: run maint/fetch-sops .sops-bin (needs a Go toolchain) to ".
+        "install a pinned sops where the suite finds it automatically, or ".
+        "set SOPS_BIN=/path/to/sops.";
 }
 
 my $sops_version = `$sops_bin --version 2>&1`;

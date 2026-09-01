@@ -10,6 +10,8 @@ use File::SOPS;
 use File::SOPS::Encrypted;
 use File::SOPS::Format::YAML;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
 # karr #89 / docs/adr/0015: a NEGATIVE ZERO on which Perl has cached an integer.
@@ -58,33 +60,16 @@ use Crypt::Age;
 # Resolution copied from t/04-interop.t's rule (see the header comment there),
 # not re-derived: SOPS_BIN wins and dies if it is set to something not
 # executable, else PATH, else /tmp/sops, else an honest skip_all.
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 
 unless ($sops_bin) {
     plan skip_all =>
-        "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- "
+        "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
       . "karr #89 is a byte disagreement with sops that this library's own "
       . "MAC did not see, so without the binary this file proves nothing. "
-      . "Fix: set SOPS_BIN=/path/to/sops.";
+      . "Fix: run maint/fetch-sops .sops-bin to install the pinned binary "
+      . "where the suite finds it automatically, or set "
+      . "SOPS_BIN=/path/to/sops.";
 }
 
 diag("Using sops binary: $sops_bin");

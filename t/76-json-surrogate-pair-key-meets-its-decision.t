@@ -11,6 +11,8 @@ use File::SOPS;
 use File::SOPS::Format::JSON;
 use File::SOPS::Format::YAML;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 ###############################################################################
 # karr #139 / docs/adr/0064 -- the surrogate-pair divergence between the two
@@ -42,26 +44,7 @@ use Crypt::Age;
 
 # Sops binary, looked up the same way t/04-interop.t does it. Sections that
 # need it skip otherwise.
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 
 # The literal six ASCII characters that spell a JSON surrogate-pair escape.
 # chr(0x5C) bypasses perl 5.14+'s \uXXXX interpretation in single-quoted
@@ -214,8 +197,9 @@ my $emoji_bytes = "\xF0\x9F\x98\x80";
 ###############################################################################
 
 SKIP: {
-    skip "sops binary not found on PATH or at /tmp/sops; set SOPS_BIN or "
-       . "install /tmp/sops to run the sops 3.13.3 reference measurement",
+    skip "sops binary not found on PATH, in .sops-bin/sops, or at /tmp/sops; "
+       . "set SOPS_BIN, or run maint/fetch-sops .sops-bin, to run the sops "
+       . "3.13.3 reference measurement",
         4 unless $sops_bin;
 
     diag "Using sops binary: $sops_bin";

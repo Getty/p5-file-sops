@@ -11,6 +11,8 @@ use File::SOPS;
 use File::SOPS::Encrypted;
 use File::SOPS::Format::YAML;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
 # karr #105 / docs/adr/0026: a plain YAML infinity is the float go-yaml reads.
@@ -37,26 +39,7 @@ use Crypt::Age;
 # skipped without one.
 # ----------------------------------------------------------------------------
 
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 diag("Using sops binary: $sops_bin") if $sops_bin;
 
 # The twelve tokens go-yaml resolves to a non-finite float, and the bytes sops
@@ -413,7 +396,7 @@ subtest 'a document with a bare .inf can be written back' => sub {
 ###############################################################################
 
 SKIP: {
-    skip 'sops binary not found (set SOPS_BIN, or put sops on PATH)', 3
+    skip 'sops binary not found (set SOPS_BIN, put sops on PATH, or run maint/fetch-sops .sops-bin)', 3
         unless $sops_bin;
 
     my $tempdir = tempdir(CLEANUP => 1);

@@ -14,6 +14,8 @@ use File::SOPS::Metadata::Flat;
 use File::SOPS::Backend::Age;
 use File::SOPS::Format::INI;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
 # karr #37 / docs/adr/0047: the INI format handler.
@@ -48,26 +50,7 @@ use Crypt::Age;
 # skipped without a binary, and then this file proves nothing about sops.
 # ----------------------------------------------------------------------------
 
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 diag("Using sops binary: $sops_bin") if $sops_bin;
 
 my $tempdir = tempdir(CLEANUP => 1);
@@ -493,7 +476,7 @@ subtest 'a document goes through encrypt and decrypt with its comments' => sub {
 ###############################################################################
 
 SKIP: {
-    skip 'sops binary not found (set SOPS_BIN)', 3 unless $sops_bin;
+    skip 'sops binary not found (set SOPS_BIN, put sops on PATH, or run maint/fetch-sops .sops-bin)', 3 unless $sops_bin;
 
     subtest 'sops writes it, File::SOPS reads it -- MAC and all' => sub {
         # Key order deliberately NOT sorted, so document order and sorted order

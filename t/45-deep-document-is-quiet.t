@@ -9,6 +9,8 @@ use YAML::XS ();
 use File::SOPS;
 use File::SOPS::Metadata;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # karr #117 / docs/adr/0029 -- a deep document is walked QUIETLY, and refused
 # where sops refuses it.
@@ -49,26 +51,7 @@ use Crypt::Age;
 #   5. What sops does, for the number in section 3 and for a deep document it
 #      accepts.
 
-sub _find_on_path {
-    my ($name) = @_;
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        my $candidate = "$dir/$name";
-        return $candidate if -x $candidate && !-d $candidate;
-    }
-    return undef;
-}
-
-my $sops_bin;
-if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-    die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
-      . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
-        unless -x $ENV{SOPS_BIN};
-    $sops_bin = $ENV{SOPS_BIN};
-}
-else {
-    $sops_bin = _find_on_path('sops') || (-x '/tmp/sops' ? '/tmp/sops' : undef);
-}
+my $sops_bin = find_sops_bin();
 diag("Using sops binary: $sops_bin") if $sops_bin;
 
 my ($public, $secret) = Crypt::Age->generate_keypair();
@@ -310,7 +293,7 @@ is($File::SOPS::MAX_DEPTH, 10_000,
 # 5. What sops does.
 
 SKIP: {
-    skip "no sops binary (\$SOPS_BIN, PATH, /tmp/sops) -- the compatibility "
+    skip "no sops binary (\$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- the compatibility "
        . "claim this file makes was NOT verified", 3
         unless $sops_bin;
 
