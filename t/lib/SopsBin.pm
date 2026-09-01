@@ -47,7 +47,13 @@ sub find_sops_bin {
         die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable. "
           . "Fix the path, or unset SOPS_BIN to auto-detect sops on PATH.\n"
             unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
+        # Resolve to an ABSOLUTE path for the same reason the .sops-bin literal
+        # below is: several callers build "cd $other_dir && $sops_bin ..." to
+        # exercise sops's own cwd-relative .sops.yaml search, and a relative
+        # SOPS_BIN (e.g. .sops-bin/sops) would resolve against the wrong
+        # directory once the shell has cd'd -- silently failing exactly the
+        # creation-rules and RE2 interop subtests (t/04, t/62, t/79).
+        return abs_path($ENV{SOPS_BIN});
     }
 
     return _find_on_path('sops')
