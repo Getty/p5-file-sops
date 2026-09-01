@@ -54,6 +54,6 @@ on test => sub {
 on develop => sub {
     # xt/author/pod-links.t checks L<> resolution over the WOVEN pod (Test::Pod,
     # a separate develop-phase prereq registered by [PodSyntaxTests] itself,
-    # only checks syntax) -- see karr #98.
+    # only checks syntax) -- see k98.
     requires 'Pod::Checker';
 };

@@ -6,7 +6,7 @@ use Test::Pod ();
 use Pod::Checker;
 use File::Temp qw( tempdir );
 
-# karr #98 -- Test::Pod (the xt/author/pod-syntax.t that
+# k98 -- Test::Pod (the xt/author/pod-syntax.t that
 # [PodSyntaxTests] generates at build time) checks POD SYNTAX only: it
 # never resolves an L<> target, so a link to a section that does not
 # exist passes it silently. That is exactly how two dead links
@@ -24,7 +24,7 @@ use File::Temp qw( tempdir );
 # every one, dozens of false positives per file) -- it cannot tell a
 # real dead link from a section that simply has not been woven in yet.
 #
-# karr #170 -- that noise is not hypothetical: `prove -lr xt/`, run
+# k170 -- that noise is not hypothetical: `prove -lr xt/`, run
 # directly against the checked-out source tree rather than through
 # `dzil test`, hits it on every file, every time. The design above
 # assumed this file only ever runs from inside a dzil build (promoted
