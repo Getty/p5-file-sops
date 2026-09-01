@@ -1,0 +1,42 @@
+---
+claimed_at: 2026-09-01T01:08:54Z
+claimed_by: wire-154
+class: standard
+completed: 2026-09-01T01:08:54Z
+created: 2026-08-21T08:59:09Z
+id: 154
+priority: low
+started: 2026-09-01T00:19:29Z
+status: done
+tags:
+- wire
+- style
+title: Should File::SOPS::Comment be a Moo class like every other class here?
+updated: 2026-09-01T01:08:54Z
+---
+
+Question for the maintainer, not a defect. Every other class in this
+distribution is Moo + namespace::clean; File::SOPS::Comment is a hand-written
+`bless` with `sub new` and `sub text`, which is how ADR 0041 wrote it when it
+lived inside Encrypted.pm as a nine-line leaf. karr #147 moved it to
+lib/File/SOPS/Comment.pm unchanged -- a move must not move behaviour, and a Moo
+constructor answers differently for the three inputs the class refuses (missing
+text, a reference, an empty string), whose messages t/56 reads.
+
+So the divergence from the house rule "one object system per distribution" is
+now visible in a file of its own. Two defensible answers:
+
+  - Leave it. The class holds one immutable field, has no roles, no lazy
+    build, no coercion, and loads nothing -- which is exactly why the ladder
+    can load it without a cycle.
+  - Convert it. Conformance over taste, at the price of a behaviour-carrying
+    edit: `has text => (is => 'ro', required => 1)` plus a BUILD for the
+    ref/empty refusals, and t/56's `like($@, qr/cannot be empty/)` and the two
+    bare `ok(!defined(eval {...}))` checks re-read against the new messages.
+
+Whichever way it goes, it is a decision about the class and not about the wire:
+detect_type, value_to_bytes and the digest see the same object either way.
+
+Lane: wire.
+
+IMPLEMENTIERT + COMMITTET af3eda8. Comment.pm auf Moo (has text ro/required + BUILD fuer ref/empty-Refusals), sub new/sub text entfernt. t/56 unveraendert gruen (cannot be empty woertlich behalten). Kein Wire-Byte bewegt. docs/adr/0068. Kombinierter Lauf main: 82 Dateien/1429 Tests PASS, SOPS_BIN=/tmp/sops t/04-interop.t 32/32 PASS, keine Skips. Nicht gepusht.
