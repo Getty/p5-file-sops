@@ -1,7 +1,9 @@
 # ADR 0033 — A multi-document stream is an ArrayRef, which no single document can be
 
-- Status: **proposed** — the return type of a public method moves, and that is the
-  maintainer's call, not a lane's
+- Status: **accepted** — 2026-09-01, by the maintainer, who took the return-type
+  decision (Decision 1: a stream is an ArrayRef, one document stays a HashRef) as
+  written and cleared karr #31 to implement. The review stack the ADR's schedule
+  note warned about is now closed.
 - Date: 2026-08-21
 - Tags: api, yaml, interop, wire-format, multi-document
 - Prepares karr #31 step 1 (the plan in that ticket makes this ADR a precondition
