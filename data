@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-09-01T16:34:00Z
+created: 2026-09-01T16:33:54Z
+id: 189
+priority: low
+started: 2026-09-01T16:34:00Z
+status: done
+tags:
+- docs
+- release
+title: Condense the {{NEXT}} Changes into a grouped release changelog
+updated: 2026-09-01T16:34:00Z
+---
+
+The {{NEXT}} block had accumulated ~80 commit-level bullets since 0.002 -- a faithful record but unreadable as a release changelog. Condensed to ~27 grouped bullets under CPAN::Changes [GROUP] headers (Backward Incompatibilities, New Features, Security, Data Loss and Correctness, Interop, Diagnostics, Accepted Limits, Internals). Every SECURITY, DATA-LOSS and breaking BEHAVIOUR CHANGE stays visible and named; the many interop/type fixes are grouped with their ADR/karr refs kept for traceability. The full detailed version stays in git history. The actual release cut remains a maintainer decision.
