@@ -12,7 +12,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #121 / docs/adr/0063 -- the MAC-failure half of the bare-negative-zero
+# k121 / docs/adr/0063 -- the MAC-failure half of the bare-negative-zero
 # shape sops writes.
 #
 # A float that underflows to negative zero on Go's side is written into an
@@ -37,7 +37,7 @@ use SopsBin qw(find_sops_bin);
 # Section 2 pins the wording of the hedged hint appended to the MAC failure
 # when the raw document carries a bare `-0` token. The hint is a "consistent
 # with" rather than a confirmed cause -- the same hedge convention
-# _mac_failure_sops_display_hint uses (docs/adr/0052 / karr #174). It fires
+# _mac_failure_sops_display_hint uses (docs/adr/0052 / k174). It fires
 # for YAML and JSON only; env and ini do not have typed values, so a `-0`
 # string there is benign. A pure-Perl tampering test exercises the hint
 # directly so the file does not depend on the binary to prove the wording.

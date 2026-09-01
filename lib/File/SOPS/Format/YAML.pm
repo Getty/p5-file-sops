@@ -18,12 +18,12 @@ use namespace::clean;
 # emit(), emit() calls File::SOPS::Encrypted->canonical_float_tree, and the walk
 # calls the guards below BACK. So a refusal named a line in Encrypted.pm -- the
 # walk's own recursion -- where the house rule asks for the line the caller
-# wrote encrypt() or emit() on (karr #71). Naming both packages here makes Carp
+# wrote encrypt() or emit() on (k71). Naming both packages here makes Carp
 # walk out of them: it skips a frame when either side trusts the other, so this
 # one list also fixes the guard that croaks from inside the walk.
 #
 # It is the frames, not the messages, that this changes. Every message still
-# names the leaf's key path (karr #68), which is what a caller acts on.
+# names the leaf's key path (k68), which is what a caller acts on.
 our @CARP_NOT = qw( File::SOPS File::SOPS::Encrypted );
 
 # 'JSON::PP' here is one of YAML::XS's own two mode names (the other is
@@ -135,7 +135,7 @@ sub parse {
     #
     # sops supports multi-document YAML as ONE tree with N branches carrying ONE
     # metadata section (written into every document) and ONE MAC spanning all
-    # documents in order (docs/adr/0033, karr #31). This method now returns the
+    # documents in order (docs/adr/0033, k31). This method now returns the
     # DOCUMENT LIST rather than refusing above one document -- see
     # _parse_multidoc. The single-document path below is untouched, so a
     # one-document file is byte-identical to before.
@@ -194,28 +194,28 @@ sub parse {
     # for leaf.
     #
     # It runs for EVERY document, plaintext included. It used to be gated on
-    # `if $metadata`, and karr #123 and docs/adr/0034 are why that gate is
+    # `if $metadata`, and k123 and docs/adr/0034 are why that gate is
     # gone: sops has one parse, and this had two.
     _restore_plain_infinities($data, $content);
 
     # The document list is [$data] for a single document, so a caller wanting a
-    # uniform shape (the api lane, karr #31 step 4) can read the third value
+    # uniform shape (the api lane, k31 step 4) can read the third value
     # without special-casing the count. The two-value unpacking every current
     # caller uses ignores it, so the single-document path is byte-identical.
     return ($data, $metadata, [$data]);
 }
 
 ###############################################################################
-# A multi-document stream, parsed into a DOCUMENT LIST (docs/adr/0033, karr #31)
+# A multi-document stream, parsed into a DOCUMENT LIST (docs/adr/0033, k31)
 #
 # Reached only when YAML::XS::Load returned more than one document. The wire
 # machinery below this -- the MAC over all documents (File::SOPS::_compute_mac,
 # _verify_mac) and the order-preserving reparse (parse_in_document_order) -- is
 # built to consume this list, but the public API return shape, the one-instance
 # metadata attach/detach and the emitter's separators are NOT in place yet
-# (karr #31 steps 4-5). Until they are, File::SOPS refuses a multi-document
+# (k31 steps 4-5). Until they are, File::SOPS refuses a multi-document
 # read or write at its own boundary rather than processing only the first
-# document, which is the karr #14 data-loss defect this whole ticket exists to
+# document, which is the k14 data-loss defect this whole ticket exists to
 # fix. So this returns a correct, non-corrupting list; it does not yet round
 # trip.
 #
@@ -248,7 +248,7 @@ sub _parse_multidoc {
     # documents' sops sections are stripped from the value trees so the walks
     # see clean document contents; the read-side policy (reject metadata that is
     # only in a later document) and the write-side one-instance attach are the
-    # api lane's, karr #31 step 4.
+    # api lane's, k31 step 4.
     my $metadata;
     my $first = $documents[0];
     if (exists $first->{sops}) {
@@ -274,7 +274,7 @@ sub _parse_multidoc {
 }
 
 ###############################################################################
-# The !!merge tag sops writes on a merge key (karr #116, docs/adr/0028)
+# The !!merge tag sops writes on a merge key (k116, docs/adr/0028)
 #
 # sops does not expand a YAML merge key. It reads the document into a
 # yaml.Node tree, where go-yaml performs no merge resolution, so `<<` survives
@@ -380,7 +380,7 @@ sub _merge_tagged_scalars {
 }
 
 ###############################################################################
-# The OTHER yaml.org tags on a scalar (karr #118, docs/adr/0030)
+# The OTHER yaml.org tags on a scalar (k118, docs/adr/0030)
 #
 # YAML::XS accepts exactly three tags on a scalar -- !!str, !!int and !!float
 # -- and dies on every other one with `bad tag found for scalar`, which reads
@@ -648,7 +648,7 @@ sub _first_unreadable_tag {
 }
 
 ###############################################################################
-# A comment sops wrote as a list element (karr #108, karr #76, docs/adr/0041)
+# A comment sops wrote as a list element (k108, k76, docs/adr/0041)
 #
 # sops attaches a YAML comment to the node that FOLLOWS it. Above a mapping key
 # that is a `#ENC[...,type:comment]` line, which YAML::XS discards before this
@@ -663,7 +663,7 @@ sub _first_unreadable_tag {
 # and every parser keeps it. THIS MODULE NO LONGER GUARDS AGAINST THAT. Under
 # docs/adr/0024 parse croaked on any type:comment leaf, because reading one as a
 # value put a string in the caller's list that the file does not contain
-# (karr #108). Under docs/adr/0041 the leaf is PRESERVED instead: File::SOPS
+# (k108). Under docs/adr/0041 the leaf is PRESERVED instead: File::SOPS
 # decrypts it into a File::SOPS::Comment, keeps it at its index, leaves it out
 # of the digest -- measured, that is exactly the digest sops computes -- and
 # writes it back as a type:comment element. There is nothing left for a parse
@@ -672,15 +672,15 @@ sub _first_unreadable_tag {
 # _reject_unwritable_leaf below for a comment this emitter is asked to write as
 # plain text). The read-side twin of the first lives in File::SOPS::_decrypt_tree
 # rather than here, because the same document is read through the JSON handler
-# too -- which never had this guard, and carried karr #108's defect unnoticed
+# too -- which never had this guard, and carried k108's defect unnoticed
 # the whole time (measured against sops 3.13.3: `sops -e --output-type json`
 # writes type:comment leaves into JSON).
 #
-# Mapping-position comments are unchanged and remain the open half of karr #76:
+# Mapping-position comments are unchanged and remain the open half of k76:
 # YAML::XS drops them on the way in and no emitter here can write one.
 
 ###############################################################################
-# A literal libyaml numifies past the end of a double (karr #102, docs/adr/0023)
+# A literal libyaml numifies past the end of a double (k102, docs/adr/0023)
 #
 # `1e400`, a 401-digit integer, `Inf`, `NaN`: libyaml resolves each of them to a
 # number, and the number it lands on is +Inf, -Inf or NaN. go-yaml resolves none
@@ -692,7 +692,7 @@ sub _first_unreadable_tag {
 # The repair is at PARSE time and nowhere else, because what is wrong is our
 # parse result and not any guard downstream. _go_scalar_bytes already models the
 # Go side correctly for all 29 spellings measured; detect_type already reads the
-# SV and nothing else (ADR 0002); the non-finite guard from karr #59 is right
+# SV and nothing else (ADR 0002); the non-finite guard from k59 is right
 # about every value it was written for and is untouched here. What this does is
 # hand the rest of the distribution the leaf go-yaml sees.
 #
@@ -720,7 +720,7 @@ sub _restring_non_finite_leaves {
     # A recursive YAML anchor (`root: &a\n  b: *a`) really does come back from
     # YAML::XS as a cycle, so this walk carries its own visited set. That keeps
     # THIS walk terminating; the encrypt and decrypt walks do not and hang on
-    # such a document today, which is karr #110 and not widened into here.
+    # such a document today, which is k110 and not widened into here.
     return if $seen->{refaddr($node)}++;
 
     if (ref $node eq 'HASH') {
@@ -745,7 +745,7 @@ sub _restring_non_finite_leaves {
 # the SV the tree holds rather than off a copy, and the replacement is written
 # back into the same slot. Nothing here numifies anything -- B reads the NV and
 # the PV out of the SV's own slots, so this cannot retype a scalar the way a
-# numeric comparison on it would (karr #32).
+# numeric comparison on it would (k32).
 sub _restring_non_finite_leaf {
     return unless defined $_[0];
 
@@ -769,7 +769,7 @@ sub _restring_non_finite_leaf {
 }
 
 ###############################################################################
-# A bare leading-zero integer libyaml and Go disagree about (karr #127, docs/adr/0054)
+# A bare leading-zero integer libyaml and Go disagree about (k127, docs/adr/0054)
 #
 # `v: 0755` is parsed by YAML::XS as a Perl dualvar: POK with PV="0755", IOK
 # with IV=755. go-yaml's resolver reads `0755` through strconv.ParseInt(_, 0, 64),
@@ -844,7 +844,7 @@ sub _go_repair_int_leaves {
 # entirely: _has_public_pv is false and the int branch is bypassed. The same
 # is what sops itself does on the parse side -- it loses the source spelling
 # of `0755` because Go's resolver reads it as the integer 493, and that is
-# the trailing edge of karr #127.
+# the trailing edge of k127.
 sub _go_repair_int_leaf {
     return unless defined $_[0] and !ref $_[0];
 
@@ -864,7 +864,7 @@ sub _go_repair_int_leaf {
 }
 
 ###############################################################################
-# A YAML infinity the DOCUMENT wrote plain (karr #105, docs/adr/0026)
+# A YAML infinity the DOCUMENT wrote plain (k105, docs/adr/0026)
 #
 # The mirror image of the walk above, and it needs a different authority.
 # libyaml leaves `.inf` a STRING; gopkg.in/yaml.v3 resolves it to the float
@@ -910,7 +910,7 @@ sub _go_repair_int_leaf {
 # comes from %GO_CONSTANT, and the token has to be in %GO_CONSTANT before
 # YAML::PP is consulted at all.
 #
-# FOR EVERY DOCUMENT, PLAINTEXT INCLUDED (karr #123, docs/adr/0034). This was
+# FOR EVERY DOCUMENT, PLAINTEXT INCLUDED (k123, docs/adr/0034). This was
 # gated on a `sops:` section until 0.003, on the argument that a plaintext has
 # no MAC for a foreign reader to disagree with and that ADR 0013's guard gives
 # a better error on the encrypt path anyway -- "a worse message for no gain,
@@ -931,10 +931,10 @@ sub _go_repair_int_leaf {
 # round trip. Same shape as ADR 0011's carrier: a float leaf whose string half
 # is the text the document contains.
 #
-# Since karr #113 (docs/adr/0031) such a document is written back as well: the
+# Since k113 (docs/adr/0031) such a document is written back as well: the
 # non-finite guard lets a leaf carrying one of these tokens through to
 # ADR 0013's foreign-resolution guard, which measures the token the emitter
-# really writes. An ENCRYPTED slot is still refused there (karr #122).
+# really writes. An ENCRYPTED slot is still refused there (k122).
 my $PLAIN_STYLE_LOADER = YAML::PP->new(schema => [qw( Core )]);
 
 sub _restore_plain_infinities {
@@ -959,7 +959,7 @@ sub _restore_plain_infinities {
     # YAML::XS accepts. Measured, the one that really occurs is a recursive
     # anchor -- `Found cyclic ref for alias 'a'` where YAML::XS hands back a
     # real Perl cycle -- and such a document is refused downstream anyway
-    # (karr #110). Nothing is repaired then, which is exactly today's behaviour
+    # (k110). Nothing is repaired then, which is exactly today's behaviour
     # and today's MAC error, never a partially repaired tree whose digest would
     # be wrong in a new way.
     my $theirs = eval { $PLAIN_STYLE_LOADER->load_string($content) };
@@ -1090,7 +1090,7 @@ sub _pair_plain_infinities {
 # $_[0] is OUR leaf and $_[1] is YAML::PP's, both by alias: the flags come off
 # the SVs the trees hold rather than off copies, and B reads the NV and the PV
 # out of the SV's own slots. Nothing numifies anything, so this cannot retype a
-# scalar the way a numeric comparison on it would (karr #32).
+# scalar the way a numeric comparison on it would (k32).
 sub _plain_infinity_leaf {
     return undef unless defined $_[0] && !ref $_[0];
     return undef unless defined $_[1] && !ref $_[1];
@@ -1131,7 +1131,7 @@ sub _plain_infinity_token {
 }
 
 ###############################################################################
-# A `lastmodified` the DOCUMENT wrote plain (karr #159, docs/adr/0050)
+# A `lastmodified` the DOCUMENT wrote plain (k159, docs/adr/0050)
 #
 # The mirror of _quote_sops_timestamp below, on the read side. That one exists
 # because YAML::XS emits an RFC3339 timestamp bare and go-yaml resolves a bare
@@ -1141,7 +1141,7 @@ sub _plain_infinity_token {
 #   'lastmodified' expected type 'string', got unconvertible type 'time.Time'
 #
 # So this library has never WRITTEN such a document. It has always READ one,
-# and karr #144 / docs/adr/0044 could not close that from Metadata.pm: a bare
+# and k144 / docs/adr/0044 could not close that from Metadata.pm: a bare
 # and a quoted scalar arrive at from_hash as the same Perl string. The missing
 # fact is not in the SV, it is in the bytes -- the same shape as
 # _restore_plain_infinities above, and the reason both live in this file.
@@ -1162,7 +1162,7 @@ sub _plain_infinity_token {
 # the file and make the file unopenable by every tool, which in a secrets
 # library is a worse outcome than the divergence it closes.
 #
-# THE GUARD NEVER FIRES ON A DOCUMENT SOPS READS, which is karr #145's
+# THE GUARD NEVER FIRES ON A DOCUMENT SOPS READS, which is k145's
 # condition and the reason that ticket was closed unimplemented. Measured
 # against sops 3.13.3, one document per spelling, each carrying a `mac` built
 # under the AAD ADR 0044 derives:
@@ -1173,7 +1173,7 @@ sub _plain_infinity_token {
 #   * `!!str 2026-08-21T09:05:08Z` -- bare, but TAGGED -- is exit 0 at sops,
 #     because an explicit tag stops go-yaml's implicit resolver before
 #     parseTimestamp runs. Hence the tag check below; without it this guard
-#     would fire on a document sops reads, which is the whole thing karr #145
+#     would fire on a document sops reads, which is the whole thing k145
 #     was protecting.
 #
 # The two places where _go_timestamp and go-yaml's own parseTimestamp were
@@ -1417,7 +1417,7 @@ digest covering C<+Inf> / C<-Inf> / C<NaN>, which is what sops writes and what
 sops digests for the same document. An B<encrypted> slot is still refused --
 the wire form there is C<type:float> with the plaintext C<+Inf>, which
 L<File::SOPS::Encrypted/encrypt_value> refuses because it cannot see which
-format is being written (karr #122).
+format is being written (k122).
 
 See
 L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>,
@@ -1582,7 +1582,7 @@ because no SOPS store writes that shape.
 A comment above a B<mapping> key -- and one on the file's first line, which sops
 writes the same way -- is still B<lost> on a read here, as it always has been:
 L<YAML::XS> discards it before this method sees a tree, and nothing here can
-write one back. That is the open half of karr #76, filed as karr #148, and it
+write one back. That is the open half of k76, filed as k148, and it
 is not a lane handoff but a wall: L<YAML::XS> is libyaml, whose emitter cannot
 write a comment at all, and L<YAML::PP>'s emitter has no comment event either --
 its own documentation lists comment-preserving round trips as a TODO. The read
@@ -1634,7 +1634,7 @@ sub parse_in_document_order {
     # FIRST document, YAML::XS::Load the LAST), and the MAC walk takes its order
     # from here and its values from parse()'s tree. Both read the stream in list
     # context now, so document i's order is paired with document i's values
-    # (docs/adr/0033, karr #31). A stream that cannot be read this way still
+    # (docs/adr/0033, k31). A stream that cannot be read this way still
     # declines to nothing, which falls back to sorted order -- can make
     # verification fail, never wrongly succeed.
     my @docs = eval { $ORDERED_LOADER->load_string($text) };
@@ -1695,7 +1695,7 @@ sub serialize {
     # A stream is an ArrayRef of encrypted document trees; a single document is a
     # bare HashRef and stays byte-identical -- a one-element list attaches the
     # same one metadata block and emits through the same Dump call (docs/adr/0033
-    # Decision 1, karr #31). The SAME metadata is written into EVERY document,
+    # Decision 1, k31). The SAME metadata is written into EVERY document,
     # byte-identical (same age blob, lastmodified and mac), which is the exact
     # inverse of the read-side detach in parse/_parse_multidoc (point 1). An
     # empty document is a real document and STILL gets its own metadata block
@@ -1728,7 +1728,7 @@ sub serialize {
     # separator and each later document's `sops:` are handled the same as the
     # first.
     #
-    # mac_covered turns on the foreign-resolution guard (karr #86, ADR 0013):
+    # mac_covered turns on the foreign-resolution guard (k86, ADR 0013):
     # this document carries a MAC, and sops recomputes that MAC from the values
     # ITS parser resolves out of these bytes.
     #
@@ -1736,7 +1736,7 @@ sub serialize {
     # unencrypted leaf cannot make such a document disagree with its own MAC and
     # refusing it would refuse a document that works today -- measured, sops -d
     # exit 0. It still reads 493 out of a `0755` this module reads as 755, so
-    # the same check runs there and WARNS instead (karr #87, ADR 0018).
+    # the same check runs there and WARNS instead (k87, ADR 0018).
     return _quote_sops_timestamp($class->emit(
         @output == 1 ? $output[0] : \@output,
         $metadata->mac_only_encrypted ? (warn_foreign_resolution => 1)
@@ -1802,7 +1802,7 @@ sub _quote_sops_timestamp {
 Class method to serialize data and metadata to YAML.
 
 The C<data> parameter is a HashRef for a single document, or an B<ArrayRef of
-HashRefs> for a multi-document stream (docs/adr/0033, karr #31); a one-element
+HashRefs> for a multi-document stream (docs/adr/0033, k31); a one-element
 ArrayRef is byte-identical to the bare HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
 
@@ -1849,7 +1849,7 @@ Perl string, while sops writes C<2015-01-01T00:00:00Z> for the first and
 C<"2015-01-01"> for the second, so quoting would turn a loud refusal into a
 silent divergence for 15 of the 22. See
 L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>
-and karr #135.
+and k135.
 
 B<A C<True> or C<False> string is warned about instead, in both MAC modes.>
 The digest bytes agree -- sops renders a boolean Title-cased, which is the same
@@ -1869,14 +1869,14 @@ family are strings to yaml.v3 and to libyaml alike, C<~> and C<null> are
 written quoted, and an RFC3339 timestamp -- a string here and a C<time.Time> to
 Go -- comes back from C<sops rotate> as the identical token. See
 L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>
-and karr #92.
+and k92.
 
 The rule does not apply to an B<encrypted> slot (an C<ENC[...]> string carries
 any spelling verbatim), to L</emit> on its own (a plaintext document has no MAC
 for a reader to disagree with), or to the C<sops> metadata section (the digest
 does not cover it). See
 L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
-and karr #86.
+and k86.
 
 B<In a C<mac_only_encrypted> document the same leaf is warned about rather than
 refused.> There the digest covers encrypted values only, so an unencrypted leaf
@@ -1890,7 +1890,7 @@ if the divergence is known and accepted. Measured over 217 such documents: 66
 warn, all 66 really do diverge, none is refused, and 0 warn about a leaf the two
 implementations agree on. See
 L<docs/adr/0018|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0018-a-mac-only-encrypted-document-warns-where-it-cannot-refuse.md>
-and karr #87.
+and k87.
 
 =cut
 
@@ -1903,7 +1903,7 @@ and karr #87.
 # emitter writes keys sorted, and the boolean mode decides whether a
 # JSON::PP::Boolean reaches the file as `true` or as
 # `!!perl/scalar:JSON::PP::Boolean 1`. A second copy of those options is a
-# second answer to a question that has one -- which is what karr #35 found: the
+# second answer to a question that has one -- which is what k35 found: the
 # plaintext emitter used to work only because this module set
 # $YAML::XS::Boolean process-wide at load time.
 #
@@ -1927,7 +1927,7 @@ sub emit {
     croak "data required" unless defined $data;
 
     # A multi-document stream is an ArrayRef of document trees (docs/adr/0033,
-    # karr #31). A bare HashRef is one document and stays byte-identical.
+    # k31). A bare HashRef is one document and stays byte-identical.
     my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
     croak "data required" unless @docs;
 
@@ -2008,7 +2008,7 @@ sub _emit_docs {
 # unique random sentinel, recording sentinel => { value, doc, path } for the
 # post-Dump surgery. Containers are rebuilt (new hashes/arrays); leaves are
 # shared, so the caller's tree is never mutated. No cycle guard: canonical_float_tree
-# has none either, so a cyclic document already hangs downstream (karr #110) and
+# has none either, so a cyclic document already hangs downstream (k110) and
 # this adds no new behaviour there.
 sub _sentinel_quotable_leaves {
     no warnings 'recursion';
@@ -2204,7 +2204,7 @@ sub _yaml_double_quote {
 #
 # $where is the leaf's key path from canonical_float_tree, in the shape the MAC
 # walk's messages already use. It goes in FRONT of the message: the class alone
-# told a caller what was wrong and left finding it a manual search (karr #68).
+# told a caller what was wrong and left finding it a manual search (k68).
 sub _reject_unwritable_leaf {
     my ($node, $where) = @_;
 
@@ -2244,7 +2244,7 @@ sub _reject_unwritable_leaf {
 }
 
 ###############################################################################
-# The reader on the other side of the file (karr #86, docs/adr/0013)
+# The reader on the other side of the file (k86, docs/adr/0013)
 #
 # Everything above asks THIS distribution's emitter what it does. This asks what
 # Go's gopkg.in/yaml.v3 -- the parser sops uses -- makes of the bytes we are
@@ -2304,11 +2304,11 @@ my %GO_CONSTANT = (
 # does not resolve to a number at all. Derived from %GO_CONSTANT's own byte
 # string rather than from a second list of spellings: there is one token list
 # in this module, and a copy of it is how a repair and the guard it depends on
-# drift apart (ADR 0002's defect class, and karr #89's shape one level down).
+# drift apart (ADR 0002's defect class, and k89's shape one level down).
 #
 # It lives HERE rather than beside its caller because it reads %GO_CONSTANT,
 # and a `my` hash is not in scope above its own declaration. See
-# _restore_plain_infinities, karr #105 and docs/adr/0026.
+# _restore_plain_infinities, k105 and docs/adr/0026.
 # The four bytes a repairable token cannot be written without. Built from the
 # same %GO_CONSTANT keys, so widening that table widens this with it.
 my $GO_NON_FINITE_TEXT = do {
@@ -2396,7 +2396,7 @@ sub _go_int {
 # place that must not have it.
 #
 # The copy is pack/unpack for the same reason, and this one was learned twice.
-# It was `value_to_bytes($p * 1.0)` until karr #89, and Perl's arithmetic settles
+# It was `value_to_bytes($p * 1.0)` until k89, and Perl's arithmetic settles
 # a token like `-0.0e0` on its INTEGER path: the model answered 0, this module
 # answered 0, the guard saw agreement, and a document sops -d rejects with exit
 # 51 was written silently. A model that shares a conversion with the code it
@@ -2409,7 +2409,7 @@ sub _go_int {
 #
 # `-0.0` WITHOUT an exponent survives `* 1.0` as an NV, which is why the guard
 # was right for it and why this gap outlived ADR 0013. See ADR 0015 and the
-# karr #89 amendment in ADR 0013.
+# k89 amendment in ADR 0013.
 sub _go_float {
     my ($p) = @_;
 
@@ -2630,8 +2630,8 @@ sub _foreign_resolution_token {
 
     # WHAT THE EMITTER WRITES is the only thing Go gets to resolve, so it is the
     # only thing asked about. The leaf's stringification decided this until
-    # karr #91 -- it is the same string for every leaf class but a boolean, and
-    # for a boolean it was wrong in both directions: karr #90 reached a document
+    # k91 -- it is the same string for every leaf class but a boolean, and
+    # for a boolean it was wrong in both directions: k90 reached a document
     # through exactly that step, because `1` resolved to the `1` the digest then
     # covered and the guard returned before asking the emitter anything. A
     # quoted or multi-line scalar is a string to every YAML reader, and undef
@@ -2648,7 +2648,7 @@ sub _foreign_resolution_token {
 
     # The bytes agree and the TYPE does not. A second axis, invisible to
     # everything above: the digest cannot see it, so neither could this guard
-    # until karr #92. See docs/adr/0019.
+    # until k92. See docs/adr/0019.
     return ($token, 'type') if _go_retypes($leaf, $token);
 
     return;
@@ -2684,7 +2684,7 @@ sub _go_retypes {
 # The MAC holds and the two implementations still read different things, so
 # there is nothing to refuse and something to say. Identical in both modes --
 # the digest covers the same bytes either way -- which is why one sub serves
-# both verdicts. See docs/adr/0019 and karr #92.
+# both verdicts. See docs/adr/0019 and k92.
 sub _carp_foreign_retyping {
     my ($where) = @_;
 
@@ -2699,7 +2699,7 @@ sub _carp_foreign_retyping {
         . "or write the document as JSON, where every string is quoted";
 }
 
-# WHAT TO DO ABOUT IT depends on what the leaf IS, and until karr #135 the
+# WHAT TO DO ABOUT IT depends on what the leaf IS, and until k135 the
 # message answered for an `int` leaf whatever it was handed.
 #
 # For a NUMERIC leaf the sentence is right and re-measured against sops 3.13.3:
@@ -2719,8 +2719,8 @@ sub _carp_foreign_retyping {
 # `0755` bare). So the leaf stays refused, per docs/adr/0008, until the emitter
 # can write it -- and the message says what is true of it and names the two
 # remedies that are measured to work: encrypt it (22 of 22 sops -d exit 0) or
-# write the document as JSON (22 of 22). See docs/adr/0039 and karr #135, and
-# karr #99 for the emitter that would end the refusal.
+# write the document as JSON (22 of 22). See docs/adr/0039 and k135, and
+# k99 for the emitter that would end the refusal.
 #
 # detect_type is the ladder the digest already goes through, not a second
 # opinion about what the leaf is -- and not a pattern on its text.
@@ -2767,7 +2767,7 @@ sub _reject_foreign_resolution {
 # refuse a file that works. What is left is that the two implementations read
 # different VALUES out of a document neither of them complains about -- measured
 # for `mode_unencrypted: 0755`, sops -d exit 0 and it reads 493 where this
-# module reads 755. Nothing tells the caller that but this line. See karr #87
+# module reads 755. Nothing tells the caller that but this line. See k87
 # and docs/adr/0018.
 #
 # carp rather than warn, for the same reason the refusals croak: the line worth
@@ -2789,7 +2789,7 @@ sub _warn_foreign_resolution {
 
 # The same split as the refusal's, and for the same measured reason: there is no
 # value to pass for a leaf that is already a string, because the string IS the
-# value and the emitter cannot write it quoted. See docs/adr/0039 and karr #135.
+# value and the emitter cannot write it quoted. See docs/adr/0039 and k135.
 sub _foreign_resolution_warning_remedy {
     my ($leaf) = @_;
 
@@ -2843,11 +2843,11 @@ sub _float_roundtrips {
 # every reader while our MAC covers `-0`. Measured against sops 3.13.3, one
 # document per spelling, leaf under _unencrypted, digest `-0`:
 #
-#   -0        sops -d exit 51 (MAC mismatch)   self-MAC FAIL   <- karr #62
+#   -0        sops -d exit 51 (MAC mismatch)   self-MAC FAIL   <- k62
 #   !!float -0  sops -d exit 51                self-MAC FAIL
 #   -0.0      sops -d exit 0, reads back -0    self-MAC OK     <- this
 #   -0.       sops -d exit 0                   self-MAC OK
-#   -0.0e0    sops -d exit 0                   self-MAC OK     <- karr #89
+#   -0.0e0    sops -d exit 0                   self-MAC OK     <- k89
 #
 # sops cannot write this value either: `sops -e` on a plaintext `-0.0` emits
 # `-0` and then rejects its own file with exit 51, in YAML and in JSON alike.
@@ -2884,7 +2884,7 @@ YAML resolves a document with or without it identically, C<sops -d> accepts
 these files, and the MAC covers values rather than serialized text -- and it is
 kept rather than stripped, since the MAC's encrypt side rides on this emitter
 (C<docs/adr/0001>). See L<File::SOPS/Every YAML file starts with C<--->, where
-sops writes none> and karr #83.
+sops writes none> and k83.
 
 Called on its own -- which is what the plaintext emitters do -- it writes every
 YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included. The
@@ -2935,7 +2935,7 @@ C<1e3> this emitter received from a YAML parse is written back exactly as it
 came, and Go reads the same number the digest covers (exit 0), where
 L<File::SOPS::Format::JSON> has to refuse them because it quotes them. The
 refusal names the leaf's key path and neither half of the value; an
-B<encrypted> slot is unaffected. See karr #84 and
+B<encrypted> slot is unaffected. See k84 and
 L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<YAML::XS>

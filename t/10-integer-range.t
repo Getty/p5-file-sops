@@ -12,7 +12,7 @@ use YAML::XS ();
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# The SOPS int type is Go's int64, and nothing wider (karr #28).
+# The SOPS int type is Go's int64, and nothing wider (k28).
 #
 # Measured against sops 3.13.3, one key per document, both formats:
 #
@@ -227,7 +227,7 @@ for my $format (qw(yaml json)) {
 }
 
 # ----------------------------------------------------------------------------
-# 7. The refusal offers BOTH answers, and both of them are true (karr #104).
+# 7. The refusal offers BOTH answers, and both of them are true (k104).
 #
 #    Until 0.003 the message closed with "Pass it as a string to store it
 #    exactly", because that was the only answer there was. ADR 0021 gave this
@@ -239,7 +239,7 @@ for my $format (qw(yaml json)) {
 #    then runs both answers it offers: an error message that recommends
 #    something untrue is worse than a terse one.
 #
-#    Measured for karr #104 against sops 3.13.3, 12 literals across the window
+#    Measured for k104 against sops 3.13.3, 12 literals across the window
 #    x 2 formats x 2 slots. The STRING answer: 48 of 48 `sops -d` exit 0 with
 #    the digits verbatim. The FLOAT answer: 41 of 48 exit 0 with sops's own
 #    normalisation, the other 7 -- all of them UNENCRYPTED YAML -- refused here
@@ -347,15 +347,15 @@ for my $format (qw(yaml json)) {
 }
 
 # ----------------------------------------------------------------------------
-# 8. The refusal can only ever be about a POSITIVE value (karr #104).
+# 8. The refusal can only ever be about a POSITIVE value (k104).
 #
 #    SVf_IOK means the SV carries an IV or a UV. An IV bottoms out at exactly
 #    int64min and a UV cannot be negative, so there is no integer SV below the
 #    range and the negative half of the window does not exist -- which is the
-#    premise ADR 0021's decision rests on and the one half karr #101's lanes
+#    premise ADR 0021's decision rests on and the one half k101's lanes
 #    had not proved.
 #
-#    Measured for karr #104: 14 negative decimals bracketing int64min,
+#    Measured for k104: 14 negative decimals bracketing int64min,
 #    uint64max and beyond, through 13 construction routes each -- 182 rows, 36
 #    of them `int`, not one of those below int64min, and zero croaks. A sample
 #    of the routes is pinned here. Below the range a value arrives as a float

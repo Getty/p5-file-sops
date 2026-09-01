@@ -9,7 +9,7 @@ use Crypt::Age;
 use File::SOPS;
 use File::SOPS::Metadata;
 
-# karr #171 and karr #166 -- docs/adr/0051.
+# k171 and k166 -- docs/adr/0051.
 #
 # docs/adr/0048 refuses a rule regex the two dialects do not share, AT THE
 # POINT OF USE, and listed decrypt and extract as paths that stay open because
@@ -221,7 +221,7 @@ subtest 'every method that writes a document refuses it' => sub {
 };
 
 ###############################################################################
-# 3. karr #166 -- the refusal is about the RULE, so it names no leaf
+# 3. k166 -- the refusal is about the RULE, so it names no leaf
 ###############################################################################
 subtest 'the refusal does not come out under some leaf path' => sub {
     # It was raised inside the leaf walk, from _assert_leaves_representable's
@@ -278,7 +278,7 @@ subtest 'a pattern PERL cannot compile is still refused on read' => sub {
     # (?U) is the only pattern measured to be RE2-OK and Perl-reject. \C, \g
     # and \k are named beside it in docs/adr/0048 and do not belong there:
     # measured on 3.13.3 through the path_regex oracle, RE2 rejects all three
-    # (`invalid escape sequence`), so they are the lenient kind. karr #175.
+    # (`invalid escape sequence`), so they are the lenient kind. k175.
     for my $pattern ('(?U)fo+') {
         my $doc = document_with_rule(unencrypted_regex => $pattern);
 

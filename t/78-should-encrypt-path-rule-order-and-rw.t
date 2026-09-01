@@ -5,7 +5,7 @@ use Test::More;
 
 use File::SOPS::Metadata;
 
-# karr #142 -- docs: performance change to should_encrypt_path, cache guarded.
+# k142 -- docs: performance change to should_encrypt_path, cache guarded.
 #
 # should_encrypt_path recompiled qr/\Q$suffix\E$/ on every call and re-read four
 # rw accessors twice each. The cache/read-once change must not move a single

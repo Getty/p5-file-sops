@@ -10,7 +10,7 @@ use Crypt::Age;
 use File::SOPS;
 use File::SOPS::Metadata;
 
-# karr #165 -- docs/adr/0065.
+# k165 -- docs/adr/0065.
 #
 # docs/adr/0048 closed 28 of the 29 measured (rule, key) disagreements between
 # unencrypted_regex / encrypted_regex as Perl matches them and as RE2 matches

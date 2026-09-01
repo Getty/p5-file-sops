@@ -13,7 +13,7 @@ use File::SOPS;
 use File::SOPS::Format::YAML;
 use Crypt::Age;
 
-# karr #110 / docs/adr/0025 -- a document that contains itself.
+# k110 / docs/adr/0025 -- a document that contains itself.
 #
 # YAML::XS resolves a recursive anchor into a real Perl cycle, so every tree
 # walk in File::SOPS used to recurse until the process was killed. All eight
@@ -34,7 +34,7 @@ use Crypt::Age;
 #      thrashing -- a regression took 130s per case to be reported that way.
 #
 #      This USED to be perl's own "Deep recursion" warning, which it raises at
-#      a fixed depth of 100. karr #117 silenced that warning in the walks: it
+#      a fixed depth of 100. k117 silenced that warning in the walks: it
 #      fires on documents sops accepts, once per crossing, and turned a correct
 #      encrypt of a 265-level document into 505 warning lines on STDERR. The
 #      bound that replaced it is this library's, and unlike perl's it can be
@@ -108,7 +108,7 @@ sub refuses {
             ? "HUNG -- did not return within ${TIMEOUT}s."
             : "RAN AWAY -- walked the cycle until the depth bound stopped it, "
               . "instead of refusing it as a cycle.");
-        diag("This is karr #110 back again; see docs/adr/0025.");
+        diag("This is k110 back again; see docs/adr/0025.");
         return;
     }
     like($got, qr/\ADIE .*contains itself/,

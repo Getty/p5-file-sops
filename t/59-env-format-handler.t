@@ -18,7 +18,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #36 / docs/adr/0045: the ENV (dotenv) format handler.
+# k36 / docs/adr/0045: the ENV (dotenv) format handler.
 #
 # The parser is the easy half. What this file pins is the rest of it, and every
 # claim in it was measured against sops 3.13.3 on a whole document rather than
@@ -38,7 +38,7 @@ use SopsBin qw(find_sops_bin);
 #     file at exit 0 and then cannot read it (docs/adr/0030).
 #   * THE UNENCRYPTED LEAF. Written as exactly the bytes the digest covers,
 #     which is where sops writes a display form and breaks its own file for a
-#     boolean, a null and an integral float (docs/adr/0035, karr #124/#125/#137).
+#     boolean, a null and an integral float (docs/adr/0035, k124/k125/k137).
 #
 # WHAT THE BINARY IS FOR. Sections 1-7 are Perl->Perl and prove only that this
 # library agrees with itself, which is the failure mode that ships broken files.
@@ -371,7 +371,7 @@ subtest 'an unencrypted leaf is written as exactly its digest bytes' => sub {
     }
 
     # Named individually, because these three are where sops writes a display
-    # form and then cannot read its own file: karr #124, #125 and #137.
+    # form and then cannot read its own file: k124, k125 and k137.
     like($out, qr/^bool_unencrypted=False$/m,   'a boolean is False, not false');
     like($out, qr/^null_unencrypted=$/m,        'a null is empty, not <nil>');
     like($out, qr/^intfloat_unencrypted=1$/m,   'an integral float is 1, not 1.0');
@@ -548,9 +548,9 @@ ENV
 
         # The three sops defect classes, written as the bytes the digest
         # covers -- these are the lines sops cannot produce for itself.
-        is($line{bool_unencrypted}, 'False', 'karr #124: the boolean is readable');
-        is($line{null_unencrypted}, '', 'karr #125: the null is readable');
-        is($line{intfloat_unencrypted}, '1', 'karr #137: the float is readable');
+        is($line{bool_unencrypted}, 'False', 'k124: the boolean is readable');
+        is($line{null_unencrypted}, '', 'k125: the null is readable');
+        is($line{intfloat_unencrypted}, '1', 'k137: the float is readable');
         is($line{bigfloat_unencrypted}, '100000000000000000000', 'and so is 1e20');
         is($line{negzero_unencrypted}, '-0', 'and a negative zero');
 

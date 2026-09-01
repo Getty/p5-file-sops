@@ -6,7 +6,7 @@ use Carp qw(croak);
 use namespace::clean;
 
 ###############################################################################
-# The comment leaf (karr #76, docs/adr/0041)
+# The comment leaf (k76, docs/adr/0041)
 #
 # sops attaches a comment to the node that FOLLOWS it. Above a mapping key that
 # stays a `#ENC[...,type:comment]` line, which YAML::XS drops before this
@@ -16,7 +16,7 @@ use namespace::clean;
 #
 # That entry needs a Perl value that cannot be mistaken for a string, or reading
 # it puts a value in the caller's list that the file does not contain and a
-# re-encrypt makes it permanent (karr #108). This is that value, and it is the
+# re-encrypt makes it permanent (k108). This is that value, and it is the
 # same move type:bool already makes with JSON::PP::Boolean.
 #
 # NO OVERLOADED STRINGIFICATION, deliberately. An object that compares equal to
@@ -28,7 +28,7 @@ use namespace::clean;
 # distribution -- File::SOPS::Encrypted loads IT, which is the direction that
 # has to hold: the ladder produces the type from this class and
 # _deserialize_value produces the class from the type, and neither can be
-# reached from here. karr #147 moved it out of File/SOPS/Encrypted.pm, where
+# reached from here. k147 moved it out of File/SOPS/Encrypted.pm, where
 # ADR 0041 first put it, without renaming it.
 ###############################################################################
 
@@ -65,7 +65,7 @@ C<type:bool> makes with L<JSON::PP::Boolean>: a wire type that is not a string
 gets a Perl value that cannot be mistaken for one. Read as a string, a comment
 is an extra element in the caller's list that the file does not contain, and a
 C<decrypt> plus C<encrypt> cycle makes it permanent with every party reporting
-success -- which is the defect (karr #108) this class exists to close.
+success -- which is the defect (k108) this class exists to close.
 
 =over 4
 

@@ -11,7 +11,7 @@ use File::SOPS::Encrypted;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# karr #90 / docs/adr/0016: PERL'S OWN BOOLEAN SV.
+# k90 / docs/adr/0016: PERL'S OWN BOOLEAN SV.
 #
 # Perl has no boolean TYPE, but since 5.36 it has a boolean SV. `!!1`, `!!0`,
 # `$x > 3`, `'a' eq 'a'`, `defined $x` and `builtin::true` all produce it, and
@@ -243,7 +243,7 @@ sub normalise {
 }
 
 ###############################################################################
-# 3. THE karr #88 TRAP. Perl's arithmetic marks a caller's scalar IN PLACE, so
+# 3. THE k88 TRAP. Perl's arithmetic marks a caller's scalar IN PLACE, so
 #    a conversion that numifies its operand retypes the tree it was asked
 #    about. The same tree is emitted five times, and the caller's own scalars
 #    are re-read after every round.

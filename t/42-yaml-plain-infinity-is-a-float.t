@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #105 / docs/adr/0026: a plain YAML infinity is the float go-yaml reads.
+# k105 / docs/adr/0026: a plain YAML infinity is the float go-yaml reads.
 #
 # libyaml leaves `.inf` a STRING; gopkg.in/yaml.v3 resolves it to the float
 # +Inf, and sops digests `+Inf`. A document sops writes and `sops -d` verifies
@@ -172,7 +172,7 @@ YAML
 #    tokens IS written now. The gate then meant this library's own decrypt_file
 #    wrote `v_unencrypted: .inf` and its own encrypt_file refused to read that
 #    file back, and `edit` could not save a document it had just opened.
-#    karr #123 / ADR 0034 removed the gate: one document, one answer, whether
+#    k123 / ADR 0034 removed the gate: one document, one answer, whether
 #    it carries a sops: section or not. sops makes one parse and so does this.
 #    See t/49-plain-infinity-survives-the-plaintext-round-trip.t.
 ###############################################################################
@@ -232,8 +232,8 @@ subtest 'the repaired leaf is emitted as the token it came from' => sub {
 };
 
 ###############################################################################
-# 6. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied BARE non-finite
-#    float is NO LONGER refused here -- karr #141 / docs/adr/0062 removed the
+# 6. THE k59 GUARD, NARROWED AGAIN. A caller-supplied BARE non-finite
+#    float is NO LONGER refused here -- k141 / docs/adr/0062 removed the
 #    refusal because docs/adr/0037's YAML carrier manufactures the carrying
 #    dualvar for it. JSON still refuses (sops writes null), but from the
 #    emit walk, where the question of "can this format spell this number"
@@ -241,11 +241,11 @@ subtest 'the repaired leaf is emitted as the token it came from' => sub {
 #
 #    What stays refused here is a caller-supplied dualvar whose public PV
 #    contradicts its number -- dualvar(+Inf, 'banana') and the like. The
-#    reach is narrower than the karr #59 it replaced: no parse and no
+#    reach is narrower than the k59 it replaced: no parse and no
 #    decryption produces such a dualvar, so this is medium and not high.
 #
 #    The leaf this walk produces (a dualvar carrying go-yaml's own token) is
-#    still accepted, the same answer karr #113 / docs/adr/0031 measured and
+#    still accepted, the same answer k113 / docs/adr/0031 measured and
 #    t/46 is that decision's corpus. Both halves are pinned here because this
 #    file is where the scalar comes from.
 ###############################################################################
@@ -368,7 +368,7 @@ subtest 'and the quoted twin still verifies, unchanged' => sub {
 
 ###############################################################################
 # 8. WRITING IT BACK. This used to be a refusal -- the non-finite guard, naming
-#    the leaf -- and it was pinned so that the day karr #113 was decided the
+#    the leaf -- and it was pinned so that the day k113 was decided the
 #    change would be visible here rather than silent. It has been decided
 #    (docs/adr/0031): the document goes back out with the token it came in
 #    with. The round trip through the binary is t/46's section 8.

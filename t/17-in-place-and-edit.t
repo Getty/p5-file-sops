@@ -451,7 +451,7 @@ PERL
 # the dedicated message; every other shape is refused INSIDE parse() by
 # File::SOPS::Metadata::from_hash, and edit wrapped that parse in an eval, so
 # it was reported as "The edited document does not parse" -- of a document that
-# parses perfectly (karr #47).
+# parses perfectly (k47).
 #
 # sops separates the same two cases in editor mode, and does not care about the
 # shape either (measured on 3.13.3): all four of these give "Tree not valid for

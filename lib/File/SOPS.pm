@@ -18,7 +18,7 @@ use Digest::SHA qw(sha512);
 # here, ahead of File::SOPS::Encrypted pulling in CryptX (which loads JSON.pm,
 # and with it JSON::XS), was what decided the JSON backend for the process, and
 # the backends do not emit or parse the same floats. It is not that any more --
-# karr #56 / docs/adr/0005 -- because Format::JSON now names Cpanel::JSON::XS
+# k56 / docs/adr/0005 -- because Format::JSON now names Cpanel::JSON::XS
 # instead of inheriting whatever the calling program happened to bind. The
 # ordering here no longer reaches a document.
 #
@@ -26,7 +26,7 @@ use Digest::SHA qw(sha512);
 # File::SOPS::Encrypted's and File::SOPS::Metadata's own `use JSON::MaybeXS`,
 # in the same files as the calls that need it (all three backends bless into
 # JSON::PP::Boolean, so it is backend-independent). So this line is now a
-# genuinely unused import -- which is what karr #49 first claimed and could not
+# genuinely unused import -- which is what k49 first claimed and could not
 # act on. Removing it is the API lane's call, not a wire question.
 use JSON::MaybeXS;
 # Used directly by _load_creation_rules to read a .sops.yaml, which is a config
@@ -335,7 +335,7 @@ refused a JSON document C<sops -e> had written and C<sops -d> reads, and
 L</encrypt> refused the plaintext it was written from. Measured against sops
 3.13.3: rotating such a document now writes the unencrypted slot back with the
 digits it came with and C<sops -d> reads the result, and encrypting the
-plaintext writes what C<sops -e> writes for the identical input. See karr #101
+plaintext writes what C<sops -e> writes for the identical input. See k101
 and
 L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>.
 
@@ -343,7 +343,7 @@ The B<upper> window is the one where the decoder cannot hold the digits at all
 and hands them back as a plain B<string>, indistinguishable from the same
 digits quoted, so C<100000000000000000000> was typed C<str> and L</rotate>
 rewrote a document sops had written with a number there as a JSON B<string>.
-See karr #63 and
+See k63 and
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
 
 Both windows now hand back the leaf L<YAML::XS> has always returned for those
@@ -420,7 +420,7 @@ A caller's own bare C<9**9**9> states nothing, and it is refused in an
 B<unencrypted> slot only. In an B<encrypted> one it is now written, as
 C<type:float> and the plaintext C<+Inf>, which is what C<sops -e> stores for
 the same value in both formats. See
-L<File::SOPS::Encrypted/assert_representable>, karr #122 and
+L<File::SOPS::Encrypted/assert_representable>, k122 and
 L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 B<In YAML that literal is not refused any more, because it is not a number
@@ -458,7 +458,7 @@ C<unpack('d', pack('d', $v))> makes it the float sops writes, and C<"$v"> makes
 it a C<type:str> that stores the digits exactly. That refusal is wider than it
 strictly has to be -- of 35 literals measured across the window, 14 would have
 produced a document C<sops -d> accepts in an unencrypted JSON slot -- and
-narrowing it is open as karr #104.
+narrowing it is open as k104.
 
 =head3 Saying what a value is
 
@@ -477,7 +477,7 @@ The last line works because Perl marks its own booleans on the scalar since
 5.36 -- C<!!1>, C<!!0> and every comparison's result -- and both emitters write
 such an SV as a bare C<true>/C<false>. Until 0.003 it was C<type:int>, and the
 resulting file failed its own MAC. See
-L<File::SOPS::Encrypted/detect_type> and karr #90.
+L<File::SOPS::Encrypted/detect_type> and k90.
 
 The C<ratio> line goes through C<pack>/C<unpack> rather than the more obvious
 C<+ 0.0> because addition sets Perl's public C<SVf_IOK> on an B<integral>
@@ -571,7 +571,7 @@ umask. That is what sops's C<--output> does as well, so a decrypted file this
 writes is no more and no less protected than before -- if that is too open for
 plaintext, set the umask or the mode yourself.
 
-The match-sops decision is deliberate (karr #45): the alternative, a hard
+The match-sops decision is deliberate (k45): the alternative, a hard
 C<0600> on every new output, would break a caller whose next step is
 another process reading the file -- loudly, not silently -- and would
 diverge from the reference implementation without a measurable security
@@ -612,7 +612,7 @@ stricter than a YAML parser.
 
 It is documented rather than removed. Dropping it means changing what the
 emitter emits, and the MAC's encrypt side rides on that same emitter (see
-C<docs/adr/0001>), so it is a wire-format change for a cosmetic gain. karr #83.
+C<docs/adr/0001>), so it is a wire-format change for a cosmetic gain. k83.
 
 =cut
 
@@ -631,9 +631,9 @@ my %FORMATS = (
 # Whether a top-level `sops` entry in $data collides with the format's
 # metadata namespace. YAML and JSON write their metadata section under that
 # exact key, so a caller-supplied value would be overwritten -- the failure
-# mode karr #18 describes. ENV and INI do not: ENV's metadata is in flat
+# mode k18 describes. ENV and INI do not: ENV's metadata is in flat
 # `sops_*` keys, INI's is in a `[sops]` section, so `data->{sops}` is a
-# legitimate entry there (karr #157). Each handler's own serialize-time
+# legitimate entry there (k157). Each handler's own serialize-time
 # guard is the defensive double-check for direct callers of `serialize`;
 # this hash is the source of truth for the format-blind guard in encrypt().
 my %RESERVES_SOPS_KEY = (
@@ -659,7 +659,7 @@ sub encrypt {
     my $format     = $args{format}     // 'yaml';
 
     # A single document is a HashRef; a multi-document YAML stream is an ArrayRef
-    # of HashRefs, one per document (docs/adr/0033 Decision 1, karr #31). The
+    # of HashRefs, one per document (docs/adr/0033 Decision 1, k31). The
     # ArrayRef form is purely additive -- until 0.003 it raised "data must be a
     # hash ref" -- and what round-trips is the FILE: a one-element ArrayRef
     # writes a one-document file byte-identical to the same bare HashRef.
@@ -674,7 +674,7 @@ sub encrypt {
     # Resolved BEFORE the sops-key guard: the guard defers to the format handler
     # to decide whether a top-level `sops` entry collides with its metadata
     # namespace. YAML and JSON reserve that exact name; ENV and INI do not
-    # (karr #157), so a bare `sops` data key is legitimate there.
+    # (k157), so a bare `sops` data key is legitimate there.
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
 
     # Per-document guards (docs/adr/0033 Decision 4). Each document is validated
@@ -722,7 +722,7 @@ sub encrypt {
     $metadata->mac($mac);
 
     # Only YAML has a document stream. Writing more than one document to a format
-    # that has none would drop all but the first -- the karr #14 defect class,
+    # that has none would drop all but the first -- the k14 defect class,
     # which sops commits silently (docs/adr/0033 Decision 3, N1). Refuse instead,
     # naming the count and the target. A single document reaches every format.
     _assert_format_supports_stream($format_class, scalar @documents);
@@ -936,7 +936,7 @@ A document that is acyclic but shares its aliases exponentially is a separate
 exposure with a separate guard, described under
 L</A document that expands far beyond what it contains is refused>.
 
-See karr #110 and
+See k110 and
 L<docs/adr/0025|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0025-a-document-that-contains-itself-is-refused-not-walked.md>.
 
 =head3 A document that expands far beyond what it contains is refused
@@ -986,7 +986,7 @@ C<Error unmarshalling file: yaml: document contains excessive aliasing>
 (exit 2) from C<sops -e>, and C<yaml: document contains excessive aliasing>
 (exit 1) from C<sops -d>.
 
-See karr #112 and
+See k112 and
 L<docs/adr/0027|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0027-the-alias-budget-is-a-ratio-and-it-is-go-yamls-ratio.md>.
 
 =head3 A document nested deeper than sops can carry is refused
@@ -1016,7 +1016,7 @@ C<$File::SOPS::MAX_DEPTH> is writable and is what a caller processing
 untrusted documents can lower to refuse deep documents earlier. Raising it
 above 10000 produces documents sops will refuse to read.
 
-See karr #117.
+See k117.
 
 =head3 A plain YAML infinity is the float go-yaml reads
 
@@ -1053,7 +1053,7 @@ for -- YAML would carry it, JSON cannot (C<sops -e> exit 4,
 C<Error marshaling to json>). Before this such a leaf was written as a
 C<type:str> holding C<.inf>, where C<sops -e> on the same plaintext writes a
 C<type:float>: a working file that had silently stopped being a number. This is
-a refusal where sops succeeds, and it is deliberate -- see karr #122, which is
+a refusal where sops succeeds, and it is deliberate -- see k122, which is
 where the encrypted slot gets the format it needs.
 
 =item * In B<JSON> nothing changes at either end. C<.inf> is not JSON, so the
@@ -1061,7 +1061,7 @@ token cannot reach a JSON document to begin with.
 
 =back
 
-See karr #123 and
+See k123 and
 L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-plain-scalar-is-resolved-the-same-way-on-every-parse.md>.
 
 =cut
@@ -1081,7 +1081,7 @@ sub decrypt {
 
     # Parse the encrypted content. The third value is the DOCUMENT LIST: one
     # element for a single document (byte-identical to before), N for a
-    # multi-document YAML stream (docs/adr/0033, karr #31). $data is a synonym
+    # multi-document YAML stream (docs/adr/0033, k31). $data is a synonym
     # for $documents->[0]. Only the YAML handler returns the list at all -- JSON,
     # ENV and INI have no document stream and return two values -- so a missing
     # third value is normalised to the single-document list every walk below
@@ -1296,7 +1296,7 @@ it as a real comment, on the node it was attached to.
 It is deliberately an B<object> and not the text: a comment is not a value, and
 a string here would be an extra element the file does not contain. That is what
 this used to return, and a C<decrypt> plus C<encrypt> cycle made it a permanent
-value with C<sops -d> reporting success at every step (karr #108). A comment
+value with C<sops -d> reporting success at every step (k108). A comment
 leaf is B<not covered by the MAC>, which is what sops does with one.
 
 Two shapes are still refused, both naming the path: a comment in a B<mapping
@@ -1366,7 +1366,7 @@ it always did, and an B<unencrypted> one is the separate repair described under
 L</A plain YAML infinity is the float go-yaml reads>), and JSON, where sops
 refuses the document itself. See
 L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float>,
-karr #102 and
+k102 and
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
 
 =head3 A document that contains itself is refused
@@ -1427,7 +1427,7 @@ sub encrypt_file {
 
     # Forward the WHOLE document list, so a multi-document YAML input is
     # encrypted as the stream it is rather than as its first document alone
-    # (docs/adr/0033, karr #31). Only YAML returns a list; JSON, ENV and INI
+    # (docs/adr/0033, k31). Only YAML returns a list; JSON, ENV and INI
     # return no third value, so $data (the single document) is forwarded there.
     # A single-document YAML input forwards a one-element list, byte-identical.
     my $encrypted = $class->encrypt(
@@ -1512,7 +1512,7 @@ sub encrypt_in_place {
 
     # Forward the whole document list (see encrypt_file), so an in-place encrypt
     # of a multi-document YAML file rewrites every document rather than replacing
-    # the file with its first one -- the karr #14 loss this ticket exists to fix.
+    # the file with its first one -- the k14 loss this ticket exists to fix.
     my $encrypted = $class->encrypt(
         data       => (ref $documents eq 'ARRAY' ? $documents : $data),
         recipients => $recipients,
@@ -1619,7 +1619,7 @@ C<decrypt_file> -> hand-edit -> L</encrypt_file> keeps such a leaf at
 C<type:float>, where C<2> silently relabels it C<type:int> -- which is what
 C<sops -d> followed by C<sops -e> does to its own document, and what the YAML
 side therefore still does here. Measured against sops 3.13.3 on a document
-sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value>, karr #73 and
+sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value>, k73 and
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 B<The plaintext of a JSON number past C<2**64-1> moved in 0.003>, because such
@@ -1681,7 +1681,7 @@ sub extract {
     );
 
     # A single-document file decrypts to a HashRef, a multi-document stream to an
-    # ArrayRef of them (docs/adr/0033, karr #31). The path language stays sops's
+    # ArrayRef of them (docs/adr/0033, k31). The path language stays sops's
     # -- applied to the ONE document `document` names -- because sops has no
     # document axis and cannot grow one: a leading integer already means "the Nth
     # key of document 0" there (docs/adr/0033 N2). So `document` is a separate
@@ -1703,7 +1703,7 @@ sub extract {
     # A float leaf goes out carrying its canonical decimal as its string form: a
     # decrypted float is a bare NV, so printing it went through Perl's 15
     # significant digits and lost the digits the document actually holds (karr
-    # #61, ADR 0010). Only this leaf -- a dualvar inside a tree changes what the
+    # k61, ADR 0010). Only this leaf -- a dualvar inside a tree changes what the
     # emitters write, so nothing that returns a tree does this, and a branch
     # extract returns comes back untouched.
     return File::SOPS::Encrypted->canonical_float_dualvar(
@@ -1781,7 +1781,7 @@ is a bare NV with no string form of its own, so printing one went through
 Perl's 15 significant digits -- an encrypted C<0.30000000000000004> arrived as
 C<0.3>, where C<sops -d --extract> prints all 17. Arithmetic, C<==>, C<sprintf
 '%f'> and C<is_deeply> are unchanged; what changes is C<"$value">, and that
-change is the point. New in 0.003; see karr #61 and
+change is the point. New in 0.003; see k61 and
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
 Two things that dualvar does not do. The spelling is the B<wire's> -- the
@@ -1805,7 +1805,7 @@ What the positional form costs is length -- C<DBL_MAX> stringifies as 309
 digits and C<5e-324> as C<0.> followed by 323 zeros and a C<5>. Matching sops
 would mean a second float formatter, Go's C<%g> rules beside the C<%f> ones
 this distribution has, and then a third for JSON's; the decision to keep the
-wire's spelling is recorded in ADR 0010 (karr #79).
+wire's spelling is recorded in ADR 0010 (k79).
 
 The wire's spelling is not the B<document's> either, where the two differ: an
 unencrypted C<1.50> or C<42.0> comes back as C<1.5> and C<42>, because the
@@ -1826,7 +1826,7 @@ this method returns and to nothing else. Floats inside a returned branch are
 the plain scalars they have always been, because a dualvar in a structure
 changes the bytes the emitters write. Not the value: putting one into an
 B<unencrypted> slot stores the canonical decimal as a number, in JSON as in
-YAML (karr #78,
+YAML (k78,
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>).
 What changes is the spelling at the extremes -- C<1e300> written as 301
 positional digits rather than C<1e+300> -- and an encrypted slot is unaffected
@@ -1963,7 +1963,7 @@ integral: a C<whole: 2.0> that sops itself had written was rotated back out as
 C<type:int>, at exit 0 and with the MAC holding either way, because the
 plaintext is C<2> under both labels. What moved was the document's own type
 field, silently. L<File::SOPS::Encrypted/decrypt_value> has the conversion this
-now uses instead. See karr #73 and
+now uses instead. See k73 and
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 =head3 Files rotate refuses
@@ -2050,9 +2050,9 @@ sub edit {
 
     # edit on a multi-document stream is deliberately NOT enabled. Reading and
     # writing streams both work now, so the mechanics would fall out -- but edit
-    # re-encrypts under a NEW data key (unlike sops edit, karr #41), and
+    # re-encrypts under a NEW data key (unlike sops edit, k41), and
     # docs/adr/0033 explicitly leaves edit-on-a-stream semantics open ("What this
-    # does not decide"). Shipping a working edit here would settle karr #41 by
+    # does not decide"). Shipping a working edit here would settle k41 by
     # accident, so it is refused instead, before the whole file is decrypted and
     # its plaintext written to a temp file for the editor. See _refuse_edit_multidoc.
     _refuse_edit_multidoc($documents);
@@ -2122,7 +2122,7 @@ sub edit {
 
         # If the editor turned the document into a multi-document stream, refuse
         # it for the same reason a multi-document original is refused above:
-        # edit-on-a-stream semantics are undecided (karr #41, docs/adr/0033), not
+        # edit-on-a-stream semantics are undecided (k41, docs/adr/0033), not
         # that the write cannot be done. $parsed[2] is the document list parse()
         # returns as its third value.
         _refuse_edit_multidoc($parsed[2]);
@@ -2278,7 +2278,7 @@ slot survives an edit and comes back with the wire byte-identical. Before
 0.003 it did not -- editing any other key in such a file died with the leaf
 refused, B<and the edit was destroyed with it>, because the temporary file is
 already gone by then. See L</A plain YAML infinity is the float go-yaml reads>
-and karr #123.
+and k123.
 
 It is B<not> enough for a non-finite float in an B<encrypted> slot, and that
 one is still wrong: such a leaf decrypts to a real Perl infinity, whose only
@@ -2286,13 +2286,13 @@ plaintext spelling from this emitter is a bare C<Inf> / C<-Inf> / C<NaN> --
 tokens go-yaml reads as B<strings>. The editor is shown C<Inf>, the string
 C<Inf> comes back, and the leaf is re-encrypted as a C<type:str>. C<sops edit>
 keeps it a C<type:float>, measured. The file is written and nothing is said, so
-this is the one place C<edit> can still lose a value quietly. Open as karr #134.
+this is the one place C<edit> can still lose a value quietly. Open as k134.
 
 A C<data_key =E<gt> $bytes> argument would close the gap -- pass the
 existing data key through and this method stops re-keying -- but it puts
 raw key material on the public API, which is a real decision (and
 probably an ADR) rather than a refactor. It will be worth doing once a
-backend other than age exists (karr #39): today the refusal only fires
+backend other than age exists (k39): today the refusal only fires
 on documents this distribution could not have produced in the first
 place.
 
@@ -2506,7 +2506,7 @@ document carrying two.
 =head3 What this does not read or return
 
 A few things a C<.sops.yaml> can carry are deliberately outside this
-method's scope (karr #54):
+method's scope (k54):
 
 =over 4
 
@@ -2679,7 +2679,7 @@ sub _first_matching_rule {
         # rejects, or one both take and read differently -- silently selects
         # a different rule in sops (or none), so the two tools disagree
         # without either one saying so. The scan is the one in Metadata
-        # (karr #164): it is escape-aware, character-class aware, and reads
+        # (k164): it is escape-aware, character-class aware, and reads
         # every construct's RE2 verdict off the .sops.yaml oracle rather than
         # guessing. We translate the kind into a path_regex-specific message
         # because sops's behaviour here is different -- it REPORTS the
@@ -2715,9 +2715,9 @@ sub _first_matching_rule {
 # RE2 cannot compile, 'different' for one both take and read apart), or
 # the empty list when the pattern is in both dialects.
 #
-# The scan is the one in Metadata.pm (karr #161 / docs/adr/0048, broadened
-# by karr #164 to also cover the path_regex case). The narrow check this
-# replaces (karr #53) named lookarounds and backreferences only; atomic
+# The scan is the one in Metadata.pm (k161 / docs/adr/0048, broadened
+# by k164 to also cover the path_regex case). The narrow check this
+# replaces (k53) named lookarounds and backreferences only; atomic
 # groups, possessive quantifiers, \Z, \K, the (?x) family and the rest of
 # the RE2-rejected set were still being taken here and silently picking a
 # different rule at sops -- measured on sops 3.13.3 against a .sops.yaml
@@ -2845,7 +2845,7 @@ sub _read_file {
 # it wrote with the text it gets back to decide whether anything changed.
 #
 # It is the format handler's own emitter, with no metadata section -- the same
-# sub the handler's serialize() dumps through. Until karr #35 this WAS a second
+# sub the handler's serialize() dumps through. Until k35 this WAS a second
 # emitter, because the handlers only offered "serialize a document WITH its sops
 # section", and it kept its options in sync with theirs by hand: a copy of
 # JSON::MaybeXS->new(utf8/pretty/canonical) for JSON, and for YAML a boolean
@@ -2859,7 +2859,7 @@ sub _serialize_plaintext {
     # _format_class croaks on an unknown format, before anything is written.
     my $format_class = _format_class($format);
 
-    # A decrypted multi-document stream (docs/adr/0033, karr #31) is an ArrayRef
+    # A decrypted multi-document stream (docs/adr/0033, k31) is an ArrayRef
     # of documents. This is the one boundary where a decrypted stream meets a
     # plaintext output format, so Decision 3 -- the refusal to convert a stream
     # to a format that has no document stream (JSON, ENV, INI) rather than drop
@@ -2871,7 +2871,7 @@ sub _serialize_plaintext {
     return $format_class->emit($data);
 }
 
-# Decision 3 (docs/adr/0033, karr #14): a multi-document stream can only be
+# Decision 3 (docs/adr/0033, k14): a multi-document stream can only be
 # written as YAML. Every other format has no document stream, so writing one to
 # it would drop all but the first document -- which sops does silently, exit 0
 # (N1). We refuse instead, naming the count and the target. Shared by the
@@ -2890,7 +2890,7 @@ sub _assert_format_supports_stream {
         "cannot write a multi-document stream (%d documents) as %s: that format "
         . "has no document stream, so all but the first document would be lost. "
         . "sops drops them silently here; this library refuses instead "
-        . "(docs/adr/0033 Decision 3, karr #14). Use YAML, or write one document "
+        . "(docs/adr/0033 Decision 3, k14). Use YAML, or write one document "
         . "at a time.",
         $count, $name);
 }
@@ -2924,7 +2924,7 @@ sub _replace_file {
 
     my $target = -l $path ? (Cwd::abs_path($path) // $path) : $path;
 
-    # karr #46: sops -e -i refuses a read-only file with EACCES; the atomic
+    # k46: sops -e -i refuses a read-only file with EACCES; the atomic
     # write was happy because rename() checks the directory, not the file.
     # This is a behaviour change introduced by the atomic write itself, where
     # the old open '>' would have failed on the chmod for free. Match sops
@@ -3151,7 +3151,7 @@ sub _edited_sops_key_reserved {
 # handlers, or a typed exception, both reach well past the one call site that
 # needs the distinction. t/17-in-place-and-edit.t pins both branches, so a
 # rewording in Metadata.pm fails a test rather than quietly restoring the
-# regression this replaced (karr #47) -- edit reporting a document that parses
+# regression this replaced (k47) -- edit reporting a document that parses
 # as one that does not.
 sub _is_sops_not_a_mapping {
     my ($err) = @_;
@@ -3241,7 +3241,7 @@ sub _assert_rules_supported {
     # match it fired from inside the leaf walk, so `encrypt` reported a rule
     # problem under whichever leaf the walk happened to reach first --
     # `bar: Cannot use '(?=f)foo' as the unencrypted_regex ...`, where `bar`
-    # has nothing to do with it (karr #166). It is also the whole of what makes
+    # has nothing to do with it (k166). It is also the whole of what makes
     # the read path free to answer differently.
     $metadata->assert_rule_regexes_agree;
 
@@ -3280,7 +3280,7 @@ sub _assert_rekeyable {
 # Perl warns "Deep recursion on subroutine" once a sub is 100 frames deep. That
 # threshold is fixed and is about perl, not about the document: a 265-level
 # document sops accepts is ordinary input here, and it produced 505 warning
-# lines and 63 KB on STDERR for a correct encrypt (measured, karr #117) -- a
+# lines and 63 KB on STDERR for a correct encrypt (measured, k117) -- a
 # successful operation that reads like a crash. The warning is silenced where
 # it is noise, per walk rather than per file, so nothing outside these walks
 # loses it.
@@ -3317,7 +3317,7 @@ sub _assert_rekeyable {
 # Shared and unwound, the same walk reaches 10000 in 17ms and 24 MB (measured).
 #
 # It is a variable and not a constant on purpose, and t/41 is the reason. That
-# file bounds a runaway walk -- karr #110's, a document that contains itself --
+# file bounds a runaway walk -- k110's, a document that contains itself --
 # by dying at a depth no fixture of its own reaches, and until now it borrowed
 # perl's fixed threshold of 100 for that. It cannot borrow it any more, because
 # the line above silences it. So the bound it borrows instead is this one, and
@@ -3347,7 +3347,7 @@ sub _assert_depth {
 # and every walk below it -- _sorted_leaves, _encrypt_tree, _decrypt_tree,
 # _document_leaves -- recursed until the process was killed. A hang tells the
 # caller nothing, cannot be caught, and where the document came from outside is
-# resource exhaustion by a file. See karr #110 and docs/adr/0025.
+# resource exhaustion by a file. See k110 and docs/adr/0025.
 #
 # Refusing is what the reference implementation does, in BOTH directions.
 # Measured against sops 3.13.3 on `root: &a` / `  b: *a`:
@@ -3428,7 +3428,7 @@ sub _assert_acyclic {
 # _assert_acyclic above correctly does not fire -- the document really is
 # acyclic -- and every walk below it explodes anyway. Measured at 25 levels,
 # 727 bytes of YAML: encrypt_file did not return, and the walk climbs about a
-# gigabyte of RSS every three seconds. See karr #112 and docs/adr/0027.
+# gigabyte of RSS every three seconds. See k112 and docs/adr/0027.
 #
 # The blowup is entirely ours. YAML::XS resolves an alias to the SAME Perl
 # reference rather than to a copy, so Load returns a linear DAG -- 200 levels
@@ -3626,9 +3626,9 @@ our $COMMENT_BUCKET_KEY = '';
 # read (measured, with `^$`: rotate declined a file encrypt had just
 # written). The Comment-object half is recognised by _is_comment_leaf
 # regardless of the data-key gate; the wire half is recognised by the same
-# predicate karr #168 added to the leaf guard -- `!ref && encrypted_type
+# predicate k168 added to the leaf guard -- `!ref && encrypted_type
 # eq 'comment'` -- which the data-key gate does not need because the
-# predicate never decrypts. docs/adr/0059, karr #172.
+# predicate never decrypts. docs/adr/0059, k172.
 sub _is_comment_bucket {
     my ($value) = @_;
 
@@ -3709,7 +3709,7 @@ sub _encrypt_tree {
     }
     elsif (ref $node eq 'ARRAY') {
         # A wire-bucket of ENC[...,type:comment] strings must NOT descend into
-        # the list -- the leaf code path would fire karr #168 on every item
+        # the list -- the leaf code path would fire k168 on every item
         # the rule EXCLUDES (because each item is a plain string whose text
         # spells an ENC-comment token), and at any path it would re-encrypt
         # the token as a plain type:str and lose the comment label. Both
@@ -3718,7 +3718,7 @@ sub _encrypt_tree {
         # is intentionally NOT in scope here: a Comment object at a SELECTED
         # path still descends so the walk can encrypt it, which is what
         # makes the round trip produce ENC-comment strings on the way out.
-        # docs/adr/0059, karr #172.
+        # docs/adr/0059, k172.
         my $is_wire_bucket = 1;
         for my $item (@$node) {
             if (ref $item
@@ -3749,7 +3749,7 @@ sub _encrypt_tree {
         # same shape is caught by the mapping-loop guard above (ADR 0041);
         # this one is the wire half, reached because the caller passed a
         # plain string rather than a Comment object. docs/adr/0056,
-        # karr #168.
+        # k168.
         croak _at_path($path, "a caller string whose text parses as an "
             . "ENC[...,type:comment] token cannot stand as a value at a "
             . "path the encryption rule EXCLUDES: this library writes the "
@@ -3791,7 +3791,7 @@ sub _encrypt_tree {
         # SV (!!0, $x > 9, builtin::false), whose PV really is the empty string.
         # Same defect, same symptom -- a plaintext '' in the document against a
         # digest of 'False', sops -d exit 51 -- and it went unnoticed because
-        # karr #90 was filed from the unencrypted slot. The eq runs first, so
+        # k90 was filed from the unencrypted slot. The eq runs first, so
         # the type ladder is consulted only for a leaf that does stringify
         # empty. See docs/adr/0016.
         return undef if !defined $node;
@@ -3866,7 +3866,7 @@ sub _decrypt_tree {
         # _mac_bytes and _digested_leaves below had to learn with it.
         #
         # Asking the LEAF instead is what let rotate and edit write an
-        # excluded value's plaintext back into the file at exit 0 (karr #150),
+        # excluded value's plaintext back into the file at exit 0 (k150),
         # which docs/adr/0046 closed with a guard on the write path and handed
         # the mechanism here. Measured on sops 3.13.3 over 4 formats x 4 rule
         # fields x 4 cells, all 64 answering alike: an ENC[...] leaf the rule
@@ -4092,7 +4092,7 @@ sub _compute_mac {
     my ($data, $key, $metadata) = @_;
 
     # $data is one document tree today, and an ArrayRef of document trees once
-    # the api lane assembles a multi-document write (docs/adr/0033, karr #31).
+    # the api lane assembles a multi-document write (docs/adr/0033, k31).
     # Each document contributes its leaves in its own sorted-key order, in
     # document order, and the digest is over the concatenation (measured: one
     # MAC over all documents in order). Each document is entered by its OWN
@@ -4123,7 +4123,7 @@ sub _compute_mac {
     # difference is knowable at all: the encryption rules live in the metadata,
     # and by the time the emitters run an encrypted leaf is an ENC[...] string.
     # The same predicate _encrypt_tree encrypts by, asked of the same path.
-    # See docs/adr/0040 and karr #122.
+    # See docs/adr/0040 and k122.
     for my $leaf (@$leaves) {
         my ($path, $value) = @$leaf;
         eval { File::SOPS::Encrypted->assert_representable($value,
@@ -4183,7 +4183,7 @@ sub _verify_mac {
     my $ordered = _parse_in_document_order($args{document}, $args{format_class});
 
     # $ordered is a HashRef for one document, an ArrayRef of ordered documents
-    # for a stream (docs/adr/0033, karr #31), or undef when order could not be
+    # for a stream (docs/adr/0033, k31), or undef when order could not be
     # recovered. $args{data} mirrors it: one tree today, a list of trees once
     # the api lane assembles a multi-document decrypt. The three shapes are
     # normalised to a leaf list here.
@@ -4235,7 +4235,7 @@ sub _verify_mac {
     # what the digest covers. The text alone is ambiguous with a string of
     # the same spelling (which sops -d reads at exit 0), so the hint is
     # phrased as "consistent with" rather than as a confirmed cause, and
-    # not added for any other format. See docs/adr/0052 and karr #174.
+    # not added for any other format. See docs/adr/0052 and k174.
     my $hint = _mac_failure_sops_display_hint($args{data}, $metadata, $args{format_class});
 
     # A second hedged hint for the sops-written bare `-0` case: any float
@@ -4245,7 +4245,7 @@ sub _verify_mac {
     # shape (ADR 0014 ships `-0.0`), so the hint only fires for files
     # sops produced. Scans raw document text, not the parsed tree -- by
     # the time the tree is in hand the `-0` has become int 0 and the
-    # signal is gone. See docs/adr/0063 and karr #121.
+    # signal is gone. See docs/adr/0063 and k121.
     if ($hint eq '') {
         $hint = _mac_failure_sops_negzero_hint($args{document}, $args{format_class});
     }
@@ -4317,7 +4317,7 @@ sub _mac_failure_sops_display_hint {
     );
 }
 
-# Hedged hint for the sops-written bare `-0` case (karr #121 / docs/adr/0063).
+# Hedged hint for the sops-written bare `-0` case (k121 / docs/adr/0063).
 # Go's float printer writes any underflowed negative zero as the bare token
 # `-0` (or `-0.0`); yaml.v3 and json.v2 read `-0` back as int 0, so the
 # document fails its own MAC and `sops -d` reports exit 51. We never emit
@@ -4617,7 +4617,7 @@ sub _document_leaves {
 # The one thing that is NOT a document problem is a format class that cannot do
 # this at all. That is a hole in this distribution, not in the file, and it
 # would degrade every document in that format to sorted order silently -- which
-# is precisely the failure karr #74 exists to prevent for env and ini. It is
+# is precisely the failure k74 exists to prevent for env and ini. It is
 # loud.
 sub _parse_in_document_order {
     my ($content, $format_class) = @_;
@@ -4637,7 +4637,7 @@ sub _parse_in_document_order {
     my $ordered = eval { $format_class->parse_in_document_order($content) };
 
     # A single document is a HashRef, byte-identical to before. A multi-document
-    # stream is an ArrayRef of ordered documents (docs/adr/0033, karr #31): the
+    # stream is an ArrayRef of ordered documents (docs/adr/0033, k31): the
     # handler reads the stream in list context, so document i's order pairs with
     # document i's values in _verify_mac. Either shape is validated here; a
     # handler that cannot read the text returns neither and falls back to
@@ -4655,10 +4655,10 @@ sub _parse_in_document_order {
 }
 
 # edit on a multi-document YAML stream is refused -- not because the write
-# cannot be done (it can, since karr #31 step 5), but because its semantics are
+# cannot be done (it can, since k31 step 5), but because its semantics are
 # undecided. edit re-encrypts under a NEW data key where sops edit keeps the
-# existing one (karr #41), and docs/adr/0033 deliberately leaves edit-on-a-stream
-# open under "What this does not decide". Enabling it here would settle karr #41
+# existing one (k41), and docs/adr/0033 deliberately leaves edit-on-a-stream
+# open under "What this does not decide". Enabling it here would settle k41
 # by accident, so both edit paths -- a multi-document original, and a
 # single-document file the editor turns into a stream -- refuse here. A
 # single-document file (or a format with no document stream) has a list of one,
@@ -4670,10 +4670,10 @@ sub _refuse_edit_multidoc {
 
     croak sprintf(
         "edit on a multi-document YAML stream (%d documents) is not supported: "
-        . "edit re-encrypts under a NEW data key (unlike sops edit, karr #41), "
+        . "edit re-encrypts under a NEW data key (unlike sops edit, k41), "
         . "and docs/adr/0033 deliberately leaves edit-on-a-stream semantics "
         . "open. Reading and writing streams both work -- use decrypt and "
-        . "encrypt to change one, or resolve karr #41 first.",
+        . "encrypt to change one, or resolve k41 first.",
         scalar @$documents
     );
 }

@@ -13,9 +13,9 @@ use File::SOPS;
 use File::SOPS::Format::YAML;
 use Crypt::Age;
 
-# karr #112 / docs/adr/0027 -- an ACYCLIC alias bomb.
+# k112 / docs/adr/0027 -- an ACYCLIC alias bomb.
 #
-# The other half of karr #110. A document whose aliases are shared but not
+# The other half of k110. A document whose aliases are shared but not
 # recursive is legitimately acyclic, so _assert_acyclic correctly does not
 # fire, and the walks below it expand every alias -- as they must, because
 # sops expands them too -- into a tree with 2**N leaves. Measured before the
@@ -24,8 +24,8 @@ use Crypt::Age;
 # HOW THIS FILE STAYS BOUNDED, and why it is not simply t/41's technique.
 #
 # t/41 bounds its regression by dying on the first "Deep recursion" warning.
-# That net is blind here. karr #110's runaway was unbounded DEPTH -- a cycle,
-# so perl's threshold of 100 was crossed in microseconds. karr #112's runaway
+# That net is blind here. k110's runaway was unbounded DEPTH -- a cycle,
+# so perl's threshold of 100 was crossed in microseconds. k112's runaway
 # is unbounded BREADTH at BOUNDED depth: a 25-level bomb never recurses past
 # 27, so the warning is never raised and only a timeout would end it, after
 # the walk had climbed about a gigabyte of RSS every three seconds.
@@ -141,7 +141,7 @@ sub refuses {
     unless ($guard_holds) {
         fail("$name refuses an alias bomb");
         diag('SKIPPED the call: _assert_expansion_bounded is gone, so this '
-            . 'would expand 2**N values. See karr #112 and docs/adr/0027.');
+            . 'would expand 2**N values. See k112 and docs/adr/0027.');
         return;
     }
     my $ok = eval { $code->(); 1 };
@@ -150,7 +150,7 @@ sub refuses {
     if ($ok) {
         fail("$name refuses an alias bomb");
         diag('RETURNED instead of refusing -- the guard exists but this entry '
-            . 'point no longer calls it. This is karr #112 back again.');
+            . 'point no longer calls it. This is k112 back again.');
         return;
     }
     like($err, qr/excessive aliasing/, "$name refuses an alias bomb")
@@ -209,12 +209,12 @@ refuses('encrypt (caller-built shared array refs)', sub {
         );
     });
     if ($got eq 'HANG') {
-        fail('encrypt returns on the 25-level bomb from karr #112');
+        fail('encrypt returns on the 25-level bomb from k112');
         diag("HUNG -- did not return within ${TIMEOUT}s, which is the defect.");
     }
     else {
         like($got, qr/\ADIE .*excessive aliasing/,
-            'encrypt returns on the 25-level bomb from karr #112')
+            'encrypt returns on the 25-level bomb from k112')
             or diag("got: $got");
     }
 }
@@ -296,12 +296,12 @@ refuses('decrypt (with an identity that cannot open the file)', sub {
         );
     });
     if ($got eq 'HANG') {
-        fail('decrypt returns on the 25-level bomb from karr #112');
+        fail('decrypt returns on the 25-level bomb from k112');
         diag("HUNG -- did not return within ${TIMEOUT}s, which is the defect.");
     }
     else {
         like($got, qr/\ADIE .*excessive aliasing/,
-            'decrypt returns on the 25-level bomb from karr #112')
+            'decrypt returns on the 25-level bomb from k112')
             or diag("got: $got");
     }
 }

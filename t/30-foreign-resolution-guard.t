@@ -17,11 +17,11 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #86 / docs/adr/0013: a YAML spelling that Go's parser resolves
+# k86 / docs/adr/0013: a YAML spelling that Go's parser resolves
 # differently from libyaml made the document fail its own MAC.
 #
 # Everything else in this layer asks THIS distribution's emitter what it does,
-# and karr #84's guard does exactly that -- which is why it cannot see any of
+# and k84's guard does exactly that -- which is why it cannot see any of
 # this: YAML::XS and File::SOPS::Encrypted agree with each other about every
 # leaf below. The disagreement is with the reader on the other side of the
 # file. sops parses with gopkg.in/yaml.v3, which strips `_` from a number, runs
@@ -60,7 +60,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #86 is a disagreement with sops about what a document SAYS, and "
+      . "k86 is a disagreement with sops about what a document SAYS, and "
       . "the half that must keep working can only be proved against it. Fix: "
       . "run maint/fetch-sops .sops-bin to install the pinned binary where "
       . "the suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -304,7 +304,7 @@ subtest 'True / False / null keep their measured behaviour' => sub {
     # there, and both contribute the same bytes. Agreement by construction on
     # neither side, so it is asserted rather than assumed.
     #
-    # Since karr #92 / ADR 0019, `True` and `False` also diverge on TYPE (str
+    # Since k92 / ADR 0019, `True` and `False` also diverge on TYPE (str
     # here, bool to sops) even though the bytes still agree -- but since
     # docs/adr/0070 the emitter QUOTES them instead of carping: the divergence
     # is removed rather than reported, so no warning fires and the document
@@ -392,7 +392,7 @@ subtest 'JSON is untouched: it quotes what it cannot write bare' => sub {
     # JSON has no octal, no 0o, no bare constants and no timestamps, and
     # Cpanel::JSON::XS quotes every string -- so these reach a JSON document as
     # strings and sops reads them as strings. The int leaves of the same shape
-    # are already refused by karr #84's guard, in the message that names it.
+    # are already refused by k84's guard, in the message that names it.
     for my $source (qw(0o10 0x1f 1_000 .inf Null TRUE 2015-01-01)) {
         my $document = eval {
             File::SOPS->encrypt(data => { x_unencrypted => yaml_leaf($source) },
@@ -408,7 +408,7 @@ subtest 'JSON is untouched: it quotes what it cannot write bare' => sub {
             recipients => [$public], format => 'json');
     };
     like($@, qr/cannot write an integer leaf/,
-        '[0755] JSON refuses it through the karr #84 guard, not this one');
+        '[0755] JSON refuses it through the k84 guard, not this one');
 };
 
 subtest 'the plaintext emitters still write every spelling' => sub {
@@ -437,7 +437,7 @@ subtest 'mac_only_encrypted is not refused, and still verifies' => sub {
     # cannot make the document disagree with its own MAC. Measured: exit 0 with
     # the spelling in the file. sops reads 493 where we read 755 -- a divergence
     # about a value, not about the MAC, so it is WARNED about rather than
-    # refused (karr #87, docs/adr/0018): refusing it would refuse a document
+    # refused (k87, docs/adr/0018): refusing it would refuse a document
     # that works. The warning itself is t/34's subject; what matters here is
     # that this document is still written and still read by sops.
     my @warnings;

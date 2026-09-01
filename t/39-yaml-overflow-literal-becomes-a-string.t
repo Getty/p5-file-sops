@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #102 / docs/adr/0023: a YAML literal whose magnitude overflows a double.
+# k102 / docs/adr/0023: a YAML literal whose magnitude overflows a double.
 #
 # libyaml resolves `1e400`, a 401-digit integer and the bare spelling `Inf` to a
 # NUMBER, and the number it lands on is +Inf. go-yaml resolves none of them --
@@ -58,7 +58,7 @@ sub yaml_leaf {
 sub leaf_type  { File::SOPS::Encrypted->detect_type($_[0]) }
 sub leaf_bytes { File::SOPS::Encrypted->value_to_bytes($_[0]) }
 
-# The ten literals of karr #102 proper: every one of them a document sops writes
+# The ten literals of k102 proper: every one of them a document sops writes
 # and sops -d reads, and none of them readable here before this change. The last
 # is 2**1024 - 2**970, the exact rounding threshold, where Go's ErrRange and
 # Perl's NV going non-finite are measurably the same bit.
@@ -78,7 +78,7 @@ my @SPELLINGS = qw( Inf inf INF NaN nan NAN -Inf +Inf Infinity -nan );
 # The twelve go-yaml really does resolve to a non-finite float. In THIS file's
 # plaintext parse -- yaml_leaf() below hands Format::YAML->parse a document
 # with no sops: section -- these must NOT move: they stay POK-only here, and
-# they are type:float to sops but str to us. ADR 0026 (karr #105, resolved)
+# they are type:float to sops but str to us. ADR 0026 (k105, resolved)
 # is why that is no longer the whole story: the same twelve DO move -- they
 # come back a float whose digest is +Inf / -Inf / NaN -- once the document
 # carries a sops: section, which this file's helper never gives it. See
@@ -120,7 +120,7 @@ subtest 'a bare Inf / NaN spelling is the same leaf' => sub {
 #
 #    This subtest USED to claim the twelve tokens come back a `str` from a
 #    plaintext parse, which pinned ADR 0026's `sops:` gate rather than the
-#    disjointness -- and karr #123 / ADR 0034 removed that gate, because this
+#    disjointness -- and k123 / ADR 0034 removed that gate, because this
 #    library's own decrypt_file wrote a plaintext its own encrypt_file then
 #    refused. The claim being made here now is the one that was always meant:
 #    ADR 0026's repair reaches these leaves and ADR 0023's does NOT undo it, in
@@ -184,12 +184,12 @@ subtest 'a quoted literal was already a string and stays one' => sub {
 };
 
 subtest 'an underflowing literal is untouched' => sub {
-    # karr #106: 1e-400 is an int here and a float to sops, both digesting `0`.
+    # k106: 1e-400 is an int here and a float to sops, both digesting `0`.
     # A non-finite NV never appears, so this predicate cannot fire on it, and
     # this pins that it does not.
     for my $source ('1e-400', '1e-500') {
         my $leaf = yaml_leaf($source);
-        is(leaf_type($leaf), 'int', "[$source] still an int -- karr #106");
+        is(leaf_type($leaf), 'int', "[$source] still an int -- k106");
         is(leaf_bytes($leaf), '0', "[$source] still digesting 0");
     }
 };
@@ -251,9 +251,9 @@ subtest 'the sops section is split off before the walk runs' => sub {
 };
 
 ###############################################################################
-# 4. THE karr #59 GUARD, NARROWED AGAIN. A caller-supplied bare non-finite NV
+# 4. THE k59 GUARD, NARROWED AGAIN. A caller-supplied bare non-finite NV
 #    used to be refused in the unencrypted slot too, with the message below
-#    the next subtest name. karr #141 / docs/adr/0062 removed that refusal,
+#    the next subtest name. k141 / docs/adr/0062 removed that refusal,
 #    because docs/adr/0037's YAML carrier manufactures the carrying dualvar
 #    for it: the carrier consults go-yaml's own twelve tokens and the YAML
 #    emitter writes the token the digest covers, so the leaf now reaches the
@@ -269,7 +269,7 @@ subtest 'the sops section is split off before the walk runs' => sub {
 #
 #    The ENCRYPTED slot still carries type:float and the plaintext +Inf, which
 #    is what `sops -e` writes in both formats. That has not moved since karr
-#    #122 / docs/adr/0040, and is asserted here rather than dropped, because
+#    k122 / docs/adr/0040, and is asserted here rather than dropped, because
 #    what this section is really pinning is that the two answers are about
 #    the SLOT and not about this walk.
 ###############################################################################
@@ -287,7 +287,7 @@ subtest 'a real non-finite float is written in YAML, as both slots it can reach'
         my ($name, $value, $token) = @$case;
 
         # Unencrypted slot, YAML: the carrier writes the token. This USED to
-        # refuse with the karr #59 message; karr #141 / docs/adr/0062 removed
+        # refuse with the k59 message; k141 / docs/adr/0062 removed
         # the refusal because the YAML carrier spells the same token the
         # digest covers.
         my $unencrypted = File::SOPS->encrypt(
@@ -296,13 +296,13 @@ subtest 'a real non-finite float is written in YAML, as both slots it can reach'
             format     => 'yaml',
         );
         ok(defined $unencrypted,
-            "[$name in v_unencrypted] YAML writes it (karr #141)")
+            "[$name in v_unencrypted] YAML writes it (k141)")
             or diag("died: " . ($unencrypted // $@));
         like($unencrypted, qr/^v_unencrypted: \Q$token\E$/m,
             "[$name in v_unencrypted] as the carrier's $token token");
 
         # Encrypted slot: unchanged. type:float in both formats, the plaintext
-        # derived from the number, no token on the wire at all (karr #122).
+        # derived from the number, no token on the wire at all (k122).
         my $encrypted = File::SOPS->encrypt(
             data       => { v => $value, keep => 'x' },
             recipients => [$public],
@@ -311,7 +311,7 @@ subtest 'a real non-finite float is written in YAML, as both slots it can reach'
         ok(defined $encrypted, "[$name in v] written, as sops writes it")
             or diag($@);
         like($encrypted // '', qr/^v: ENC\[[^\n]*type:float\]$/m,
-            "[$name in v] as type:float (karr #122)");
+            "[$name in v] as type:float (k122)");
     }
 };
 

@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #168 / docs/adr/0056 -- the WIRE-HALF twin of the line-3396 guard.
+# k168 / docs/adr/0056 -- the WIRE-HALF twin of the line-3396 guard.
 #
 # A plain STRING whose text parses as ENC[...,type:comment] at a path the
 # encryption rule EXCLUDES is a file this library cannot read back:
@@ -164,14 +164,14 @@ subtest 'a File::SOPS::Comment in a mapping value is still refused' => sub {
 
 ###############################################################################
 # 5. The bucket-list case. Once the bucket predicate recognises a list of
-#    ENC-comment strings (karr #172 / docs/adr/0059) the walk returns the
+#    ENC-comment strings (k172 / docs/adr/0059) the walk returns the
 #    bucket as-is, so this shape is now ACCEPTED -- it is a comment bucket
 #    in the wire tree, the same way a list of File::SOPS::Comment objects
-#    is a comment bucket in the plaintext tree. The karr #168 leaf guard
+#    is a comment bucket in the plaintext tree. The k168 leaf guard
 #    never reaches the items because the walk no longer descends into one.
 #
 #    This replaces an earlier assertion that the same shape was REFUSED.
-#    That assertion was correct under karr #168 alone; karr #172 narrows
+#    That assertion was correct under k168 alone; k172 narrows
 #    the guard's reach deliberately, because a bucket of ENC-comment
 #    strings is what a previous encrypt wrote, and re-encrypt must keep
 #    the comment line as-is. The non-bucket shape (subtests 1 and 4 above)
@@ -188,7 +188,7 @@ subtest 'the bucket-list case is accepted, not refused' => sub {
         format     => 'yaml',
     ) };
     ok(defined $got, 'a bucket of ENC-comment strings at an excluded path '
-        . 'writes (karr #172)')
+        . 'writes (k172)')
         or diag('encrypt died: '.($@ // 'undef'));
     like($got, qr/,type:comment\]/,
         'the comment strings are PRESERVED as type:comment -- the bucket '

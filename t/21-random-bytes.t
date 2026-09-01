@@ -203,7 +203,7 @@ subtest 'the checked helper still produces what the wire format needs' => sub {
 
 # ----------------------------------------------------------------------------
 # Crypt::Age's own CSPRNG calls (file key, nonce, ephemeral key) live inside
-# Crypt::Age and we cannot see them from here -- karr #52 notes this is fixed
+# Crypt::Age and we cannot see them from here -- k52 notes this is fixed
 # upstream, not here. What we *can* check is the one byte sequence Crypt::Age
 # hands back across our boundary: the data key itself, in decrypt_data_key.
 # A 16-byte (AES-128) or 24-byte (AES-192) data key is silently accepted by

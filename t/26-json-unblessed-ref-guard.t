@@ -18,9 +18,9 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #66 / docs/adr/0008 close-the-known-gap: Format::JSON::emit now refuses
+# k66 / docs/adr/0008 close-the-known-gap: Format::JSON::emit now refuses
 # every referenced leaf except an EXACT JSON::PP::Boolean, mirroring the YAML
-# guard from karr #65. The unblessed-ref half is the bug this file pins down.
+# guard from k65. The unblessed-ref half is the bug this file pins down.
 #
 # The Cpanel::JSON::XS convention is to write \1 as bare `true` and \0 as bare
 # `false` (documented JSON::XS behaviour, not a Cpanel bug). detect_type calls
@@ -43,7 +43,7 @@ use SopsBin qw(find_sops_bin);
 # guard. YAML's behaviour is unchanged by this ticket; cases 1 and 2 below are
 # JSON-only.
 #
-# Karr #67 (subtest 6) closes the OTHER silent-corruption side of the same
+# Karr k67 (subtest 6) closes the OTHER silent-corruption side of the same
 # defect, for ENCRYPTED slots: an unblessed ref there was accepted, written as
 # ENC[...,type:str] with a heap address as the plaintext, and read back as that
 # address -- the file verified (doc and digest agreed) but the stored value
@@ -65,7 +65,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #66 is a wire-format guard, and interop is how a mistake in it "
+      . "k66 is a wire-format guard, and interop is how a mistake in it "
       . "(refusing too much, or too little) would actually be seen. Fix: run "
       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -102,13 +102,13 @@ sub scratch_file {
 #    kind, never the value.
 ###############################################################################
 
-subtest 'JSON::emit refuses \1 (unblessed SCALAR ref) -- the karr #66 case' => sub {
+subtest 'JSON::emit refuses \1 (unblessed SCALAR ref) -- the k66 case' => sub {
     my $result = eval { File::SOPS::Format::JSON->emit({ leaf_unencrypted => \1 }) };
     ok(!defined $result, 'emit() does not return a document');
     like($@, qr/unblessed SCALAR reference/, 'the message names the ref kind');
 };
 
-subtest 'JSON::emit refuses \0 (unblessed SCALAR ref) -- the karr #66 case' => sub {
+subtest 'JSON::emit refuses \0 (unblessed SCALAR ref) -- the k66 case' => sub {
     my $result = eval { File::SOPS::Format::JSON->emit({ leaf_unencrypted => \0 }) };
     ok(!defined $result, 'emit() does not return a document');
     like($@, qr/unblessed SCALAR reference/, 'the message names the ref kind');
@@ -136,7 +136,7 @@ subtest 'JSON::emit refuses an unblessed CODE reference' => sub {
 };
 
 ###############################################################################
-# 2. The guard catches the karr #66 case through the PUBLIC API too, not only
+# 2. The guard catches the k66 case through the PUBLIC API too, not only
 #    through Format::JSON->emit directly. This is the path the caller uses, and
 #    the one that previously wrote a self-broken file under a user's `secret`
 #    key without a word.
@@ -183,7 +183,7 @@ subtest 'the guard reaches a rejected leaf nested inside a hash (JSON)' => sub {
     ok(!defined $nested, 'a \1 nested inside a hash is refused');
     like($@, qr/unblessed SCALAR reference/, 'with the guard message');
     like($@, qr/\Aouter_unencrypted:inner_unencrypted: /,
-        'and the key path in front of it (karr #68)');
+        'and the key path in front of it (k68)');
 };
 
 subtest 'the guard reaches a rejected leaf nested inside an array (JSON)' => sub {
@@ -195,11 +195,11 @@ subtest 'the guard reaches a rejected leaf nested inside an array (JSON)' => sub
     ok(!defined $in_array, 'a \0 inside an array is refused');
     like($@, qr/unblessed SCALAR reference/, 'with the guard message');
     like($@, qr/\Alist_unencrypted:2: /,
-        'and the key path, array index included (karr #68)');
+        'and the key path, array index included (k68)');
 };
 
 ###############################################################################
-# 3a. karr #68: the refusal says WHERE, on the JSON side too. Same walk, same
+# 3a. k68: the refusal says WHERE, on the JSON side too. Same walk, same
 #     path, same notation as t/25 pins for YAML -- both handlers take the
 #     location from canonical_float_tree, so a message shape that drifts apart
 #     between them is a bug, and these two blocks are what catches it.
@@ -208,7 +208,7 @@ subtest 'the guard reaches a rejected leaf nested inside an array (JSON)' => sub
 #     deliberate; the reasoning is in t/25-blessed-leaf-guard.t section 3a.
 ###############################################################################
 
-subtest 'the JSON refusal names the leaf location (karr #68)' => sub {
+subtest 'the JSON refusal names the leaf location (k68)' => sub {
     my @cases = (
         [ 'a leaf at the document root',
           \1,
@@ -367,14 +367,14 @@ subtest 'a JSON::PP::Boolean subclass is refused too (JSON)' => sub {
 };
 
 ###############################################################################
-# 6. Karr #67 / ADR 0008 closes the silent-corruption side of the same defect
+# 6. Karr k67 / ADR 0008 closes the silent-corruption side of the same defect
 #    for the encrypted slot. Where this test previously asserted the SHAPE of
 #    the pre-fix happy path (the doc and the digest agreed on a heap address,
 #    so the file verified and the caller never noticed), the new
 #    assert_representable guard refuses the unblessed ref at encrypt time
 #    with a message naming the ref kind, not the value.
 #
-#    Before #67: \1 in an encrypted slot was accepted, written as ENC[...,type:str]
+#    Before k67: \1 in an encrypted slot was accepted, written as ENC[...,type:str]
 #    whose plaintext was SCALAR(0x...) (the ref's heap address), and read back
 #    as that address on the next process. The MAC verified -- doc and digest
 #    agreed -- but the stored value was meaningless and unrecognisable. That
@@ -386,13 +386,13 @@ subtest 'a JSON::PP::Boolean subclass is refused too (JSON)' => sub {
 #    path is "blessed only". See t/27 for the regression that pins this.
 ###############################################################################
 
-subtest 'a \1 in an ENCRYPTED JSON slot is REFUSED (karr #67 closes the silent-corruption side)' => sub {
-    # Pre-#67 this test was the "happy path" assertion: encrypt \1 in an
+subtest 'a \1 in an ENCRYPTED JSON slot is REFUSED (k67 closes the silent-corruption side)' => sub {
+    # Pre-k67 this test was the "happy path" assertion: encrypt \1 in an
     # encrypted slot, get back ENC[...,type:str] whose plaintext was the
     # ref's address, decrypt back to that address, sops accepts (exit 0).
     # That was exactly the defect: a heap address stored as a value is not
     # what the caller meant, but the only symptom was "I cannot reproduce
-    # this on a later run". #67 turns it into a loud refusal at encrypt time
+    # this on a later run". k67 turns it into a loud refusal at encrypt time
     # so the caller notices. The blessed-with-overload happy path is in
     # t/27.
     my $encrypted = eval {

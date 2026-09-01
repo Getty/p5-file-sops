@@ -10,7 +10,7 @@ use Crypt::Age;
 
 use File::SOPS;
 
-# karr #150 -- docs/adr/0046, then karr #160 -- docs/adr/0049.
+# k150 -- docs/adr/0046, then k160 -- docs/adr/0049.
 #
 # This distribution decrypted ENC-DRIVEN: _decrypt_tree asked whether a leaf
 # LOOKS encrypted and never asked the encryption rule. It encrypts RULE-DRIVEN:
@@ -169,7 +169,7 @@ subtest 'a rule that reproduces the document still rotates and still edits' => s
 ###############################################################################
 subtest 'a bare leaf the rule selects is refused, not encrypted silently' => sub {
     # The mirror image: the rule says encrypt, the document holds the value
-    # bare. Until karr #160 this subtest pinned the divergence rather than the
+    # bare. Until k160 this subtest pinned the divergence rather than the
     # fix -- rotate went through at exit 0 and the readable value came back
     # ENCRYPTED, under a data key the caller may not keep -- and it said in so
     # many words that a rule-driven _decrypt_tree was what had to change it.
@@ -235,7 +235,7 @@ SKIP: {
         # EXCLUDES, and this guard was the only thing between that and
         # `café: hunter2` on disk.
         #
-        # karr #161 closed the classification itself (docs/adr/0048): the two
+        # k161 closed the classification itself (docs/adr/0048): the two
         # rule patterns are now compiled /a, which is RE2's answer for \w.
         # So the premise is gone -- the rule no longer excludes the leaf --
         # and what this subtest pins is the step after the guard: rotate goes

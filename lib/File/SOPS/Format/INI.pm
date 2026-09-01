@@ -8,7 +8,7 @@ use File::SOPS::Comment;
 use File::SOPS::Encrypted;
 # The tied hash docs/adr/0036 requires. USED WHERE IT STANDS rather than
 # copied: two copies of an order-preserving hash is exactly how ENV and INI
-# drift apart, which both tickets warned about for weeks. karr #158 gave it a
+# drift apart, which both tickets warned about for weeks. k158 gave it a
 # file of its own, so this loads the class itself where it used to load the
 # whole dotenv handler to reach it.
 use File::SOPS::Format::ENV::Ordered;
@@ -224,7 +224,7 @@ leaf's digest input is the literal text of its line, and this handler writes
 exactly C<< File::SOPS::Encrypted->value_to_bytes >> for it. That is where a
 boolean becomes C<True>, an C<undef> the empty string, and C<1.0> the token
 C<1>: three values sops writes in a display form and then cannot read back
-(karr #124, #125, #137).
+(k124, k125, k137).
 
 =head2 What this handler cannot carry
 

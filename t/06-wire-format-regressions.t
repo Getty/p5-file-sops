@@ -205,7 +205,7 @@ for my $format (qw(yaml json)) {
 
 # ----------------------------------------------------------------------------
 # 4. A value's type comes from the SCALAR, not from a pattern match on its
-#    text (karr #15, ADR 0002).
+#    text (k15, ADR 0002).
 #
 # The old ladder read 'true'/'false' as booleans and /^-?\d+$/ as integers, so
 # a quoted "false" in a document came back as a boolean and "007" as 7. sops
@@ -263,10 +263,10 @@ for my $format (qw(yaml json)) {
 }
 
 # ----------------------------------------------------------------------------
-# 5. value_to_bytes returns TEXT, and the scalar has to say so (karr #80).
+# 5. value_to_bytes returns TEXT, and the scalar has to say so (k80).
 #
 # The shortest-form search in _float_bytes compared with `$g + 0 == $n`, which
-# numifies $g IN PLACE -- the same in-place retyping karr #72 and #73 are
+# numifies $g IN PLACE -- the same in-place retyping k72 and k73 are
 # about, on the OUTPUT side. So the digits came back carrying the double as
 # well as the text, and detect_type, which reads the public SV flags and
 # nothing else (ADR 0002), called value_to_bytes's own return a `float`. For a
@@ -321,7 +321,7 @@ for my $format (qw(yaml json)) {
         'and its plaintext is the digits verbatim');
 
     # And the source scalar is not retyped either -- the input side of the same
-    # rule, which is what karr #72 and #73 fixed.
+    # rule, which is what k72 and k73 fixed.
     my $float = 0.1 + 0.2;
     File::SOPS::Encrypted->value_to_bytes($float);
     is(File::SOPS::Encrypted->detect_type($float), 'float',

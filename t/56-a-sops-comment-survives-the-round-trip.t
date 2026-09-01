@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #76 / docs/adr/0041: a sops comment is a leaf of its own -- not a value,
+# k76 / docs/adr/0041: a sops comment is a leaf of its own -- not a value,
 # and not a refusal.
 #
 # sops attaches a comment to the node that FOLLOWS it. Above a mapping key that
@@ -28,7 +28,7 @@ use SopsBin qw(find_sops_bin);
 #         - ENC[AES256_GCM,...,type:comment]
 #         - ENC[AES256_GCM,...,type:str]
 #
-# karr #108 read that entry as a VALUE: an extra string in the caller's list
+# k108 read that entry as a VALUE: an extra string in the caller's list
 # that the file does not contain, made permanent by a decrypt+encrypt cycle with
 # `sops -d` reporting success at every step. docs/adr/0024 closed it by refusing
 # the document. This file pins the answer that replaces the refusal: the entry
@@ -44,7 +44,7 @@ use SopsBin qw(find_sops_bin);
 #   File::SOPS writes from scratch                   -> sops -d
 #
 # THE DIGEST IS THE LOAD-BEARING PART. Comments are in NO format's MAC --
-# measured against sops 3.13.3 four ways at karr #108, and once more here: the
+# measured against sops 3.13.3 four ways at k108, and once more here: the
 # digest this library computes over a sops-written document with comments in it
 # matches the one that document stores, which it can only do if the comments are
 # left out. If that exclusion is ever lost, section 3 fails on the MAC and every
@@ -94,7 +94,7 @@ subtest 'the comment leaf is a value of its own kind' => sub {
 
     # NOT overloaded, deliberately: an object that compares equal to a string
     # slips through every `eq` in this distribution, which is how a comment
-    # became a value in the first place (karr #108).
+    # became a value in the first place (k108).
     isnt("$c", ' a comment', 'it does not stringify to its text');
     ok(!File::SOPS::Encrypted->is_comment(' a comment'),
         'and a plain string is not a comment');
@@ -274,7 +274,7 @@ YAML
 
         # The mapping-position comment is the one thing that does not survive:
         # YAML::XS discards it on the way in and cannot write one on the way
-        # out. That is the open half of karr #76, and it is asserted rather
+        # out. That is the open half of k76, and it is asserted rather
         # than glossed over.
         @theirs = grep { !/# above a mapping key/ } @theirs;
 
@@ -334,7 +334,7 @@ YAML
     subtest 'the same leaf in a JSON document' => sub {
         # sops writes type:comment leaves into JSON too -- a YAML source with a
         # comment in a list, written with --output-type json. That document was
-        # never covered by ADR 0024's guard, so karr #108's defect was open in
+        # never covered by ADR 0024's guard, so k108's defect was open in
         # JSON the whole time: measured at that HEAD, ignore_mac => 1 returned
         # { list => [' a comment', 'one'] }.
         write_file("$tempdir/j.plain.yaml", "list:\n  # a json comment\n  - one\n");

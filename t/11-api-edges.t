@@ -12,7 +12,7 @@ use YAML::XS ();
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# Small correctness edges, all reproduced before being fixed (karr #20).
+# Small correctness edges, all reproduced before being fixed (k20).
 #
 #   (a) extract's bracket notation only understood QUOTED keys, so the form its
 #       own POD documents -- ["items"][0] -- silently returned the whole
@@ -28,7 +28,7 @@ use Crypt::Age;
 #       on whatever else in the program uses YAML::XS.
 #   (f) two things this distribution gets from the ORDER of its own use lines,
 #       neither of which this file can check in its own process because it
-#       loads JSON::MaybeXS itself at the top. Added with karr #49, which
+#       loads JSON::MaybeXS itself at the top. Added with k49, which
 #       proposed deleting `use JSON::MaybeXS` from File/SOPS.pm as an unused
 #       import; it is not one. Both checks run in a fresh perl that loads
 #       nothing but File::SOPS.
@@ -264,7 +264,7 @@ sub _in_a_fresh_perl {
 # JSON::MaybeXS ahead of that, JSON::MaybeXS would never get to state its own
 # preference.
 #
-# This no longer reaches a document. karr #56 / docs/adr/0005 took the wire
+# This no longer reaches a document. k56 / docs/adr/0005 took the wire
 # format out of JSON::MaybeXS's hands: Format::JSON names Cpanel::JSON::XS for
 # the emitter and the parser, and t/23-json-backend.t is what pins that -- by
 # comparing fresh child perls that loaded different backends first, which is

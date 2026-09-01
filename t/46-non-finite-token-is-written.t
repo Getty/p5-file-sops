@@ -15,10 +15,10 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #113 / docs/adr/0031: a non-finite float that carries go-yaml's own
+# k113 / docs/adr/0031: a non-finite float that carries go-yaml's own
 # token is written, where every non-finite float used to be refused.
 #
-# karr #59's guard refuses a non-finite float on the encrypt path because no
+# k59's guard refuses a non-finite float on the encrypt path because no
 # emitter derives `+Inf` / `-Inf` / `NaN` -- the text the MAC digest covers --
 # from the NUMBER. That is true of a bare NV. It stopped being true when
 # ADR 0026 taught the YAML parse to hand back dualvar($double, $token) for a
@@ -36,7 +36,7 @@ use SopsBin qw(find_sops_bin);
 #   * section 2 is the contradiction -- dualvar(+Inf, '-.inf') and friends.
 #     Both halves have to agree, the same rule ADR 0012 gives an integer.
 #   * section 3 is the bare NV, refused in JSON and written in YAML. karr
-#     #141 / docs/adr/0062 removed assert_representable's refusal of a bare
+#     k141 / docs/adr/0062 removed assert_representable's refusal of a bare
 #     NV in the unencrypted slot (the YAML carrier now manufactures the
 #     carrying dualvar), so the bare NV is accepted HERE for YAML and the
 #     JSON refusal moves to the emit walk -- which is what section 3 splits
@@ -44,8 +44,8 @@ use SopsBin qw(find_sops_bin);
 #   * section 5 is JSON, which has no spelling for a non-finite float in an
 #     UNENCRYPTED slot (measured, sops -d exit 51).
 #     assert_representable is format-blind, so keeping JSON out is
-#     a separate mechanism, and karr #62 is what happens when it is forgotten.
-#   * section 4 is the encrypted slot, which since karr #122 / docs/adr/0040
+#     a separate mechanism, and k62 is what happens when it is forgotten.
+#   * section 4 is the encrypted slot, which since k122 / docs/adr/0040
 #     carries the value in both formats -- as type:float and the plaintext
 #     derived from the number, with no token on the wire at all.
 #
@@ -143,10 +143,10 @@ subtest 'a spelling go-yaml does not resolve is refused' => sub {
 
 ###############################################################################
 # 3. THE BARE VALUE, SPLIT. A bare non-finite float used to be refused here
-#    in both formats -- that is what karr #59 was written for, measured, `Inf`
+#    in both formats -- that is what k59 was written for, measured, `Inf`
 #    in an unencrypted YAML slot is sops -d exit 51, and `-Inf` / `NaN` are
 #    exit 0 with the leaf silently retyped from a float to a string, which
-#    is worse. karr #141 / docs/adr/0062 removed the assert_representable
+#    is worse. k141 / docs/adr/0062 removed the assert_representable
 #    refusal for the BARE case in the unencrypted slot: docs/adr/0037's
 #    YAML carrier manufactures the carrying dualvar, and the leaf now
 #    reaches the document as `.inf` / `-.inf` / `.nan`. JSON has no such
@@ -177,9 +177,9 @@ subtest 'a bare non-finite float is still refused, in the format where it must b
         'and so is one that was only stringified: the public POK stays clear');
 };
 
-# karr #141 / docs/adr/0062 split the slot answer by FORMAT. An ENCRYPTED
+# k141 / docs/adr/0062 split the slot answer by FORMAT. An ENCRYPTED
 # slot carries a bare non-finite float as type:float and the plaintext +Inf,
-# which is what `sops -e` writes in both formats -- unchanged since karr #122
+# which is what `sops -e` writes in both formats -- unchanged since k122
 # / docs/adr/0040. The UNENCRYPTED slot -- the one this whole file is about,
 # and the only one whose leaf reaches the document as a token -- now writes
 # in YAML (the carrier spells the token the digest covers) and refuses in
@@ -199,7 +199,7 @@ subtest 'a bare non-finite float: YAML writes it, JSON refuses it from the emit 
         };
         if ($format eq 'yaml') {
             ok($ok,
-                "[$format] assert_representable lets it through (karr #141)")
+                "[$format] assert_representable lets it through (k141)")
                 or diag($@);
         }
         else {
@@ -210,7 +210,7 @@ subtest 'a bare non-finite float: YAML writes it, JSON refuses it from the emit 
         }
 
         # The encrypted slot stays as it was, in BOTH formats: type:float
-        # with the plaintext derived from the number (karr #122).
+        # with the plaintext derived from the number (k122).
         my $document = eval {
             File::SOPS->encrypt(
                 data       => { keep => 'x', v => $INF },
@@ -220,7 +220,7 @@ subtest 'a bare non-finite float: YAML writes it, JSON refuses it from the emit 
         };
         ok($document, "[$format] and writes it in an encrypted slot") or diag($@);
         like($document // '', qr/type:float/,
-            "[$format] as type:float (karr #122)");
+            "[$format] as type:float (k122)");
     }
 };
 
@@ -230,13 +230,13 @@ subtest 'a bare non-finite float: YAML writes it, JSON refuses it from the emit 
 #    nothing about it either way.
 #
 #    It USED to be refused here, on the premise that the two formats disagree
-#    about it (YAML sops -d exit 0, JSON exit 4). karr #122 / docs/adr/0040
+#    about it (YAML sops -d exit 0, JSON exit 4). k122 / docs/adr/0040
 #    re-measured that: `sops -e --output-type json` writes such a document
 #    itself, at exit 0, and both wire formats read back at exit 0 under
 #    --output-type yaml. The disagreement is between OUTPUT formats. So the
 #    leaf is written, in both, and what this section pins now is that the
 #    TOKEN plays no part in it -- the same bytes reach the wire whether the
-#    scalar carries one or not. karr #141 / docs/adr/0062 did not change any
+#    scalar carries one or not. k141 / docs/adr/0062 did not change any
 #    of this: the unencrypted-slot narrowing is the only move.
 ###############################################################################
 
@@ -280,10 +280,10 @@ subtest 'encrypt_value writes it directly, and the token is not on the wire'
 # 5. JSON IS NOT CARRIED ALONG. assert_representable is format-blind, so the
 #    narrowing would have opened a JSON document that fails its own MAC --
 #    written silently, which is the defect this layer exists to prevent, and
-#    exactly the trap karr #62 sprang the last time a YAML fix was measured
+#    exactly the trap k62 sprang the last time a YAML fix was measured
 #    without JSON.
 #
-#    karr #141 / docs/adr/0062 re-organised this: a token-CARRYING leaf still
+#    k141 / docs/adr/0062 re-organised this: a token-CARRYING leaf still
 #    gets refused in JSON (the emit walk's mac_covered croak, which a
 #    dualvar with its token still triggers, see below). A BARE non-finite
 #    float in JSON is also refused, but now by the emit walk rather than the
@@ -326,7 +326,7 @@ subtest 'and the reason it has to: the JSON emitter writes it quoted' => sub {
 #    MAC-covered one whose handler has no foreign-resolution guard refuses.
 ###############################################################################
 
-# REPLACED CLAIM (karr #134, docs/adr/0037). This used to be
+# REPLACED CLAIM (k134, docs/adr/0037). This used to be
 # `canonical_float_tree leaves a plaintext document alone` and asserted that the
 # carrier was never called AT ALL over a tree that carried a bare +Inf beside
 # the token-carrying leaf. That second half was the defect: a bare non-finite

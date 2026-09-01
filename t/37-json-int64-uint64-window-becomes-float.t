@@ -16,13 +16,13 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #101 / docs/adr/0021: sops -e NORMALISES a bare JSON integer literal in
+# k101 / docs/adr/0021: sops -e NORMALISES a bare JSON integer literal in
 # [2**63 .. 2**64-1] -- Perl's UV range, Go's int64 cannot hold it -- by
 # writing the float64 it truncates to back out (9223372036854775808 becomes
 # 9223372036854776000, still a Perl UV). File::SOPS::Format::JSON::parse used
 # to hand such a literal back as a plain IV/UV, detect_type called it `int`,
 # and Encrypted::assert_representable refused a document sops itself writes
-# and reads. It is now the SAME dualvar leaf class ADR 0020 (karr #63) already
+# and reads. It is now the SAME dualvar leaf class ADR 0020 (k63) already
 # produces one magnitude up: the double, carrying the ORIGINAL digits as its
 # string half, NOK+POK. Fixed in _wide_number's new IOK branch, gated on
 # File::SOPS::Encrypted->integer_fits_int64.
@@ -205,7 +205,7 @@ subtest 'the gate order: strings that look numeric are unmoved by a document als
 ###############################################################################
 # 4. integer_fits_int64 ITSELF: both boundaries, the values around them, and
 #    that it does not retype its argument -- the one property that makes it
-#    safe to call from inside a parser walk at all (ADR 0002/karr #32).
+#    safe to call from inside a parser walk at all (ADR 0002/k32).
 ###############################################################################
 
 subtest 'integer_fits_int64: both boundaries and the values around them' => sub {
@@ -227,7 +227,7 @@ subtest 'integer_fits_int64 does not retype its argument' => sub {
     # IV compared against another IV sets no new flag either way, but a
     # comparison made against the CALLER's own scalar (an aliasing `$_[1]`
     # instead of a copied `my ($class, $value) = @_`) sets the PUBLIC SVf_IOK
-    # on a plain string leaf in place -- karr #32's mechanism, ADR 0002's rule,
+    # on a plain string leaf in place -- k32's mechanism, ADR 0002's rule,
     # and exactly what a comparison ahead of _wide_number's own flag test would
     # do to a leaf like "5432" (section 3 above).
     my $s = '5432';
@@ -303,16 +303,16 @@ subtest 'YAML input still refuses the window, in both slots, regardless of outpu
 };
 
 ###############################################################################
-# 7. karr #104 (open, NOT fixed here): a caller-supplied UV in this window --
+# 7. k104 (open, NOT fixed here): a caller-supplied UV in this window --
 #    one that did NOT come from Format::JSON::parse -- still refuses. Pinned
-#    as today's deliberate state, the way t/36 pinned karr #101 before this
+#    as today's deliberate state, the way t/36 pinned k101 before this
 #    file existed, so the next pass sees it is intentional and not an
-#    oversight. See docs/adr/0021's "What the ticket got wrong" and karr #104
+#    oversight. See docs/adr/0021's "What the ticket got wrong" and k104
 #    itself for why this is a real gap and not merely unfinished: 14 of the 35
 #    literals measured there would have produced a document sops -d accepts.
 ###############################################################################
 
-subtest 'karr #104 (open, NOT fixed here): a caller-supplied UV in this window still refuses' => sub {
+subtest 'k104 (open, NOT fixed here): a caller-supplied UV in this window still refuses' => sub {
     my $uv = 9223372036854775808;   # a Perl literal, never touched by Format::JSON::parse
     is(File::SOPS::Encrypted->detect_type($uv), 'int',
         'a bare Perl UV in the window is still what Perl holds it as -- not the float leaf class');
@@ -324,7 +324,7 @@ subtest 'karr #104 (open, NOT fixed here): a caller-supplied UV in this window s
             $@;
         };
         like($err, qr/value is an integer outside the range the SOPS int type can hold/,
-            "[$key] a caller-supplied UV in the window still hits the int64 refusal -- karr #104, unresolved here");
+            "[$key] a caller-supplied UV in the window still hits the int64 refusal -- k104, unresolved here");
     }
 };
 
@@ -352,14 +352,14 @@ SKIP: {
         like($written_by_sops, qr/"big_unencrypted"\s*:\s*9223372036854776000\b/,
             'sops itself normalises the literal to the float64 it truncates to');
         like($written_by_sops, qr/"big_secret"[^{]*type:float/,
-            'and types the encrypted slot float -- exactly the refusal karr #101 reported');
+            'and types the encrypted slot float -- exactly the refusal k101 reported');
 
         my $rotate_err = do {
             local $@;
             eval { File::SOPS->rotate(file => $plain, identities => [$secret]) };
             $@;
         };
-        is($rotate_err, '', 'our rotate no longer croaks -- this is the karr #101 fix') or diag($rotate_err);
+        is($rotate_err, '', 'our rotate no longer croaks -- this is the k101 fix') or diag($rotate_err);
 
         my $after_rotate = read_file($plain);
         like($after_rotate, qr/"big_unencrypted"\s*:\s*9223372036854776000\b/,

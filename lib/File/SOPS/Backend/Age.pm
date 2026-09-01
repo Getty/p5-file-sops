@@ -7,7 +7,7 @@ use Crypt::Age;
 use MIME::Base64 qw(encode_base64 decode_base64);
 use namespace::clean;
 
-# Same reason as in the two format handlers (karr #71): every frame between a
+# Same reason as in the two format handlers (k71): every frame between a
 # caller and this backend is File::SOPS's own, so "could not decrypt the data
 # key" named a line in SOPS.pm rather than the line the caller wrote decrypt()
 # on. The house rule is that an error reports the caller's line, not ours.
@@ -115,7 +115,7 @@ sub decrypt_data_key {
     # The data key the SOPS data path consumes is exactly 32 bytes -- the
     # AES-256 key every value in the document is encrypted under. A short
     # return is silently accepted by CryptX as a working AES-128/192 key
-    # (karr #52, the same defect class as the data-key / IV checks in
+    # (k52, the same defect class as the data-key / IV checks in
     # Encrypted::_random_bytes); a long return is not a valid AES key and
     # dies inside CryptX, attributed to gcm and naming neither the CSPRNG
     # nor the age layer. Crypt::Age 0.001 happens to return 32 bytes; we

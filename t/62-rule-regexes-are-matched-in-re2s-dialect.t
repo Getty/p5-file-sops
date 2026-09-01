@@ -10,7 +10,7 @@ use Crypt::Age;
 use File::SOPS;
 use File::SOPS::Metadata;
 
-# karr #161 -- docs/adr/0048.
+# k161 -- docs/adr/0048.
 #
 # unencrypted_regex and encrypted_regex are matched HERE with Perl and in sops
 # with Go's RE2, and those are not the same dialect. RE2's \w, \d, \s, \b and
@@ -22,7 +22,7 @@ use File::SOPS::Metadata;
 #     sops encrypts `café`.  This library left it BARE.
 #
 # Not only on rotate -- on the caller's own `encrypt`. That is what makes it a
-# defect of its own rather than the reachability half of karr #150: a user gets
+# defect of its own rather than the reachability half of k150: a user gets
 # an encrypted secret from sops and a readable one from us, for the same rule
 # and the same key.
 #
@@ -173,7 +173,7 @@ my @REFUSED_DIFFERENT = (
 );
 
 subtest 'a pattern RE2 cannot compile is refused for WRITING' => sub {
-    # This subtest asked should_encrypt_path until karr #171, because until
+    # This subtest asked should_encrypt_path until k171, because until
     # then the refusal WAS the match. docs/adr/0051 splits the two: sops reads
     # such a rule as matching nothing, which is reproducible, so the read path
     # reproduces it and only the write path refuses. The refusal, its wording

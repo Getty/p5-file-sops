@@ -14,7 +14,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #118 / docs/adr/0032: the yaml.org type tags on a scalar.
+# k118 / docs/adr/0032: the yaml.org type tags on a scalar.
 #
 # YAML::XS accepts exactly three tags on a scalar -- !!str, !!int and !!float --
 # and dies on every other one with `bad tag found for scalar`, a message about
@@ -249,7 +249,7 @@ subtest 'an unrelated parse failure still reports itself, unchanged' => sub {
 
     # A tag YAML::XS accepts but cannot resolve is NOT spoken for here: sops
     # reads `!!int 0x10` as 16 and libyaml refuses the content, which is karr
-    # #29's parser divergence and not this ticket.
+    # k29's parser divergence and not this ticket.
     $data = eval { File::SOPS::Format::YAML->parse("v: !!int 0x10\n") };
     ok(!defined $data, '!!int 0x10 is still refused');
     unlike($@, qr/File::SOPS cannot read/, 'by libyaml, deliberately');
@@ -317,7 +317,7 @@ SKIP: {
     };
 
     subtest 'File::SOPS encrypts the tagged plaintext -> sops reads it' => sub {
-        # This is the whole of karr #118: before the repair, encrypt_file died
+        # This is the whole of k118: before the repair, encrypt_file died
         # on a plaintext `sops -e` takes at exit 0.
         write_file("$tempdir/in.yaml", $TAGGED);
         my $ok = eval {

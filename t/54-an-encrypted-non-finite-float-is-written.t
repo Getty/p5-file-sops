@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #122 / docs/adr/0040: an encrypted slot carries a non-finite float,
+# k122 / docs/adr/0040: an encrypted slot carries a non-finite float,
 # because sops writes one.
 #
 # ADR 0031 refused the encrypted slot because "the two formats disagree about
@@ -61,7 +61,7 @@ my @NON_FINITE = (
     { name => 'NaN',  double => $NAN,  bytes => 'NaN',  token => '.nan'  },
 );
 
-# ADR 0026's twelve, which is karr #114's corpus.
+# ADR 0026's twelve, which is k114's corpus.
 my @TOKENS = qw( .inf .Inf .INF +.inf +.Inf +.INF -.inf -.Inf -.INF
                  .nan .NaN .NAN );
 
@@ -117,26 +117,26 @@ sub sops_run {
 #    questions differently depending on which slot the leaf is going into, and
 #    the default is the strict answer every existing caller already had.
 #
-#    karr #141 / docs/adr/0062 NARROWED the non-finite refusal by PUBLIC PV.
+#    k141 / docs/adr/0062 NARROWED the non-finite refusal by PUBLIC PV.
 #    A bare non-finite float has no public PV at all -- the number is its only
 #    form -- so neither of the croaks fires and the leaf passes in BOTH slots
 #    AND with no slot given. The "default to strict" promise is now narrow:
 #    strict still refuses the contradictory cases (dualvar(+Inf, 'banana'),
 #    the JSON literal of 400 zeros whose text is its digits -- ADR 0020).
-#    What stops is the bare-NV refusal, which karr #59 was written for but
+#    What stops is the bare-NV refusal, which k59 was written for but
 #    which the YAML carrier (ADR 0037) and the JSON emit walk's mac_covered
 #    croak together make redundant: YAML manufactures the carrying dualvar,
 #    JSON refuses at the format-specific layer where the question of "can
 #    this format spell this number" actually belongs.
 #
 #    A leaf WITH a public PV (dualvar(+Inf, 'banana'), dualvar(+Inf, '.INf'))
-#    still fails both gates with the same karr #59 message, and the slot
+#    still fails both gates with the same k59 message, and the slot
 #    difference for those is unchanged.
 ###############################################################################
 
 subtest 'assert_representable answers per slot, and defaults to strict' => sub {
     # BARE non-finite floats now pass -- in both slots and with no slot given.
-    # The strict answer they used to refuse them with is gone: karr #141 /
+    # The strict answer they used to refuse them with is gone: k141 /
     # docs/adr/0062 narrowed the guard by public PV, and a bare NV has none.
     for my $case (@NON_FINITE) {
         my $v = $case->{double};
@@ -144,13 +144,13 @@ subtest 'assert_representable answers per slot, and defaults to strict' => sub {
         my $strict = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v) });
         is($strict, '',
-            "[$case->{name}] a bare NV is accepted with no slot given (karr #141)");
+            "[$case->{name}] a bare NV is accepted with no slot given (k141)");
 
         my $unenc = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v,
                       encrypted => 0) });
         is($unenc, '',
-            "[$case->{name}] a bare NV is accepted for an unencrypted slot (karr #141)");
+            "[$case->{name}] a bare NV is accepted for an unencrypted slot (k141)");
 
         my $enc = error_from(
             sub { File::SOPS::Encrypted->assert_representable($v,
@@ -259,7 +259,7 @@ subtest 'a contradictory string half is refused in an encrypted slot' => sub {
 };
 
 ###############################################################################
-# 4. THE UNENCRYPTED SLOT DOES NOT MOVE, except for the one cell karr #141 /
+# 4. THE UNENCRYPTED SLOT DOES NOT MOVE, except for the one cell k141 /
 #    docs/adr/0062 narrowed: a bare NV (no public PV) is now written in YAML
 #    (the carrier manufactures the dualvar) and still refused in JSON (the
 #    emit walk's mac_covered croak). The contradicting rows are unchanged.
@@ -315,9 +315,9 @@ subtest 'the unencrypted slot answers exactly as it did, except for the bare NV'
 #    about the leaves THAT document encrypts.
 #
 #    The encrypted half is unchanged: $INF (bare NV) goes to the encrypted
-#    slot in both formats -- karr #122 / docs/adr/0040 made that explicit.
+#    slot in both formats -- k122 / docs/adr/0040 made that explicit.
 #
-#    The unencrypted half had to move with karr #141 / docs/adr/0062: a bare
+#    The unencrypted half had to move with k141 / docs/adr/0062: a bare
 #    NV in the unencrypted slot is now WRITTEN in YAML (the carrier
 #    manufactures the dualvar), and what still refuses at this layer is a
 #    CONTRADICTING scalar. So the unencrypted side here uses a dualvar
@@ -332,7 +332,7 @@ subtest 'the slot comes from the encryption rules, not from a name' => sub {
         [ unencrypted_regex => '^pub', 'other',  'pub_x'  ],
     );
     # A leaf the rule does NOT encrypt: a contradicting scalar, since the
-    # unencrypted slot is now what karr #141 narrowed (bare NV writes in
+    # unencrypted slot is now what k141 narrowed (bare NV writes in
     # YAML; only the contradicting case still refuses at this layer).
     my $unencrypted_value = dualvar($INF, 'banana');
 
@@ -390,7 +390,7 @@ subtest 'a nested encrypted non-finite float is written too' => sub {
 ###############################################################################
 # 7. THE READ PATH DOES NOT MOVE. A decrypted non-finite float is a bare NV --
 #    no string half -- which is what ADR 0009 and ADR 0010 require, and what
-#    karr #114 measured for sops's own document.
+#    k114 measured for sops's own document.
 ###############################################################################
 
 subtest 'a decrypted non-finite float is still a bare NV' => sub {
@@ -561,7 +561,7 @@ SKIP: {
     };
 
     ###########################################################################
-    # 13. THE ROUND TRIP karr #122 WAS FILED TO CLOSE: edit of an UNRELATED key.
+    # 13. THE ROUND TRIP k122 WAS FILED TO CLOSE: edit of an UNRELATED key.
     #     Before ADR 0037 it silently retyped the leaf; after it, it croaked.
     ###########################################################################
 
@@ -640,7 +640,7 @@ SKIP: {
     };
 
     ###########################################################################
-    # 15. karr #114, WHICH THIS CLOSES: all twelve spellings, in an encrypted
+    # 15. k114, WHICH THIS CLOSES: all twelve spellings, in an encrypted
     #     slot of a PLAINTEXT, beside what sops writes for the identical file.
     #     The divergence was type:str here against type:float there.
     ###########################################################################

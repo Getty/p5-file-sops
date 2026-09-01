@@ -91,7 +91,7 @@ subtest 'Perl encrypt -> sops decrypt (YAML)' => sub {
 subtest 'Perl encrypt -> sops decrypt (JSON)' => sub {
     # Used to avoid bool-like strings here because the old type ladder typed a
     # string by matching its TEXT, so a quoted "true" was written as
-    # type:bool and came back changed. Fixed by karr #15 (ADR 0002) and
+    # type:bool and came back changed. Fixed by k15 (ADR 0002) and
     # pinned end-to-end in subtest 18/19 below; this is_deeply is what
     # exercises the same case through this test's own path -- a real file on
     # disk, decoded by sops itself, compared as a whole structure.
@@ -703,7 +703,7 @@ subtest 'Values that do not survive Perl numeric conversion' => sub {
 ###############################################################################
 # Test 18: Quoted scalars, us -> sops
 #
-# The hole that hid karr #15 for two releases: nothing in this file used a
+# The hole that hid k15 for two releases: nothing in this file used a
 # string that looks like a number or a boolean. sops types a value by what the
 # parser returned, so a quoted "false" is type:str and a bare false is
 # type:bool -- and a numeric value's plaintext is Go's canonical form, so 007
@@ -887,7 +887,7 @@ JSON
 };
 
 ###############################################################################
-# Test 20: Latin-1-range VALUES, both directions (karr #27, ADR 0003)
+# Test 20: Latin-1-range VALUES, both directions (k27, ADR 0003)
 #
 # Below U+0100 Perl's UTF-8 flag is a storage detail, not meaning: "caf\x{e9}"
 # may be held as one byte or as two and Perl considers both the same string.
@@ -979,7 +979,7 @@ subtest 'Latin-1-range values survive in both directions' => sub {
 };
 
 ###############################################################################
-# Test 21: the top-level `sops` key is reserved, in Go too (karr #18)
+# Test 21: the top-level `sops` key is reserved, in Go too (k18)
 #
 # The rule File::SOPS now enforces is not invented here. sops refuses ANY input
 # document with a top-level `sops` entry -- an already-encrypted file and a
@@ -1016,7 +1016,7 @@ subtest 'sops refuses a document with a top-level sops key' => sub {
     };
     like($err, qr/top-level 'sops' entry/, 'and so does File::SOPS');
 
-    # karr #34: the plaintext half of the same rule was measured above and not
+    # k34: the plaintext half of the same rule was measured above and not
     # asked of File::SOPS, which is exactly where it was still silently
     # deleting the key. `sops: mine` is not a mapping, so parse used to remove
     # it and report no metadata section -- the condition the guard tests for.
@@ -1053,7 +1053,7 @@ subtest 'sops refuses a document with a top-level sops key' => sub {
 };
 
 ###############################################################################
-# Test 22: integers are Go's int64 (karr #28)
+# Test 22: integers are Go's int64 (k28)
 #
 # Measured: sops writes type:int only within int64. Outside it, YAML refuses the
 # document outright (uint64) and JSON silently degrades to a truncated float64.
@@ -1115,7 +1115,7 @@ subtest 'Integer range against the reference' => sub {
 };
 
 ###############################################################################
-# Test 23: null stays null (karr #20d)
+# Test 23: null stays null (k20d)
 #
 # sops leaves a null alone in both formats: it is not encrypted and comes back
 # as a null. File::SOPS turned every undef into an empty string, so a value the
@@ -1168,7 +1168,7 @@ subtest 'Null values survive in both directions' => sub {
 };
 
 ###############################################################################
-# Test 24: type:time, and the shapes Go refuses (karr #19)
+# Test 24: type:time, and the shapes Go refuses (k19)
 #
 # sops emits type:time for a bare RFC3339 scalar and for a bare date. Our type
 # ladder did not know the name, and only reached the right answer because the
@@ -1217,7 +1217,7 @@ YAML
 ###############################################################################
 # Test 25: A document written under a rule other than the default
 #
-# Until karr #17 the rules could not be set through the public API at all, so
+# Until k17 the rules could not be set through the public API at all, so
 # the only document shape this suite ever produced was the default one. The
 # assertion that cannot be satisfied by File::SOPS agreeing with itself is the
 # metadata shape: sops refuses a file carrying two rule fields, so writing the
@@ -1268,7 +1268,7 @@ subtest 'Non-default encryption rule' => sub {
 # Test 26: Rotating a document sops wrote, and handing it back
 #
 # The rotate in test 13 uses a document this library wrote under the defaults,
-# so it could not see karr #13: rotate re-encrypted through encrypt, which
+# so it could not see k13: rotate re-encrypted through encrypt, which
 # built fresh metadata, and everything the document had configured was reset.
 # Here sops chooses the rule, and sops has to accept the result -- which it
 # will not do if the rotated file carries two rule fields, or if its values no
@@ -1319,7 +1319,7 @@ subtest 'Rotate a sops-written document with a non-default rule' => sub {
 ###############################################################################
 # Test 27: A rule applies to the whole path, not one level at a time
 #
-# karr #16. The tree walk asked should_encrypt_key about each key as it
+# k16. The tree walk asked should_encrypt_key about each key as it
 # descended, which is right for the unencrypted rules -- an excluded branch
 # stays excluded anyway -- and wrong for the encrypted ones, where the
 # reference encrypts a leaf as soon as SOME component of its path matches.
@@ -1404,7 +1404,7 @@ YAML
 ###############################################################################
 # Test 28: Unicode through the FILE API (decrypt_file), not just decrypt()
 #
-# karr #23. Every unicode assertion elsewhere in this suite goes through
+# k23. Every unicode assertion elsewhere in this suite goes through
 # decrypt(), which hands back a Perl data structure and never touches a
 # filehandle. decrypt_file is a distinct code path: it re-serializes that
 # structure with YAML::XS::Dump / JSON::MaybeXS(utf8=>1) and writes the
@@ -1734,7 +1734,7 @@ CHILD
 };
 
 ###############################################################################
-# Parser-disagreement fidelity gap (karr #29, ADR 0002 §"Type detection now
+# Parser-disagreement fidelity gap (k29, ADR 0002 §"Type detection now
 # depends on the parser, so parsers can disagree")
 #
 # sops 3.13.3 and File::SOPS both take the value type from the parser, but
@@ -1752,7 +1752,7 @@ CHILD
 # parser output against YAML 1.1/1.2 resolution rules or changing parsers,
 # and the parser change moves bytes on the wire (ADR 0001).
 # -----------------------------------------------------------------------------
-subtest 'Parser-disagreement fidelity gap (sops 3.13.3, recorded, karr #29)' => sub {
+subtest 'Parser-disagreement fidelity gap (sops 3.13.3, recorded, k29)' => sub {
     # ---- YAML: 0x10 and 1_000 resolve to int in yaml.v3, str in YAML::XS ----
     my $yaml_src = <<'YAML';
 hex_int: 0x10
@@ -1843,8 +1843,8 @@ YAML
     # round-trip self-consistently; sops accepts what we write. Same shape
     # as the YAML scalars above.
     #
-    # The Perl side: a bare int above int64 is REFUSED (karr #28, ticket
-    # #10-integer-range.t) because no wire form preserves it -- so the
+    # The Perl side: a bare int above int64 is REFUSED (k28, ticket
+    # k10-integer-range.t) because no wire form preserves it -- so the
     # gap is only reachable through a Perl STRING holding the digits, or
     # through a JSON parse of such a literal.
     my $json_above_int64 = '18446744073709551616';   # 2**64 exactly
@@ -1899,7 +1899,7 @@ JSON
 };
 
 ###############################################################################
-# Test 32: PERL'S OWN BOOLEAN SV, both directions (karr #90, ADR 0016).
+# Test 32: PERL'S OWN BOOLEAN SV, both directions (k90, ADR 0016).
 #
 # `!!1`, `$x > 3`, `builtin::true` and every other comparison result carry
 # SvIsBOOL, and both emitters write such an SV as a bare true/false while

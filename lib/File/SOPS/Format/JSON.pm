@@ -19,12 +19,12 @@ use namespace::clean;
 # emit(), emit() calls File::SOPS::Encrypted->canonical_float_tree, and the walk
 # calls the guards below BACK. So a refusal named a line in Encrypted.pm -- the
 # walk's own recursion -- where the house rule asks for the line the caller
-# wrote encrypt() or emit() on (karr #71). Naming both packages here makes Carp
+# wrote encrypt() or emit() on (k71). Naming both packages here makes Carp
 # walk out of them: it skips a frame when either side trusts the other, so this
 # one list also fixes the guard that croaks from inside the walk.
 #
 # It is the frames, not the messages, that this changes. Every message still
-# names the leaf's key path (karr #68), which is what a caller acts on.
+# names the leaf's key path (k68), which is what a caller acts on.
 our @CARP_NOT = qw( File::SOPS File::SOPS::Encrypted );
 
 # The only JSON encoder AND decoder in this distribution's document path, and
@@ -241,9 +241,9 @@ Third, a literal that overflows a double, C<1> followed by 400 zeros, dies in
 L<File::SOPS::Encrypted/assert_representable> where it used to be written as a
 string; sops refuses that document itself, at unmarshal time.
 
-See karr #63 and
+See k63 and
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>
-for the upper window, karr #101 and
+for the upper window, k101 and
 L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>
 for the lower.
 
@@ -251,18 +251,18 @@ for the lower.
 
 # Give back the leaf Go reads for the same digits: past int64, a float.
 #
-# Everything below -- karr #63, the ORACLE, the GATE -- is the UPPER window's
+# Everything below -- k63, the ORACLE, the GATE -- is the UPPER window's
 # branch, where that leaf is also the one YAML::XS gives. The LOWER window is
 # the other branch: YAML::XS gives a Perl integer there and this parser
 # deliberately does not follow it, it reads no map, and it gates on SVf_IOK.
-# karr #101, docs/adr/0021, and the two-class table above _wide_number.
+# k101, docs/adr/0021, and the two-class table above _wide_number.
 #
 # Cpanel::JSON::XS returns a bare JSON integer literal it cannot hold in an IV
 # or a UV as a plain PV -- a STRING -- so `100000000000000000000` reached the
 # tree indistinguishable from `"100000000000000000000"` (measured: bit-identical
 # SVs, FLAGS 0x4403, POK alone). detect_type therefore called it `str`, and
 # rotate wrote a document sops had written with a NUMBER there back with a
-# string. Silent schema drift on the reference's own file, karr #63.
+# string. Silent schema drift on the reference's own file, k63.
 #
 # There is no big integer in the SOPS data model: past int64 a JSON number is a
 # float64 to Go, and sops writes such a leaf as type:float in an encrypted slot
@@ -284,7 +284,7 @@ for the lower.
 # an IV/UV, and the map separates them without fail: re-measured here across
 # every IV/UV boundary and a set of pathological literals (400-digit integers,
 # 400-digit fractions, 1e309, thirty ones), every plain-PV leaf is either
-# JSON_TYPE_INT or JSON_TYPE_STRING and there is no third case. karr #63's
+# JSON_TYPE_INT or JSON_TYPE_STRING and there is no third case. k63's
 # parking note dismissed this mechanism over encode($data, $type) rewriting the
 # value as UINT64_MAX; that is the ENCODE side, and the map is read here and
 # handed to no encoder.
@@ -333,9 +333,9 @@ sub _restore_wide_numbers {
 # flags of the decoder's own SV are what tell them apart:
 #
 #   IOK       a bare literal Perl DID hold and Go cannot, [2**63 .. 2**64-1] --
-#             a UV here, a float64 there. karr #101, docs/adr/0021.
+#             a UV here, a float64 there. k101, docs/adr/0021.
 #   POK alone a bare literal Perl could NOT hold, past 2**64-1, which the
-#             decoder hands back as a plain string. karr #63, docs/adr/0020.
+#             decoder hands back as a plain string. k63, docs/adr/0020.
 #
 # The flags are read ONCE for both, which is why the second class costs nothing:
 # ADR 0021 measured the fold slightly FASTER than the single read this walk
@@ -354,7 +354,7 @@ sub _restore_wide_numbers {
 # "ver":"1.50"} it retypes three of four string leaves -- measured, '5432' and
 # '007' become ints and '1.50' a float, and the document either changes schema
 # or croaks on ADR 0012's guard, from a walk that never reached the window.
-# That is karr #32's mechanism and ADR 0002's rule. Two things keep it away
+# That is k32's mechanism and ADR 0002's rule. Two things keep it away
 # from here and BOTH are deliberate: the SVf_IOK test that gates the branch,
 # and the copying done by this sub's own `my ($node, $type) = @_` and again by
 # Encrypted::integer_fits_int64. Neither is the redundant half -- the order is
@@ -400,7 +400,7 @@ sub _wide_number {
     # The numification runs on a COPY of the PV. Perl marks a scalar numeric IN
     # PLACE the first time it is read as a number, so numifying the leaf itself
     # would set a flag on an SV the decoder still holds -- the trap ADR 0002
-    # and karr #72/#73 are about, one frame earlier.
+    # and k72/k73 are about, one frame earlier.
     my $digits = "$node";
     my $number = $digits + 0;
 
@@ -493,7 +493,7 @@ section included.
 # decrypt_file writes and what edit hands the editor) is this on its own.
 #
 # It stays ONE sub because the options above have to be identical in both, and
-# until karr #35 they were kept identical by hand: decrypt_file built its own
+# until k35 they were kept identical by hand: decrypt_file built its own
 # encoder with the same options copied across -- and, being a second encoder,
 # it could also have bound a different backend. canonical in particular is not
 # a formatting preference -- the
@@ -516,7 +516,7 @@ sub emit {
 }
 
 # Every referenced leaf the JSON emitter cannot write as the text the digest
-# covers. Closes the asymmetry Format::YAML closed in karr #65 / ADR 0008:
+# covers. Closes the asymmetry Format::YAML closed in k65 / ADR 0008:
 # detect_type calls every reference but a JSON::PP::Boolean `str`, so the
 # digest covers the leaf's STRINGIFICATION, while Cpanel::JSON::XS -- with
 # allow_bignum widened for _float_carrier -- writes a Math::BigFloat /
@@ -542,18 +542,18 @@ sub emit {
 # produce, and every JSON::MaybeXS backend produces -- the only reference
 # whose document form and digest agree.
 #
-# Unblessed refs are in scope deliberately: \1 and \0 are the karr #66 case
+# Unblessed refs are in scope deliberately: \1 and \0 are the k66 case
 # and the callback already has them in hand. They are not blessed, so the
 # earlier "Math::BigFloat / Math::BigInt by name" rule could not see them.
 #
 # Not in assert_representable: that runs on the verify side too, and over
 # leaves that are about to become ENC[...] strings. A referenced leaf in an
 # ENCRYPTED slot works in both formats today (type:str, plaintext = the same
-# stringification) and must keep working. See docs/adr/0008 and karr #66.
+# stringification) and must keep working. See docs/adr/0008 and k66.
 #
 # $where is the leaf's key path from canonical_float_tree, in the shape the MAC
 # walk's messages already use. It goes in FRONT of the message: the class alone
-# told a caller what was wrong and left finding it a manual search (karr #68).
+# told a caller what was wrong and left finding it a manual search (k68).
 sub _reject_referenced_leaf {
     my ($node, $where) = @_;
 
@@ -605,11 +605,11 @@ sub _reject_referenced_leaf {
 #
 # Answering NO sends the leaf to _float_carrier, which writes that same
 # canonical decimal as a BARE NUMBER -- the document YAML has always produced
-# for the same leaf, and, for the karr #78 case, byte-identical to the one a
+# for the same leaf, and, for the k78 case, byte-identical to the one a
 # bare NV of the same value produces (both go through the carrier). 89ed194
 # croaked here instead; that refused every float that arrived through a YAML
 # parse as well, because YAML::XS keeps the source text of every scalar it
-# parses. See docs/adr/0011, which replaces that refusal, and karr #85 for the
+# parses. See docs/adr/0011, which replaces that refusal, and k85 for the
 # question it leaves open (a string half that CONTRADICTS the number, such as
 # dualvar(1.5, 'banana'), is written as 1.5 here and in YAML alike).
 #
@@ -657,7 +657,7 @@ sub _float_roundtrips {
 # The ONE canonical float text it cannot carry is a NEGATIVE ZERO: Math::BigFloat
 # has no signed zero, so new('-0') stringifies as `0` and the assertion below
 # fired -- on a sign, with a message about a precision setting that was never in
-# play (karr #88). Measured: of 2018 canonical texts from value_to_bytes, `-0` is
+# play (k88). Measured: of 2018 canonical texts from value_to_bytes, `-0` is
 # the only one it does not reproduce.
 #
 # So a negative zero is carried by the DOUBLE ITSELF, stripped of the string half
@@ -670,7 +670,7 @@ sub _float_roundtrips {
 #   -0.0     sops -d exit 0, reads back -0     <- this, and what a bare NV writes
 #   -0       sops -d exit 51 (MAC mismatch)    <- Go reads a JSON -0 as an INTEGER
 #
-# The same split the YAML carrier measured in karr #62, in the other format: `-0`
+# The same split the YAML carrier measured in k62, in the other format: `-0`
 # is the canonical text and the one spelling neither implementation reads back.
 #
 # The copy goes through pack/unpack, and NO arithmetic route works. Measured on
@@ -684,8 +684,8 @@ sub _float_roundtrips {
 # -0.0 + 0.0 a POSITIVE zero, so adding zero drops the sign outright. And
 # Perl's arithmetic ops call SvIV_please on their operands, which sets the
 # PRIVATE IOK on the CALLER'S scalar in place -- so the next multiplication of
-# the same leaf takes the integer path and returns a plain 0. That is karr #72
-# and #73 again, one frame further in: the first document written would have
+# the same leaf takes the integer path and returns a plain 0. That is k72
+# and k73 again, one frame further in: the first document written would have
 # been right and every later one wrong, in the same process, from the same
 # tree. pack 'd' reads the NV and nothing else.
 #
@@ -770,7 +770,7 @@ unaffected -- the leaf is an C<ENC[...]> string before this method sees it --
 and L<File::SOPS::Format::YAML> has always written the string half bare and
 correctly, which is the document this now produces too. A dualvar whose text is
 what Cpanel would have written anyway, such as C<1.5> or C<-0.0>, still emits
-as the number it always did, byte for byte. See karr #78,
+as the number it always did, byte for byte. See k78,
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>
 and
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
@@ -787,7 +787,7 @@ leaf's key path and neither half of the value. Refused rather than repaired
 because nothing measurable separates a spelling from a contradiction; an
 B<encrypted> slot is unaffected, and L<File::SOPS::Format::YAML> refuses only
 the contradicting ones, because it writes a source spelling back faithfully.
-See karr #84 and
+See k84 and
 L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<Cpanel::JSON::XS>
@@ -813,7 +813,7 @@ time this method sees it, so an object in an encrypted slot is unaffected and
 still stores its stringification as C<type:str>. L<File::SOPS::Format::YAML>
 has refused the same leaves since 0.003; see
 L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
-and karr #66 for the unblessed-ref half of the same defect.
+and k66 for the unblessed-ref half of the same defect.
 
 =cut
 

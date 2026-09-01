@@ -8,7 +8,7 @@ use Crypt::Age;
 
 use File::SOPS;
 
-# karr #176 -- docs/adr/0066.
+# k176 -- docs/adr/0066.
 #
 # docs/adr/0051 split the rule-regex refusal between the read and write paths:
 # a pattern RE2 cannot compile matches NOTHING on the read path, sops discards

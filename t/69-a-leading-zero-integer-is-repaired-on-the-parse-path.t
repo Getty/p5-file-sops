@@ -14,7 +14,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #127 / docs/adr/0054: a bare leading-zero YAML integer spelling libyaml
+# k127 / docs/adr/0054: a bare leading-zero YAML integer spelling libyaml
 # and Go resolve differently is repaired to Go's resolution on the parse path,
 # so the FILE round trip (encrypt -> write -> decrypt) agrees with `sops -d`
 # on the same number. Four observable effects are pinned here:
@@ -119,7 +119,7 @@ subtest 'a reparable spelling reparsed out of an encrypted document is Go\'s int
         'and the file path is silent -- no public PV to disagree with');
 };
 
-subtest 'the same repair covers all three spellings the karr #127 measurement named' => sub {
+subtest 'the same repair covers all three spellings the k127 measurement named' => sub {
     # 0755 -> 493, 010 -> 8, 017 -> 15. The libyaml/go-yaml IV is decimal in
     # both implementations; only the source of the disagreement is octal.
     for my $case (
@@ -175,7 +175,7 @@ subtest 'an unparsed spelling is left alone -- the predicate gates on SVf_IOK an
     # does not, so the digest would not match what sops re-reads), but the
     # parse-side repair is exercised on the FILE path under mac_only_encrypted
     # -- which is what decrypt_file sees regardless of how the file was
-    # written, and what the karr #127 measurement is really about.
+    # written, and what the k127 measurement is really about.
     #
     # The warnings the encrypt path raises here are the same warnings t/34
     # documents -- the parse-side repair is not in scope for these spellings,

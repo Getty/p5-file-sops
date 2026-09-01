@@ -9,7 +9,7 @@ use File::SOPS;
 use File::SOPS::Metadata;
 use Crypt::Age;
 
-# rotate decrypts and re-encrypts, and until karr #13 the re-encryption threw
+# rotate decrypts and re-encrypts, and until k13 the re-encryption threw
 # away everything in the sops section that rotate had not explicitly read back:
 # encrypt always constructed a fresh Metadata with the defaults. What survived
 # was the age recipients, and only because rotate re-read them by hand.

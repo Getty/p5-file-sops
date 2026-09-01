@@ -10,7 +10,7 @@ use File::SOPS::Format::JSON;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# The top-level `sops` key is RESERVED (karr #18).
+# The top-level `sops` key is RESERVED (k18).
 #
 # Two failures that looked unrelated are one rule in the reference
 # implementation. Measured against sops 3.13.3, all three of these are refused
@@ -219,7 +219,7 @@ for my $format (qw(yaml json)) {
 }
 
 # ----------------------------------------------------------------------------
-# 5. The same rule for a `sops` entry that is NOT a mapping (karr #34).
+# 5. The same rule for a `sops` entry that is NOT a mapping (k34).
 #
 # Everything above is about an entry the parser could turn into a Metadata
 # object. The hole left open was the entry it could not: from_hash returned

@@ -13,7 +13,7 @@ use Crypt::Age;
 # those switches was documented here long before any of them was reachable:
 # File::SOPS->encrypt built its Metadata with the defaults and took no
 # argument for it, so the only rule that could ever be in effect was the
-# _unencrypted default (karr #17).
+# _unencrypted default (k17).
 #
 # The rules themselves are pinned against the reference implementation in
 # t/04-interop.t. What this file pins is that they can be SET, that setting one
@@ -252,7 +252,7 @@ subtest 'a rule we cannot apply is refused on the write side' => sub {
 };
 
 ###############################################################################
-# The rules apply to the whole path, not to one level at a time (karr #16)
+# The rules apply to the whole path, not to one level at a time (k16)
 #
 # The document below is the one measured against sops 3.13.3 with
 # --encrypted-suffix _enc; the expectations are that binary's output, not this

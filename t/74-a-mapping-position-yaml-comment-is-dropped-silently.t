@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #169 / docs/adr/0060 -- the asymmetry between the two positions a
+# k169 / docs/adr/0060 -- the asymmetry between the two positions a
 # sops comment can occupy is deliberate, and THIS file pins it.
 #
 # sops attaches a comment to the node that FOLLOWS it:
@@ -42,7 +42,7 @@ use SopsBin qw(find_sops_bin);
 # So the same loss is loud in one position and silent in the other, and
 # which one a caller gets depends on whether the document happens to
 # contain a sequence. Making the mapping-position case loud would need the
-# read half of karr #148 (YAML::PP's raw token stream) purely to power a
+# read half of k148 (YAML::PP's raw token stream) purely to power a
 # refusal -- a recovered mapping-position comment has nowhere to live,
 # since a Perl hash has no "before a key" slot. The asymmetry is also
 # already sops's own: `sops -e --output-type json` drops mapping-position
@@ -281,7 +281,7 @@ SKIP: {
        . "claim this file makes was NOT verified", 4
         unless $sops_bin;
 
-    # The two plaintexts karr #169 measured against. A carries comments
+    # The two plaintexts k169 measured against. A carries comments
     # in BOTH positions; B carries them in MAPPING position only.
     write_file("$tempdir/A.plain.yaml", <<'YAML');
 # a file-leading comment
@@ -312,7 +312,7 @@ YAML
     write_file("$tempdir/B.enc.yaml", $enc2);
 
     subtest 'sops -d returns the comments intact for both documents' => sub {
-        # The reference behaviour. If this stops holding, karr #169's
+        # The reference behaviour. If this stops holding, k169's
         # premise (that the asymmetry is a this-library-only thing) is
         # gone and the whole ADR pivots.
         for my $case (['A', 'A'], ['B', 'B']) {

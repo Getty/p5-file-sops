@@ -16,7 +16,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# docs/adr/0070 / karr #99: the FORMAL corpus check the ADR names as its own
+# docs/adr/0070 / k99: the FORMAL corpus check the ADR names as its own
 # proof -- re-run before/after the scoped per-scalar quote landed. The claim:
 #
 #   1. EXACTLY nine rows move -- the True/False type divergence (ADR 0019) and
@@ -88,8 +88,8 @@ my %moved = map { $_ => 1 } @MOVED;
 # The sixteen still-ambiguous string rows (docs/adr/0070 sec 2): a bare and a
 # quoted source arrive as the identical Perl string, so quoting a bare-sourced
 # one would be a silent value divergence -- these stay refused until the full
-# karr #127. 15 of them are ADR 0038's fixed corpus minus the seven moved
-# above; the sixteenth, `0xffffffffffffffff`, was found separately (karr #135
+# k127. 15 of them are ADR 0038's fixed corpus minus the seven moved
+# above; the sixteenth, `0xffffffffffffffff`, was found separately (k135
 # / ADR 0070's own context) and is the same string-leaf refusal class.
 my @AMBIGUOUS_REFUSED = (
     '1_000', '0_7', '685_230.15',

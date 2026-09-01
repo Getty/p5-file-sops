@@ -13,7 +13,7 @@ use File::SOPS::Format::JSON;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# karr #35. decrypt_file and edit used to emit the plaintext document through an
+# k35. decrypt_file and edit used to emit the plaintext document through an
 # emitter of their own: a private JSON::MaybeXS->new(utf8/pretty/canonical) with
 # the option values copied across by hand, and a YAML::XS::Dump that at first
 # did not set the boolean mode at all and wrote `true` rather than

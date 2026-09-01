@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 ###############################################################################
-# karr #139 / docs/adr/0064 -- the surrogate-pair divergence between the two
+# k139 / docs/adr/0064 -- the surrogate-pair divergence between the two
 # order-preserving decoders is ACCEPTED AS A LIMIT, and the limit is bound on
 # three measurements and one consequence.
 #
@@ -29,7 +29,7 @@ use SopsBin qw(find_sops_bin);
 #      exercises the divergence is a hand-written or third-party JSON
 #      document.
 #
-# The ORDER-preserving reparse (karr #74, ADR 0036, ADR 0001) walks the
+# The ORDER-preserving reparse (k74, ADR 0036, ADR 0001) walks the
 # YAML::PP tree against the Cpanel tree and refuses at the first key the
 # Cpanel tree does not have, with the message "present in the document but
 # not in the parsed tree" at the leaf's path. That is a FALSE REFUSAL -- the

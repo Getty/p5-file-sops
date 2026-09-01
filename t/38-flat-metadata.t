@@ -11,7 +11,7 @@ use File::SOPS::Metadata::Flat;
 
 # The flat metadata encoding (sops_age__list_0__map_enc) is the ENV and INI
 # formats' way of carrying the `sops` section, and it is a second metadata wire
-# format rather than a formatting detail -- karr #75.
+# format rather than a formatting detail -- k75.
 #
 # This file has two halves, and they prove different things:
 #
@@ -242,12 +242,12 @@ subtest 'mac_only_encrypted writes a bare true, and reads back a STRING' => sub 
     # document fails with "MAC mismatch", exit 51 -- the option picks the
     # digest. The flat formats are untyped, so unflatten hands back the STRING
     # "false", which is TRUE in Perl. A format handler wiring this up has to
-    # map it before from_hash sees it. karr #77 owns that decision.
+    # map it before from_hash sees it. k77 owns that decision.
     my $section = $flat->unflatten({ sops_mac_only_encrypted => 'false' });
     is $section->{mac_only_encrypted}, 'false',
         'unflatten is faithful to an untyped format and returns the string';
     ok !ref $section->{mac_only_encrypted},
-        'it does NOT quietly become a boolean here -- karr #77 owns that';
+        'it does NOT quietly become a boolean here -- k77 owns that';
 };
 
 ###############################################################################

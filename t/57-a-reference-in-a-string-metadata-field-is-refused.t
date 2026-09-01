@@ -10,7 +10,7 @@ use Crypt::Age;
 use File::SOPS;
 use File::SOPS::Metadata;
 
-# karr #145 and karr #146 -- docs/adr/0043, the third answer out of the sweep
+# k145 and k146 -- docs/adr/0043, the third answer out of the sweep
 # that produced docs/adr/0042.
 #
 # Everything in a `sops` section except mac_only_encrypted and

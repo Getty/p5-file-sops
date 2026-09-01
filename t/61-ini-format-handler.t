@@ -18,7 +18,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #37 / docs/adr/0047: the INI format handler.
+# k37 / docs/adr/0047: the INI format handler.
 #
 # What it inherits from the dotenv handler is not re-proved here (the flat
 # metadata, docs/adr/0022; the type rule, docs/adr/0035; the order-preserving
@@ -146,7 +146,7 @@ INI
 ###############################################################################
 # 2. THE COMMENT, and the AAD that decides where it lives.
 #
-# This is the measurement karr #37 was told to make and not to assume. It is
+# This is the measurement k37 was told to make and not to assume. It is
 # ALSO a test of File::SOPS's walk: the path a comment is encrypted under is
 # built there, not here.
 ###############################################################################

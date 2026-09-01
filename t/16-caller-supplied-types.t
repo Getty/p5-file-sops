@@ -8,7 +8,7 @@ use JSON::MaybeXS;
 use File::SOPS;
 use Crypt::Age;
 
-# karr #30 asked for a per-leaf type override on File::SOPS->encrypt, because
+# k30 asked for a per-leaf type override on File::SOPS->encrypt, because
 # a caller who writes `if ($cfg->{port} > 1024)` before encrypting turns the
 # string 8080 into type:int and, said the ticket, has no way to say otherwise.
 #
@@ -43,7 +43,7 @@ subtest 'a numeric read is repairable, and repairs the text too' => sub {
 
     my ($contaminated) = types_of({%cfg});
     is($contaminated->{port}, 'int', 'reading a string numerically retypes it')
-        or diag('this is the defect karr #30 was raised about');
+        or diag('this is the defect k30 was raised about');
 
     # The documented remedy.
     $cfg{$_} = "$cfg{$_}" for keys %cfg;

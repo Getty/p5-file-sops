@@ -12,7 +12,7 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
 
-# karr #159 -- docs/adr/0050. The open half of karr #144 (docs/adr/0044).
+# k159 -- docs/adr/0050. The open half of k144 (docs/adr/0044).
 #
 # `lastmodified: 2026-08-21T09:05:08Z` written PLAIN is a document sops
 # refuses whole, before it decrypts anything: gopkg.in/yaml.v3 resolves a bare
@@ -34,7 +34,7 @@ use File::SOPS::Encrypted;
 # take the one tool that can still repair the file and leave it unopenable by
 # every tool.
 #
-# THE GUARD NEVER FIRES ON A DOCUMENT SOPS READS -- karr #145's condition, and
+# THE GUARD NEVER FIRES ON A DOCUMENT SOPS READS -- k145's condition, and
 # the reason that ticket was closed unimplemented. Two spellings pin it: a
 # quoted timestamp (the ordinary case), and `!!str <bare timestamp>`, where the
 # explicit tag stops go-yaml's implicit resolver before parseTimestamp runs and
@@ -255,7 +255,7 @@ subtest 'a user key called lastmodified is not the sops section' => sub {
 # 3. Every RFC3339 spelling ADR 0044 measured sops ACCEPTING when it is
 #    quoted. Bare, sops refuses every one of them with the resolver message --
 #    the interop block below measures that -- so there is no accepted bare
-#    spelling for this guard to fire on wrongly, which is karr #145's
+#    spelling for this guard to fire on wrongly, which is k145's
 #    condition.
 ###############################################################################
 my @ACCEPTED_QUOTED = (

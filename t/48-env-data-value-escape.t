@@ -12,7 +12,7 @@ use File::SOPS::Metadata::Flat;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
 
-# karr #109 / docs/adr/0030 -- the ENV store applies the flat metadata
+# k109 / docs/adr/0030 -- the ENV store applies the flat metadata
 # encoding's newline escape to DATA values too, and the escape is not
 # injective: a real newline and the two characters backslash-`n` are written
 # as the same bytes, and both read back as a newline.
@@ -34,7 +34,7 @@ use File::SOPS::Encrypted;
 #     strength of exactly that; if sops ever stops doing it, this goes red and
 #     the decision wants re-reading rather than quietly aging.
 #
-# There is no ENV format handler yet (karr #36), so nothing here exercises a
+# There is no ENV format handler yet (k36), so nothing here exercises a
 # writer of ours. What it exercises is File::SOPS::Metadata::Flat against a
 # real sops-written .env file, which t/38 does not do -- t/38 uses a captured
 # layout and a document we wrote ourselves.

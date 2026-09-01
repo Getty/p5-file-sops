@@ -15,14 +15,14 @@ use File::SOPS::Backend::Age;
 use File::SOPS::Format::YAML;
 
 # ----------------------------------------------------------------------------
-# Regressions for the two character-encoding defects (karr #26, #12).
+# Regressions for the two character-encoding defects (k26, k12).
 #
 # Both were invisible to the rest of the suite for the same reason: every
 # assertion in it is ASCII, and in ASCII a character string and its UTF-8
 # encoding are the same bytes. The moment a key or a value leaves ASCII the two
 # rules this file pins come apart:
 #
-#   #26  The AAD reaching AES-GCM must be UTF-8 bytes, because that is what the
+#   k26  The AAD reaching AES-GCM must be UTF-8 bytes, because that is what the
 #        Go implementation authenticates against. It used to be handed over as a
 #        character string, which CryptX either downgraded to Latin-1 (U+0080 to
 #        U+00FF -- a file that looks right and authenticates against nothing) or
@@ -30,7 +30,7 @@ use File::SOPS::Format::YAML;
 #        U+00FF). Both directions were affected, including the MAC, which
 #        re-derives the same AAD to hash each value's plaintext.
 #
-#   #12  The API boundary is characters. decrypt used to return the UTF-8 bytes
+#   k12  The API boundary is characters. decrypt used to return the UTF-8 bytes
 #        straight off the cipher, so a decrypted structure compared unequal to
 #        the one that was encrypted, and decrypt_file encoded those bytes a
 #        second time and wrote mojibake.
@@ -62,12 +62,12 @@ my $V_EMOJI  = "\x{1f510}ok";              # outside the BMP
 # ----------------------------------------------------------------------------
 # 1. A real sops 3.13.3 document whose keys leave ASCII.
 #
-# This is the ground truth for #26: the AAD sops used for the value below is
+# This is the ground truth for k26: the AAD sops used for the value below is
 # "caf\xc3\xa9:passw\xc3\xb6rd:" -- UTF-8, not Latin-1 and not a Perl character
 # string. Before the fix this died in the U+30AD branch and failed
 # authentication in the café branch.
 #
-# It also covers the read side of #12: the values must come back as characters,
+# It also covers the read side of k12: the values must come back as characters,
 # and "notiz_unencrypted" exercises a non-ASCII value that is hashed into the
 # MAC without being encrypted, so the digest and the AAD are both under test.
 # ----------------------------------------------------------------------------
@@ -101,7 +101,7 @@ sops:
     version: 3.13.3
 YAML
 
-subtest 'sops-written document with non-ASCII keys (#26 read side)' => sub {
+subtest 'sops-written document with non-ASCII keys (k26 read side)' => sub {
     my $got = eval {
         File::SOPS->decrypt(
             encrypted  => $SOPS_FIXTURE,
@@ -130,7 +130,7 @@ subtest 'sops-written document with non-ASCII keys (#26 read side)' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# 2. The AAD we WRITE is UTF-8 (#26 write side), asserted without sops.
+# 2. The AAD we WRITE is UTF-8 (k26 write side), asserted without sops.
 #
 # The document is encrypted through the public API, then the ENC value under a
 # non-ASCII path is re-authenticated by hand under each candidate AAD encoding.
@@ -138,7 +138,7 @@ subtest 'sops-written document with non-ASCII keys (#26 read side)' => sub {
 # establishes that as what sops uses.
 # ----------------------------------------------------------------------------
 
-subtest 'AAD written for a non-ASCII path is UTF-8 (#26 write side)' => sub {
+subtest 'AAD written for a non-ASCII path is UTF-8 (k26 write side)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     my $doc = eval {
@@ -199,7 +199,7 @@ subtest 'AAD written for a non-ASCII path is UTF-8 (#26 write side)' => sub {
 # form and failed the MAC. sops rejected it for the same reason.
 # ----------------------------------------------------------------------------
 
-subtest 'AAD does not depend on Perl\'s internal string representation (#26)' => sub {
+subtest 'AAD does not depend on Perl\'s internal string representation (k26)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     my $downgraded = "caf\x{e9}";
@@ -228,7 +228,7 @@ subtest 'AAD does not depend on Perl\'s internal string representation (#26)' =>
     }
 };
 
-subtest 'a key above U+00FF no longer kills the encoder (#26)' => sub {
+subtest 'a key above U+00FF no longer kills the encoder (k26)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     my $data = { $K_WIDE => { $K_WIDE => $V_CJK } };
@@ -251,11 +251,11 @@ subtest 'a key above U+00FF no longer kills the encoder (#26)' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# 3. The boundary rule (#12): what goes in as characters comes back as
+# 3. The boundary rule (k12): what goes in as characters comes back as
 #    characters, through every entry point.
 # ----------------------------------------------------------------------------
 
-subtest 'encrypt/decrypt is an identity for non-ASCII (#12)' => sub {
+subtest 'encrypt/decrypt is an identity for non-ASCII (k12)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     my $data = {
@@ -281,7 +281,7 @@ subtest 'encrypt/decrypt is an identity for non-ASCII (#12)' => sub {
     }
 };
 
-subtest 'decrypt_file does not double-encode (#12)' => sub {
+subtest 'decrypt_file does not double-encode (k12)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
     my $dir = tempdir(CLEANUP => 1);
 
@@ -322,7 +322,7 @@ subtest 'decrypt_file does not double-encode (#12)' => sub {
     }
 };
 
-subtest 'extract returns characters and takes a character path (#12)' => sub {
+subtest 'extract returns characters and takes a character path (k12)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
     my $dir = tempdir(CLEANUP => 1);
 
@@ -346,7 +346,7 @@ subtest 'extract returns characters and takes a character path (#12)' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# 4. The value conversion is UNCONDITIONAL, exactly like the AAD (karr #27,
+# 4. The value conversion is UNCONDITIONAL, exactly like the AAD (k27,
 #    ADR 0003).
 #
 # The value used to be encoded only when the scalar carried Perl's UTF-8 flag.
@@ -372,7 +372,7 @@ subtest 'extract returns characters and takes a character path (#12)' => sub {
 my $V_CAFE_UP   = do { my $s = "caf\x{e9}"; utf8::upgrade($s);   $s };
 my $V_CAFE_DOWN = do { my $s = "caf\x{e9}"; utf8::downgrade($s); $s };
 
-subtest 'the value on the wire does not depend on Perl\'s string storage (#27)' => sub {
+subtest 'the value on the wire does not depend on Perl\'s string storage (k27)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     ok(utf8::is_utf8($V_CAFE_UP),   'one copy carries the UTF-8 flag');
@@ -406,7 +406,7 @@ subtest 'the value on the wire does not depend on Perl\'s string storage (#27)' 
         'and an unflagged one produces the SAME wire bytes');
 };
 
-subtest 'an unencrypted Latin-1-range value passes its own MAC (#27)' => sub {
+subtest 'an unencrypted Latin-1-range value passes its own MAC (k27)' => sub {
     # The zero-configuration case. unencrypted_suffix defaults to
     # _unencrypted, so this value is written into the document by the emitter
     # AND hashed into the digest -- the two have to agree on its bytes.
@@ -436,7 +436,7 @@ subtest 'an unencrypted Latin-1-range value passes its own MAC (#27)' => sub {
     }
 };
 
-subtest 'the same holds for JSON, and for a whole-document round trip (#27)' => sub {
+subtest 'the same holds for JSON, and for a whole-document round trip (k27)' => sub {
     my ($public, $secret) = Crypt::Age->generate_keypair();
 
     my $data = {
@@ -460,7 +460,7 @@ subtest 'the same holds for JSON, and for a whole-document round trip (#27)' => 
     }
 };
 
-subtest 'type:bytes is neither encoded nor decoded (#27 escape hatch)' => sub {
+subtest 'type:bytes is neither encoded nor decoded (k27 escape hatch)' => sub {
     my $key = "\x00" x 32;
 
     # 0x80 alone is not valid UTF-8, so a decode attempt would either mangle it

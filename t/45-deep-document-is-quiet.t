@@ -12,7 +12,7 @@ use Crypt::Age;
 use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
-# karr #117 / docs/adr/0029 -- a deep document is walked QUIETLY, and refused
+# k117 / docs/adr/0029 -- a deep document is walked QUIETLY, and refused
 # where sops refuses it.
 #
 # Every tree walk in this distribution recurses, and perl warns "Deep recursion
@@ -41,7 +41,7 @@ use SopsBin qw(find_sops_bin);
 #   1. The walks are quiet on a document sops accepts. This is the ticket.
 #   2. The same through the public API. Still TODO: the walks in
 #      Encrypted.pm and Format/*.pm were held by another ticket when this
-#      landed and still warn -- karr #120.
+#      landed and still warn -- k120.
 #   3. EVERY walk carries the bound, not just the guard that runs first. This
 #      is load-bearing beyond this file: t/41 bounds its own regression by
 #      lowering $File::SOPS::MAX_DEPTH in a forked child, so a walk that
@@ -87,7 +87,7 @@ my $META = File::SOPS::Metadata->new;
 # must be an ENC[...] string, and a bare one is refused at its path. The
 # fixtures below are plaintext, so _decrypt_tree needs a rule that selects
 # nothing -- otherwise this file measures that refusal instead of the recursion
-# noise it is about. karr #160.
+# noise it is about. k160.
 my $LITERAL = File::SOPS::Metadata->new(unencrypted_regex => '.');
 my $KEY  = "\0" x 32;
 
@@ -137,7 +137,7 @@ sub deep_recursion {
 # The message the depth bound croaks with, as the caller sees it.
 my $TOO_DEEP = qr/nests containers more than \d+ deep/;
 
-# The walks karr #117 could not reach still warn, and every call below that is
+# The walks k117 could not reach still warn, and every call below that is
 # not itself an assertion about warnings would print theirs into the suite's
 # output. Counted here instead, and reported once as a diag.
 my %residual;
@@ -172,12 +172,12 @@ for my $walk (@WALKS) {
 # ---------------------------------------------------------------------------
 # 2. The same through the public API.
 #
-# Section 2 was completed by karr #120: every remaining walk outside SOPS.pm is
+# Section 2 was completed by k120: every remaining walk outside SOPS.pm is
 # now silenced and shares a single key-path rather than copying it per level.
 
 my ($deep_encrypted, $deep_back);
 {
-    # Counted rather than printed. These are the warnings karr #120 still owes
+    # Counted rather than printed. These are the warnings k120 still owes
     # us, and letting them out here would put the very noise this file is about
     # into the suite's own output.
     local $SIG{__WARN__} = \&count_residual;
@@ -318,7 +318,7 @@ SKIP: {
 
     # A deep document sops does accept, written by this library and read back
     # by the binary. This is also what says the walks still build the same key
-    # paths after karr #117 stopped copying them per level: a path that came
+    # paths after k117 stopped copying them per level: a path that came
     # out wrong would move the AAD and the MAC, and sops would refuse the file.
     my $deep = do {
         local $SIG{__WARN__} = \&count_residual;

@@ -20,7 +20,7 @@ use namespace::clean;
 # distribution -- Format::ENV and Format::INI load IT, and the dependency runs
 # only that way.
 #
-# karr #158 moved it out of File/SOPS/Format/ENV.pm, where karr #36's
+# k158 moved it out of File/SOPS/Format/ENV.pm, where k36's
 # one-new-file boundary put it, WITHOUT renaming it: both handlers already tie
 # to this package name, and the move is meant to change nothing at all. It
 # keeps ENV's namespace because that is the handler it was written for; INI

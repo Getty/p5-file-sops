@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #63 / docs/adr/0020: a bare JSON integer literal too wide for a Perl
+# k63 / docs/adr/0020: a bare JSON integer literal too wide for a Perl
 # IV/UV used to come back from Format::JSON::parse as a plain string SV,
 # bit-identical to the same digits quoted -- so `rotate` silently rewrote a
 # NUMBER sops had written as a STRING. It is now the same leaf YAML::XS has
@@ -51,7 +51,7 @@ sub scratch_file {
 
 # Public SVf_IOK/NOK/POK, as a compact string ('' for undef, 'REF' for a
 # reference) -- the same three bits _wide_number's flag gate (formerly the
-# separate _plain_pv_leaf, folded into _wide_number by karr #101 / ADR 0021)
+# separate _plain_pv_leaf, folded into _wide_number by k101 / ADR 0021)
 # and _has_public_pv read, so a test failure here means the same thing the
 # code's own gate means.
 sub _pub_bits {
@@ -293,7 +293,7 @@ subtest 'the same overflow does not croak on read paths: +Inf as the number, all
     }
 };
 
-subtest 'karr #101 (fixed here, docs/adr/0021): the int64max..uint64max window is a float, not a refusal' => sub {
+subtest 'k101 (fixed here, docs/adr/0021): the int64max..uint64max window is a float, not a refusal' => sub {
     my ($just_over) = File::SOPS::Format::JSON->parse(q({"v":9223372036854775808}));  # int64max + 1
     is(File::SOPS::Encrypted->detect_type($just_over->{v}), 'float',
         'int64max + 1 is now the float leaf class -- the fix moved it, not the boundary above it');
@@ -304,7 +304,7 @@ subtest 'karr #101 (fixed here, docs/adr/0021): the int64max..uint64max window i
         File::SOPS->encrypt(data => { v_secret => $just_over->{v} },
             recipients => [$public], format => 'json');
     };
-    is($@, '', 'encrypt() no longer refuses it -- this is the karr #101 fix');
+    is($@, '', 'encrypt() no longer refuses it -- this is the k101 fix');
     like($doc, qr/"v_secret"\s*:\s*"ENC\[[^\]]*type:float\]"/,
         'and types the encrypted slot float, sops\'s own answer for this window')
         if defined $doc;
@@ -313,8 +313,8 @@ subtest 'karr #101 (fixed here, docs/adr/0021): the int64max..uint64max window i
     is(File::SOPS::Encrypted->detect_type($far_edge->{v}), 'float',
         'and so does the far edge of the window, UINT64_MAX');
 
-    # The line #101 does NOT move: one past UINT64_MAX was already ADR 0020's
-    # leaf (karr #63), produced by _wide_number's plain-PV branch rather than
+    # The line k101 does NOT move: one past UINT64_MAX was already ADR 0020's
+    # leaf (k63), produced by _wide_number's plain-PV branch rather than
     # the IOK branch this fix added. Kept here so a later change to the IOK
     # branch cannot silently swallow the neighbouring branch's territory.
     my ($past_it) = File::SOPS::Format::JSON->parse(q({"v":18446744073709551616}));  # UINT64_MAX + 1
@@ -409,13 +409,13 @@ JSON
     }
 
     # uint64_max (18446744073709551615, the far edge of int64max..uint64max) is
-    # no longer OUTSIDE the target class: karr #101 / ADR 0021 moved it into
+    # no longer OUTSIDE the target class: k101 / ADR 0021 moved it into
     # _wide_number's IOK branch, the same fix subtest 10 above pins. This
     # subtest's claim -- a leaf the walk does not repair is never assigned to
     # -- now says the opposite for this one key, and that opposite is asserted
     # explicitly rather than just dropped from the loop above.
     isnt(_raw_flags($walked->{uint64_max}), _raw_flags($unwalked->{uint64_max}),
-        'uint64_max: INSIDE the target class as of karr #101 -- gets a new SV, unlike every key above');
+        'uint64_max: INSIDE the target class as of k101 -- gets a new SV, unlike every key above');
     is("$walked->{uint64_max}", "$unwalked->{uint64_max}",
         'but the digits it prints are unchanged: still all of 18446744073709551615');
 

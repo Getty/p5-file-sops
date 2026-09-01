@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #87 / docs/adr/0018: with mac_only_encrypted set, the MAC covers
+# k87 / docs/adr/0018: with mac_only_encrypted set, the MAC covers
 # encrypted values only -- so an UNENCRYPTED leaf whose YAML spelling Go
 # resolves differently cannot make the document fail its own verification, and
 # ADR 0013's guard is deliberately not installed there.
@@ -38,7 +38,7 @@ use SopsBin qw(find_sops_bin);
 # encrypt path and the warning is the only safety net there. Subtests 7 and 9
 # used to pin the round-trip divergence on the FILE path: an `encrypt` output
 # written to disk and read back through `decrypt_file` gave 493 to sops and
-# 0755/755 to us, with no warning in between. karr #127 / docs/adr/0054 closed
+# 0755/755 to us, with no warning in between. k127 / docs/adr/0054 closed
 # that -- the parse path now repairs the same spellings to Go's resolution, so
 # both readers see the same value. Subtests 7 and 9 were rewritten to pin the
 # NEW claim (silent on read; the same value out as sops reads in).
@@ -132,7 +132,7 @@ subtest 'the warning never carries the value' => sub {
 ###############################################################################
 
 subtest 'a leaf the two resolvers agree on is silent' => sub {
-    # `True` was in this list until karr #92 and is not a leaf the two
+    # `True` was in this list until k92 and is not a leaf the two
     # resolvers agree on: they derive the same digest BYTES from it and a
     # different TYPE, which this check could not see. It warns now, in this
     # mode and without the flag alike -- t/35-string-go-reads-as-boolean.t and
@@ -166,7 +166,7 @@ subtest 'the plaintext emitters stay silent' => sub {
     # ADR 0013 keeps the refusal out of there; the warning has no more business
     # in it, and a caller cannot act on a warning about a file they are
     # DECRYPTING. The file path goes through Format::YAML::parse, which now
-    # repairs a leading-zero integer to Go's resolution (karr #127 /
+    # repairs a leading-zero integer to Go's resolution (k127 /
     # docs/adr/0054) -- so the spelling that the direct encrypt API just wrote
     # is the one we do NOT see again, and the test pins that.
     my ($document, $died, $warnings) = encrypt_capturing(
@@ -231,7 +231,7 @@ SKIP: {
         like($out, qr/^mode_unencrypted: 493$/m, 'reading the leaf as 493');
 
         # The decrypt path goes through Format::YAML::parse, which repaired
-        # the leading-zero integer to Go's resolution (karr #127 /
+        # the leading-zero integer to Go's resolution (k127 /
         # docs/adr/0054). The two implementations now agree on the same
         # number; the warning that encrypt raised is the only remaining trace
         # of what would have been a value-level divergence.

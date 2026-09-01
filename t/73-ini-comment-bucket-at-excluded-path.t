@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #172 / docs/adr/0059 -- the wire half of a comment BUCKET that reaches
+# k172 / docs/adr/0059 -- the wire half of a comment BUCKET that reaches
 # _encrypt_tree carrying ENC[...,type:comment] STRINGS at a path the encryption
 # rule EXCLUDES.
 #
@@ -26,7 +26,7 @@ use SopsBin qw(find_sops_bin);
 # the INI emitter is handed a `''` slot holding a list of plain strings.
 #
 # Two things that follow, both wrong:
-#   * `_encrypt_tree`'s leaf guard (karr #168) refuses the strings at the
+#   * `_encrypt_tree`'s leaf guard (k168) refuses the strings at the
 #     excluded path, because the rule says "no ENC-comment strings here" -- but
 #     those strings are not a CALLER's, they are what the previous encrypt
 #     already wrote, and refusing them is the bug;
@@ -38,7 +38,7 @@ use SopsBin qw(find_sops_bin);
 # the wire half (`!ref && encrypted_type eq 'comment'`), and the ARRAY branch
 # in `_encrypt_tree` returns the bucket list as-is when it holds nothing but
 # those strings -- so the comment line a previous encrypt wrote is preserved,
-# the type:comment label is too, and karr #168's refusal never reaches a
+# the type:comment label is too, and k168's refusal never reaches a
 # bucket item because the walk no longer descends into one.
 #
 # Reachable only through `ignore_mac => 1` plus `rotate` (or `edit`). The MAC
@@ -61,7 +61,7 @@ $ENV{SOPS_AGE_KEY_FILE} = "$tempdir/key.txt";
 #    the rule so the SECTION is excluded, and try to rotate the file with
 #    ignore_mac => 1.
 #
-#    Without the fix: rotate dies inside _encrypt_tree -- karr #168 fires at
+#    Without the fix: rotate dies inside _encrypt_tree -- k168 fires at
 #    the leaf because should_encrypt_path returned false on the bucket item,
 #    or the ARRAY branch re-encrypts it as a type:str and the INI emitter
 #    refuses the result with "a plain scalar is not one".
@@ -122,7 +122,7 @@ subtest 'a misruled INI file with an ENC-comment bucket rotates under ignore_mac
 #    the path they build, which is what keeps the encrypt-side AAD equal
 #    to the decrypt-side AAD. The data-key gate _is_comment_leaf carries
 #    is dropped for the wire half because _encrypt_tree has no key to
-#    open it with -- the same predicate karr #168 added to the leaf guard.
+#    open it with -- the same predicate k168 added to the leaf guard.
 ###############################################################################
 
 subtest '_is_comment_bucket recognises both shapes, and nothing else' => sub {

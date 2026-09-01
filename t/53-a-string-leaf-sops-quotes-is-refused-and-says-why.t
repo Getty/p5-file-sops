@@ -16,7 +16,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #135 / docs/adr/0039: a leaf that is ALREADY A STRING, whose spelling
+# k135 / docs/adr/0039: a leaf that is ALREADY A STRING, whose spelling
 # libyaml leaves bare and Go's yaml.v3 resolves into something else.
 #
 # ADR 0013's guard refuses it, and the refusal is right for as long as this
@@ -57,7 +57,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #135 is a disagreement about a document sops WRITES AND READS "
+      . "k135 is a disagreement about a document sops WRITES AND READS "
       . "and this library refuses to produce, and neither half can be shown "
       . "without it. Fix: run maint/fetch-sops .sops-bin to install the "
       . "pinned binary where the suite finds it automatically, or set "
@@ -128,7 +128,7 @@ sub warning_for {
 }
 
 ###############################################################################
-# 1. THE REFUSAL MESSAGE FOR A STRING LEAF. karr #135's own finding: for this
+# 1. THE REFUSAL MESSAGE FOR A STRING LEAF. k135's own finding: for this
 #    leaf sops resolves nothing, and there is no decimal to pass.
 ###############################################################################
 
@@ -223,11 +223,11 @@ subtest 'the mac_only_encrypted warning splits the same way' => sub {
 };
 
 ###############################################################################
-# 4. WHAT MOVED AND WHAT DID NOT (docs/adr/0070, karr #99). Fifteen of the 22
-#    rows are STILL PINNED AS A DEFECT (karr #135): a document sops writes and
-#    reads, and this library still cannot produce one -- the full karr #127 is
-#    still their gate (ADR 0070 corrects ADR 0039's premise that karr #99 +
-#    the landed, leading-zero-only karr #127 would flip all 22; it flips
+# 4. WHAT MOVED AND WHAT DID NOT (docs/adr/0070, k99). Fifteen of the 22
+#    rows are STILL PINNED AS A DEFECT (k135): a document sops writes and
+#    reads, and this library still cannot produce one -- the full k127 is
+#    still their gate (ADR 0070 corrects ADR 0039's premise that k99 +
+#    the landed, leading-zero-only k127 would flip all 22; it flips
 #    exactly seven). Those seven -- the non-finite spellings -- now write,
 #    double-quoted, and round-trip through the real binary.
 ###############################################################################
@@ -239,7 +239,7 @@ subtest 'the 15 ambiguous rows are still refused; the 7 non-finite are now quote
                 recipients => [$public], format => 'yaml');
         };
         is($document, undef,
-            "[$spelling] still refused -- karr #135, docs/adr/0039");
+            "[$spelling] still refused -- k135, docs/adr/0039");
     }
 
     for my $spelling (@NOW_QUOTED) {
@@ -410,7 +410,7 @@ subtest 'writing the document as JSON works for all 22' => sub {
 
 ###############################################################################
 # 8. THE EMITTER'S QUOTING RULE, which is the whole reason for the refusal. If
-#    this ever fails, YAML::XS has gained something and karr #135 / karr #99 can
+#    this ever fails, YAML::XS has gained something and k135 / k99 can
 #    be reopened -- that is what it is here for.
 ###############################################################################
 
@@ -435,7 +435,7 @@ subtest 'YAML::XS quotes what looks_like_number accepts, and nothing else' => su
 
     # AND THE CARRIER ROUTE IS WORSE, not merely unavailable: the emitter's rule
     # reads the SV, so a dualvar's numeric half takes the quoting AWAY. This is
-    # why docs/adr/0037's carrier cannot be reused for karr #135.
+    # why docs/adr/0037's carrier cannot be reused for k135.
     is(_token(dualvar(0, '0755')), '0755',
         'a dualvar carrier writes even `0755` bare');
     is(_token(dualvar(0, '.inf')), '.inf',

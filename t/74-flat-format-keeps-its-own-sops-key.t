@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #157: a flat format keeps its own `sops` data key.
+# k157: a flat format keeps its own `sops` data key.
 #
 # In a FLAT format the metadata does not live under a key called `sops` -- it
 # lives in top-level `sops_*` keys (ENV) or in a `[sops]` section (INI). So a
@@ -41,7 +41,7 @@ use SopsBin qw(find_sops_bin);
 #   2. INI still refuses a data tree with a `sops` section, with the INI
 #      handler's own message (so the SOPS-level guard correctly defers to it).
 #   3. YAML and JSON still refuse a top-level `sops` data key, with the
-#      existing message -- the karr #18 double-encryption failure mode.
+#      existing message -- the k18 double-encryption failure mode.
 #   4. rotate() on an env file holding a `sops` data key works, because the
 #      guard no longer fires through it.
 #   5. encrypt_in_place on an env plaintext file with `sops=` works, because
@@ -77,7 +77,7 @@ sub sops_run {
 }
 
 ###############################################################################
-# 1. ENV accepts a `sops` data key -- the headline of karr #157.
+# 1. ENV accepts a `sops` data key -- the headline of k157.
 ###############################################################################
 
 subtest 'ENV accepts a top-level `sops` data key' => sub {
@@ -158,7 +158,7 @@ subtest 'INI refuses a `sops` data section, via the INI handler' => sub {
 };
 
 ###############################################################################
-# 3. YAML and JSON still refuse a top-level `sops` data key -- the karr #18
+# 3. YAML and JSON still refuse a top-level `sops` data key -- the k18
 #    failure mode is unchanged.
 ###############################################################################
 
@@ -178,7 +178,7 @@ subtest 'YAML and JSON still refuse a `sops` data key' => sub {
 
     # The existing t/09-reserved-sops-key.t covers the YAML/JSON behaviour in
     # depth (encrypt_file, encrypt_in_place, the non-mapping shapes, etc.).
-    # Pinning it here is the regression net for karr #157: if a future change
+    # Pinning it here is the regression net for k157: if a future change
     # ever weakens the YAML/JSON guard, this file is where the smoke shows.
 };
 

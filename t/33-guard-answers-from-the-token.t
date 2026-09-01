@@ -8,7 +8,7 @@ use File::SOPS::Encrypted;
 use File::SOPS::Format::YAML;
 
 # ----------------------------------------------------------------------------
-# karr #91 / docs/adr/0017: the foreign-resolution guard (karr #86, ADR 0013)
+# k91 / docs/adr/0017: the foreign-resolution guard (k86, ADR 0013)
 # used to gate AND decide on the leaf's stringification, and only asked the
 # emitter what it actually writes once the stringification had already
 # disagreed.
@@ -20,7 +20,7 @@ use File::SOPS::Format::YAML;
 #   !!1    1           true                       True
 #   !!0    (empty)     false                      False
 #
-# karr #90 came through the second step by exactly this route: its digest text
+# k90 came through the second step by exactly this route: its digest text
 # was `1` back then, `_go_agrees("1", "1")` said yes, and the guard returned
 # before asking the emitter anything -- while the document carried a bare
 # `true`. sops -d exit 51, silently. The false half never even reached the
@@ -30,7 +30,7 @@ use File::SOPS::Format::YAML;
 # over 225 leaves x 2 slots x 2 handlers = 900 rows, before and after in one
 # process, 900 identical outcomes and 0 moved. What is asserted below is the
 # MECHANISM -- that the verdict now comes from the token and from nothing else,
-# which is not visible in any document today and was not visible in karr #90's
+# which is not visible in any document today and was not visible in k90's
 # either, until sops read it.
 #
 # No binary is needed: every claim here is about which question this module
@@ -50,7 +50,7 @@ unless ($HAS_BOOL_SV) {
     plan skip_all =>
         "perl $] has no boolean SV (SvIsBOOL arrived in 5.36), so no leaf on "
       . "this perl has a written token that differs from its stringification "
-      . "and the gap karr #91 describes cannot be reached. See docs/adr/0016.";
+      . "and the gap k91 describes cannot be reached. See docs/adr/0016.";
 }
 
 # Everything this file asserts is about which of the guard's own helpers get
@@ -89,9 +89,9 @@ sub guard_asked {
     @entered  = ();
     my @warnings;
     # Some corpus leaves (a bare 'True'/'False', in either its parsed or its
-    # raw-Perl-string form) are, since karr #92 / ADR 0019, a str-vs-bool type
+    # raw-Perl-string form) are, since k92 / ADR 0019, a str-vs-bool type
     # divergence the emitter carps about. This file is about a different,
-    # earlier mechanism (karr #91, the gate and the stringification proxy) and
+    # earlier mechanism (k91, the gate and the stringification proxy) and
     # none of its subtests inspect the message, so it is captured here rather
     # than left to print -- t/35-string-go-reads-as-boolean.t is where that
     # warning is asserted. Exposed on the return value rather than silently
@@ -159,7 +159,7 @@ subtest 'a boolean is resolved as the token, not as its stringification' => sub 
 subtest 'the stringification is never what the guard resolves' => sub {
     # The general form of the case above: for any leaf the guard looks at, the
     # strings it resolves through its model of Go are exactly the token. Before
-    # karr #91 an int, a float and a hinted string passed this too -- their two
+    # k91 an int, a float and a hinted string passed this too -- their two
     # strings are the same -- and a boolean did not.
     my @leaves = (
         [ 'an int'             => 5432 ],

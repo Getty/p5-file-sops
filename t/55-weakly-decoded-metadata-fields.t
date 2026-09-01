@@ -15,7 +15,7 @@ use File::SOPS::Format::JSON;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
 
-# karr #138, handed over from karr #77 -- docs/adr/0042.
+# k138, handed over from k77 -- docs/adr/0042.
 #
 # sops decodes its `sops` section through mapstructure with WeaklyTypedInput,
 # in EVERY format and not only in the untyped flat ones. Two fields in that

@@ -8,7 +8,7 @@ use File::SOPS;
 use File::SOPS::Comment;
 
 # ----------------------------------------------------------------------------
-# karr #173 -- docs/adr/0067. The open half of docs/adr/0049's Limits.
+# k173 -- docs/adr/0067. The open half of docs/adr/0049's Limits.
 #
 # A PLAINTEXT comment stands in a slot the encryption rule SELECTS. sops keeps
 # it at exit 0 -- one of the four bare shapes docs/adr/0049 measured -- but it

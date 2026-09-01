@@ -11,7 +11,7 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
 
-# karr #144 -- docs/adr/0044.
+# k144 -- docs/adr/0044.
 #
 # `lastmodified` is the AAD the metadata MAC is authenticated with, and sops
 # does NOT use the document's text for it. It decodes the field into a Go
@@ -233,7 +233,7 @@ SKIP: {
         }
     };
 
-    # karr #144's second direction, closed by karr #159 and docs/adr/0050.
+    # k144's second direction, closed by k159 and docs/adr/0050.
     # go-yaml v3 resolves a BARE RFC3339 scalar as !!timestamp, where
     # mapstructure wants a string, so sops refuses the document. This library
     # still READS it -- the values and the MAC are unaffected, and a refusal
@@ -262,7 +262,7 @@ SKIP: {
             };
         };
 
-        ok $back, 'this library reads it -- permissive on purpose, karr #159';
+        ok $back, 'this library reads it -- permissive on purpose, k159';
         is scalar @warnings, 1, 'and warns about it exactly once'
             or diag(explain(\@warnings));
         like $warnings[0], qr/unconvertible type 'time\.Time'/,

@@ -377,7 +377,7 @@ subtest 'a path_regex that will not compile is an error' => sub {
     like($err, qr/\Q$root\E/, 'and which config file');
 };
 
-subtest 'a path_regex with a construct RE2 does not have is refused at match time (karr #53)' => sub {
+subtest 'a path_regex with a construct RE2 does not have is refused at match time (k53)' => sub {
     # sops compiles the same string with Go RE2; the patterns below compile in
     # Perl but sops rejects them with "error parsing regexp". A config that
     # uses them silently picks a different rule (or none) in sops, so refusing
@@ -412,18 +412,18 @@ subtest 'a path_regex with a construct RE2 does not have is refused at match tim
     ok(exists $args{recipients}, 'a (?i) pattern compiles in both RE2 and Perl');
 };
 
-subtest 'a path_regex with a construct the narrow scan let through is now refused (karr #164)' => sub {
-    # karr #53 named lookarounds and backreferences only -- atomic groups,
+subtest 'a path_regex with a construct the narrow scan let through is now refused (k164)' => sub {
+    # k53 named lookarounds and backreferences only -- atomic groups,
     # possessive quantifiers, the (?x) family and a handful of RE2-rejected
     # escapes were still being taken here, and each one of those silently
     # selected a different rule (or none) at sops. The scan is now the
-    # Metadata one (karr #161 / docs/adr/0048), which names every construct
+    # Metadata one (k161 / docs/adr/0048), which names every construct
     # RE2 cannot compile -- measured on sops 3.13.3 against a .sops.yaml
     # path_regex, every row below triggers "error parsing regexp" at exit 1.
     #
     # The wording stays path_regex-specific because sops's behaviour here is
     # different: it REPORTS the compile error rather than discarding it (karr
-    # #164), so the croak still says "sops will refuse to compile".
+    # k164), so the croak still says "sops will refuse to compile".
     for my $case (
         [ 'atomic group',           '(?>foo)'           ],
         [ 'possessive quantifier',  'fo*+o'             ],
@@ -450,11 +450,11 @@ subtest 'a path_regex with a construct the narrow scan let through is now refuse
         like($err, qr/\Q$root\E/,  "$name: also names the config file")
             or diag("err: $err");
         like($err, qr/sops will refuse to compile/,
-            "$name: still names the path_regex-specific outcome (karr #164)");
+            "$name: still names the path_regex-specific outcome (k164)");
     }
 };
 
-subtest 'a path_regex both dialects accept but read apart is refused (karr #164)' => sub {
+subtest 'a path_regex both dialects accept but read apart is refused (k164)' => sub {
     # The Metadata scan covers two kinds of disagreement, not one: a
     # construct RE2 rejects (above) AND one both dialects compile but read
     # differently (\v is vertical TAB to RE2 and vertical-whitespace CLASS to

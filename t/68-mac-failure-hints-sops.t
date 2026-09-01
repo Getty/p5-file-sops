@@ -11,7 +11,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #174 / docs/adr/0052 -- the DIAGNOSIS half of the three tickets.
+# k174 / docs/adr/0052 -- the DIAGNOSIS half of the three tickets.
 #
 # The read direction was closed by t/67: sops writes a Go display form where
 # an unencrypted slot's MAC should hold the typed value, and both

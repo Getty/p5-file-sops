@@ -17,7 +17,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #84 / docs/adr/0012: an INTEGER leaf that carries its own, different
+# k84 / docs/adr/0012: an INTEGER leaf that carries its own, different
 # string form made the document fail its own MAC, in both formats.
 #
 # detect_type reads the public SVf_IOK first, so such a scalar is an int and
@@ -45,7 +45,7 @@ use SopsBin qw(find_sops_bin);
 # different sets, and why the last five rows above must keep working exactly
 # as they do: they are documents this library and sops read correctly today.
 #
-# REFUSED, not repaired, unlike the float leaf of the same shape (karr #78 /
+# REFUSED, not repaired, unlike the float leaf of the same shape (k78 /
 # ADR 0011): both halves are a candidate for what the caller meant, and nothing
 # measurable separates a spelling (007 for 7) from a contradiction (five for
 # 5) -- dualvar(0,'zero') numifies to the very number it would be compared
@@ -61,7 +61,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #84 is a byte disagreement with sops, and the half that must "
+      . "k84 is a byte disagreement with sops, and the half that must "
       . "keep working can only be proved against it. Fix: run "
       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -132,7 +132,7 @@ subtest 'the empty string half is refused too, in both formats' => sub {
         };
         my $error = $@;
         is($document, undef, "[$format] no document is written");
-        like($error, qr/cannot write an integer leaf/, "[$format] with the karr #84 message");
+        like($error, qr/cannot write an integer leaf/, "[$format] with the k84 message");
     }
 };
 
@@ -180,7 +180,7 @@ subtest '[json] the same leaves are refused, because Cpanel quotes them' => sub 
         };
         my $error = $@;
         is($document, undef, "[$key] no document is written");
-        like($error, qr/cannot write an integer leaf/, "[$key] with the karr #84 message");
+        like($error, qr/cannot write an integer leaf/, "[$key] with the k84 message");
     }
 
     # ...and the one whose spelling IS the canonical decimal still goes through.
@@ -199,7 +199,7 @@ subtest '[json] the same leaves are refused, because Cpanel quotes them' => sub 
 ###############################################################################
 
 subtest 'a dualvar whose halves agree is written, byte for byte, in both formats' => sub {
-    # dualvar(7, '7') is the karr #84 row that agreed by luck and must keep
+    # dualvar(7, '7') is the k84 row that agreed by luck and must keep
     # agreeing: the two halves say the same thing, so there is nothing to
     # resolve and no emitter is even asked.
     for my $case ([ 'json', 'File::SOPS::Format::JSON', qr/"v" : 7/ ],
@@ -292,7 +292,7 @@ subtest 'a decrypted tree re-encrypts in its own format, and is refused in the o
     # _deserialize_value builds an int with IOK and no public POK, so nothing
     # this library DECRYPTS can trip the guard. An UNENCRYPTED leaf is a
     # different matter: it comes back out of the document's own parser with the
-    # source spelling attached, which is exactly the karr #84 shape -- harmless
+    # source spelling attached, which is exactly the k84 shape -- harmless
     # while the document stays YAML, refused on the way into JSON, where it
     # used to produce a file sops rejects with exit 51.
     my $document = File::SOPS->encrypt(
@@ -324,7 +324,7 @@ subtest 'a decrypted tree re-encrypts in its own format, and is refused in the o
     };
     is($cross, undef, 'the way into JSON is refused');
     like($@, qr/cannot write an integer leaf/,
-        'with the karr #84 message, where it used to write a MAC-broken file');
+        'with the k84 message, where it used to write a MAC-broken file');
 };
 
 done_testing;

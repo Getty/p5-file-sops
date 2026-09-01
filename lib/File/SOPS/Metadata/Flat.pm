@@ -207,7 +207,7 @@ see docs/adr/0022.
 
 Measured for data values as well as metadata -- sixteen inputs against sops
 3.13.3 -- this method reproduces the ENV store's B<data>-value writer byte for
-byte, which is why the ENV handler (karr #36) reuses it rather than growing a
+byte, which is why the ENV handler (k36) reuses it rather than growing a
 second escape. Only backslash-C<n> is affected there too: a lone backslash,
 C<\t>, C<=>, C<#>, quotes and surrounding whitespace all survive untouched.
 B<INI does not escape its data values at all> -- a multi-line one goes into
@@ -494,7 +494,7 @@ mismatch>, exit 51 -- the option selects the digest. Perl's C<'false'> is
 B<true>, so a caller reading that string as Perl would turn a document sops
 reads into one this library computes the wrong digest for.
 
-B<karr #77 decided where the coercion belongs and karr #138 landed it, and the
+B<k77 decided where the coercion belongs and k138 landed it, and the
 decision is that this method keeps doing exactly what it does.> docs/adr/0035
 measured it and docs/adr/0042 implemented it: sops decodes its metadata section
 B<weakly in every format>, not only in the flat ones. In a B<nested YAML>

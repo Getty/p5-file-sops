@@ -9,7 +9,7 @@ use File::SOPS;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
-# karr #59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on the
+# k59: a non-finite float (NaN, +Inf, -Inf) has no agreed form on the
 # wire. value_to_bytes writes +Inf / -Inf / NaN -- the same text Go's
 # strconv.FormatFloat produces -- but no emitter can carry it. Cpanel writes
 # null (silently rounded), JSON::XS writes bare inf (invalid JSON, sops exit
@@ -23,7 +23,7 @@ use Crypt::Age;
 # accepted by _deserialize_value today (and sops writes it), and stays
 # accepted.
 #
-# karr #141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC PV:
+# k141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC PV:
 # a leaf WITHOUT one (a bare NV, like `9**9**9`) is no longer refused here.
 # docs/adr/0037's _non_finite_token_leaf manufactures the carrying dualvar for
 # it in YAML (the carrier consults go-yaml's own twelve tokens and the YAML
@@ -63,8 +63,8 @@ my %cases = (
 
 ###############################################################################
 # 1. WRITE-SIDE SPLIT. A bare NV (no public PV) used to be refused by
-#    assert_representable's unencrypted-slot guard in both formats (karr #59).
-#    karr #141 / docs/adr/0062 removed that refusal: the YAML carrier
+#    assert_representable's unencrypted-slot guard in both formats (k59).
+#    k141 / docs/adr/0062 removed that refusal: the YAML carrier
 #    (docs/adr/0037) manufactures the carrying dualvar `.inf` / `-.inf` /
 #    `.nan`, and the leaf now reaches the document as that token. JSON has no
 #    such carrier, and the refusal moves to the emit walk's mac_covered croak.
@@ -107,7 +107,7 @@ for my $name (sort keys %cases) {
 
         ok(!defined $encrypted, 'encrypt() does not return a document');
         like($@, qr/cannot write a non-finite float to this SOPS document/,
-            'and dies with the emit walk\'s message, not the karr #59 one')
+            'and dies with the emit walk\'s message, not the k59 one')
             or diag("died: $@");
         like($@, qr/\bx_unencrypted\b/,
             'and names the leaf path')
@@ -142,11 +142,11 @@ for my $format (qw(yaml json)) {
 ###############################################################################
 # 3. THE EXEMPTION: -0.0 is NOT in the refusal list. It is finite (a == a,
 #    and -0.0 == 0.0), so the check above returns no form and the value
-#    passes. JSON -0.0 is the row that the karr #58 work went out of its
+#    passes. JSON -0.0 is the row that the k58 work went out of its
 #    way to protect (ADR 0005), and it has to keep working.
 ###############################################################################
 
-subtest '-0.0 is NOT refused (the JSON -0.0 / karr #58 happy path)' => sub {
+subtest '-0.0 is NOT refused (the JSON -0.0 / k58 happy path)' => sub {
     for my $format (qw(yaml json)) {
         my $encrypted = eval {
             File::SOPS->encrypt(
@@ -181,7 +181,7 @@ subtest "encrypt_value with type=>'float' on a caller-forced 'Inf' string still 
     # Caller says: this is a type:float, plaintext 'Inf'. The plaintext is
     # what the digest covers, and the type is what _deserialize_value will
     # route through. assert_representable sees a STRING ('Inf'), not a
-    # float, so the karr #59 refusal does not fire.
+    # float, so the k59 refusal does not fire.
     my $key = "\x00" x 32;       # 32 bytes; not a real key, ok for our purposes
     my $enc = File::SOPS::Encrypted->encrypt_value(
         value => 'Inf',

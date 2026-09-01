@@ -12,14 +12,14 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #124, #125, #137 / docs/adr/0052 -- the READ half of the three tickets.
+# k124, k125, k137 / docs/adr/0052 -- the READ half of the three tickets.
 #
 # ADR 0035 decided what our ENV and INI emitters write into an unencrypted
 # slot: exactly Encrypted->value_to_bytes, the bytes the digest covers. Both
-# handlers now do that (karr #36, #37), and t/50, t/59 and t/61 pin it.
+# handlers now do that (k36, k37), and t/50, t/59 and t/61 pin it.
 #
 # What no ticket asked, and what this file is for, is the other direction:
-# CAN WE READ WHAT SOPS WRITES? That is the karr #102/#105/#108 class -- a
+# CAN WE READ WHAT SOPS WRITES? That is the k102/k105/k108 class -- a
 # document sops produces and this library refuses -- and it is the most
 # expensive defect type here.
 #
@@ -32,7 +32,7 @@ use SopsBin qw(find_sops_bin);
 # same bytes, and THAT document sops reads at exit 0. `v_unencrypted=<nil>` is
 # a null in one document and the string "<nil>" in another, byte for byte;
 # only the digest tells them apart. So "recognise <nil> on read and hand back
-# undef" -- the fix karr #125's body invites by naming the bytes -- corrupts a
+# undef" -- the fix k125's body invites by naming the bytes -- corrupts a
 # working value in order to rescue an unreadable one. Section 3 is what goes
 # red if anyone tries it.
 #

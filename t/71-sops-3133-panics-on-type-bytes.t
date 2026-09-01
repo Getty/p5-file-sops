@@ -7,7 +7,7 @@ use File::Temp qw(tempdir);
 use File::SOPS;
 use File::SOPS::Encrypted;
 
-# karr #136 / docs/adr/0003, the "known limitation" section.
+# k136 / docs/adr/0003, the "known limitation" section.
 #
 # A document carrying a `type:bytes` cell panics sops 3.13.3 on the read path:
 # exit 2, `panic: runtime error: hash of unhashable type []uint8`, in the

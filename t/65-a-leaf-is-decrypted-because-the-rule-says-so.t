@@ -11,7 +11,7 @@ use File::SOPS;
 use File::SOPS::Comment;
 use File::SOPS::Metadata;
 
-# karr #160 -- docs/adr/0049, the structural half of karr #150.
+# k160 -- docs/adr/0049, the structural half of k150.
 #
 # sops decrypts RULE-FIRST: the encryption rule decides what a leaf IS, and the
 # leaf's own text never gets a vote. A leaf the rule EXCLUDES is a literal
@@ -169,7 +169,7 @@ subtest 'rotate and edit cannot write an excluded leaf out in plaintext' => sub 
 # 4. The other direction: a bare leaf the rule SELECTS
 ###############################################################################
 subtest 'a bare leaf the rule selects is refused, not silently encrypted' => sub {
-    # The mirror image, and until karr #160 it was read as a literal and then
+    # The mirror image, and until k160 it was read as a literal and then
     # ENCRYPTED by the next write -- a value that was readable, turned into
     # ciphertext under a key the caller may not keep. sops stops at exit 25.
     my $doc = with_rule(base_document(), 'encrypted_regex: "."');

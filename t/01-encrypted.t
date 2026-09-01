@@ -46,7 +46,7 @@ is($decrypted, $original, 'decrypt roundtrip successful');
 
 # Test different types.
 #
-# The type comes from the SCALAR, not from its text (karr #15, ADR 0002), so
+# The type comes from the SCALAR, not from its text (k15, ADR 0002), so
 # every case here is spelled as the Perl value it means: '42' is a string and
 # stays type:str, while 42 is an integer. A Perl string that reads like a
 # number or a boolean is still a string -- that is the whole rule -- so the

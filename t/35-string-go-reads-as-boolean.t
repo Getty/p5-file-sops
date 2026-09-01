@@ -14,7 +14,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #92 / docs/adr/0019: a `True` or `False` STRING is a str here and a bool
+# k92 / docs/adr/0019: a `True` or `False` STRING is a str here and a bool
 # to sops, and both digest the same bytes -- so the MAC holds, sops -d exits 0,
 # and the guard ADR 0013 built could not see it. What diverges is the TYPE.
 #
@@ -28,7 +28,7 @@ use SopsBin qw(find_sops_bin);
 # `sops edit` each rewrote the leaf to a bare `true`, after which THIS module
 # read a JSON::PP::Boolean where the caller put a string.
 #
-# SINCE docs/adr/0070 (karr #99) the leaf is QUOTED on the way out instead of
+# SINCE docs/adr/0070 (k99) the leaf is QUOTED on the way out instead of
 # carped about: `x_unencrypted: "True"`, MAC-neutral (the digest covers `True`
 # either way), and sops now reads a STRING too -- the divergence this file used
 # to document is gone, and a sops write-back keeps it a string (measured: `sops

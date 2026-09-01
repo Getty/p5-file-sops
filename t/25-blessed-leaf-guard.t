@@ -19,7 +19,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #65 / docs/adr/0008: Format::YAML::emit now refuses every referenced
+# k65 / docs/adr/0008: Format::YAML::emit now refuses every referenced
 # leaf except an EXACT JSON::PP::Boolean, because YAML::XS writes anything
 # else as a Perl-specific !!perl/ tagged structure while detect_type digests
 # it as the leaf's STRINGIFICATION -- a document whose own MAC states a
@@ -35,7 +35,7 @@ use SopsBin qw(find_sops_bin);
 # mac_only_encrypted document, and a bare true/false under unencrypted_suffix
 # is completely ordinary. A guard without that exception would have made
 # those documents unwritable, which is why the two regressions below are
-# listed first, in the wire lane's own priority order on karr #65.
+# listed first, in the wire lane's own priority order on k65.
 #
 # Interop runs where a mistake would actually be invisible without it (cases
 # 1, 2, 5): a croak has nothing sops could look at, so cases 3, 4, 6 and 7 are
@@ -52,7 +52,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #65 is a wire-format guard, and interop is how a mistake in it "
+      . "k65 is a wire-format guard, and interop is how a mistake in it "
       . "(refusing too much, or too little) would actually be seen. Fix: run "
       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -242,7 +242,7 @@ subtest 'the guard is reachable through the public File::SOPS->encrypt, not only
     };
     ok(!defined $encrypted, 'encrypt() does not return a document');
     like($@, qr/\bSome::Random::Class\b/, 'with the same guard message');
-    like($@, qr/\Apoison_unencrypted: /, 'and the key path in front of it (karr #68)');
+    like($@, qr/\Apoison_unencrypted: /, 'and the key path in front of it (k68)');
 };
 
 subtest 'the guard reaches a rejected leaf nested inside a hash and inside an array (YAML)' => sub {
@@ -258,7 +258,7 @@ subtest 'the guard reaches a rejected leaf nested inside a hash and inside an ar
     ok(!defined $nested, 'a poison leaf nested inside a hash is refused');
     like($@, qr/\bSome::Random::Class\b/, 'with the guard message');
     like($@, qr/\Aouter_unencrypted:inner_unencrypted: /,
-        'and the key path in front of it (karr #68)');
+        'and the key path in front of it (k68)');
 
     my $in_array = eval {
         File::SOPS::Format::YAML->emit({
@@ -268,11 +268,11 @@ subtest 'the guard reaches a rejected leaf nested inside a hash and inside an ar
     ok(!defined $in_array, 'a poison leaf inside an array is refused');
     like($@, qr/\bSome::Random::Class\b/, 'with the guard message');
     like($@, qr/\Alist_unencrypted:2: /,
-        'and the key path, array index included (karr #68)');
+        'and the key path, array index included (k68)');
 };
 
 ###############################################################################
-# 3a. karr #68: the refusal says WHERE. It named the class and left finding the
+# 3a. k68: the refusal says WHERE. It named the class and left finding the
 #     leaf to the reader -- in a document of a hundred keys, a manual search.
 #     The path comes from canonical_float_tree's walk and is the shape
 #     File::SOPS::_at_path already uses for the MAC walk's own messages, so a
@@ -291,7 +291,7 @@ subtest 'the guard reaches a rejected leaf nested inside a hash and inside an ar
 #     already pins that the message carries no value.
 ###############################################################################
 
-subtest 'the YAML refusal names the leaf location (karr #68)' => sub {
+subtest 'the YAML refusal names the leaf location (k68)' => sub {
     my @cases = (
         [ 'a leaf at the document root',
           bless({}, 'Some::Random::Class'),

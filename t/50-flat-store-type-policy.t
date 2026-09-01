@@ -11,9 +11,9 @@ use File::SOPS::Metadata::Flat;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
 
-# karr #77 / docs/adr/0035 -- the per-format type policy for the two untyped
-# stores, ENV and INI, and with it karr #124 (an unencrypted boolean) and
-# karr #125 (an unencrypted null).
+# k77 / docs/adr/0035 -- the per-format type policy for the two untyped
+# stores, ENV and INI, and with it k124 (an unencrypted boolean) and
+# k125 (an unencrypted null).
 #
 # The ticket's premise was that the env store writes type:str for everything,
 # `NUM=5` included, so our scalar-derived type (ADR 0002) would produce a
@@ -48,7 +48,7 @@ use File::SOPS::Encrypted;
 #     row, which rows it then cannot read, and that the bytes ADR 0035 writes
 #     instead are bytes sops itself writes and reads at exit 0.
 #
-# There is no ENV or INI format handler (karr #36, #37), so nothing here
+# There is no ENV or INI format handler (k36, k37), so nothing here
 # exercises a writer of ours.
 
 # label, YAML spelling, the bytes the digest covers, does sops's own
@@ -166,7 +166,7 @@ SKIP: {
 
     ###########################################################################
     subtest 'type:str on everything is the INPUT store, not the output one' => sub {
-        # karr #77's premise, and the half of it that is true.
+        # k77's premise, and the half of it that is true.
         write_bytes("$dir/plain.env", "STR=hello\nNUM=5\nFLT=1.5\nBOOL=true\n");
         my $from_env = run_ok($sops_bin, "sops -e on a plaintext .env",
             "-e --age '$pub' '$dir/plain.env'");
@@ -247,7 +247,7 @@ SKIP: {
                   . ' the text the digest covers';
             }
 
-            # karr #125's worse half: an encrypted null is not encrypted, so a
+            # k125's worse half: an encrypted null is not encrypted, so a
             # bare <nil> reaches the file and sops stops before the MAC.
             my (undef, $nil_exit) = decrypt_flat($sops_bin, "$dir/null_e.$ext", $fmt);
             is $nil_exit, 25,
@@ -310,7 +310,7 @@ SKIP: {
 
     ###########################################################################
     subtest 'the metadata half: sops decodes its section weakly in EVERY format' => sub {
-        # karr #75 handed karr #77 the question of what Metadata::Flat->unflatten
+        # k75 handed k77 the question of what Metadata::Flat->unflatten
         # should do with `sops_mac_only_encrypted=false`, which it returns as the
         # STRING 'false' -- true in Perl, and that option selects the digest.
         #

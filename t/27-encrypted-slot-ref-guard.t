@@ -17,12 +17,12 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #67 / docs/adr/0008 closing-the-encrypted-slot-gap: assert_representable
+# k67 / docs/adr/0008 closing-the-encrypted-slot-gap: assert_representable
 # now refuses an UNBLESSED reference in an encrypted slot, alongside the
 # existing int64 check.
 #
 # For an UNENCRYPTED slot the digest-vs-emitter guard lives in
-# Format::{YAML,JSON}->emit (karr #65 / karr #66, t/25 and t/26). An unblessed
+# Format::{YAML,JSON}->emit (k65 / k66, t/25 and t/26). An unblessed
 # ref there breaks the doc: YAML::XS writes !!perl/ref / !!perl/code, the
 # digest covers SCALAR(0x...) / CODE(0x...), the two halves disagree, the file
 # is unreadable.
@@ -33,7 +33,7 @@ use SopsBin qw(find_sops_bin);
 # stringification into the MAC digest -- so the document verifies (doc and
 # digest agree on the text), but the stored text is a heap address, which
 # differs per run and is meaningless on a later read. The pre-fix code wrote
-# the file and the caller had no reason to notice. That is the defect #67
+# the file and the caller had no reason to notice. That is the defect k67
 # exists to close.
 #
 # ADR 0008 measured that a BLESSED object in an encrypted slot DOES round-trip
@@ -62,7 +62,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #67 is a wire-format guard, and interop is how a mistake in it "
+      . "k67 is a wire-format guard, and interop is how a mistake in it "
       . "(refusing too much, or too little) would actually be seen. Fix: run "
       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -193,7 +193,7 @@ for my $format (qw(yaml json)) {
 #    so a `{secret => [1,2,3]}` is encrypted as three ints and a
 #    `{secret => {a=>1}}` as one int. The contents are walked, not the ref.
 #    SCALAR and CODE refs hit the leaf branch directly, and their
-#    stringification IS the heap address -- that is the defect karr #67
+#    stringification IS the heap address -- that is the defect k67
 #    closes.
 ###############################################################################
 
@@ -349,7 +349,7 @@ subtest 'the guard fires from assert_representable directly, format-blind' => su
 ###############################################################################
 
 subtest 'reading an older-style encrypted ref-string is unaffected (read-side not guarded)' => sub {
-    # Make a value whose stringification is exactly what the pre-#67 code
+    # Make a value whose stringification is exactly what the pre-k67 code
     # would have written -- the address of an unblessed SCALAR ref.
     my $v = \1;
     my $address_text = "$v";   # 'SCALAR(0x...)'

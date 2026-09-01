@@ -8,7 +8,7 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 
 # ----------------------------------------------------------------------------
-# karr #140: a plaintext emit refused to write a non-finite float whose
+# k140: a plaintext emit refused to write a non-finite float whose
 # string half contradicted its number, and the leaf was silently retyped to
 # str on the next parse -- a decrypt_file -> encrypt_file round trip changing
 # the type without warning. The MAC-covered paths refused the same shape all
@@ -24,7 +24,7 @@ use File::SOPS::Format::JSON;
 # already the one the encrypt side used, so the rule is in one place and the
 # plaintext emit does not have to repeat it. Bare NV leaves are not in scope
 # here: _non_finite_token_leaf manufactures a token for them in YAML and
-# croaks in JSON, which is the existing karr #113 / karr #134 behaviour, and
+# croaks in JSON, which is the existing k113 / k134 behaviour, and
 # without the `_has_public_pv` filter on the new call assert_representable
 # would refuse those bare infinities the encrypt side does not.
 #
@@ -52,7 +52,7 @@ sub error_from {
 # 1. THE FIX. A non-finite float whose public PV contradicts its number is
 #    refused on the plaintext emit path -- in both formats, in both formats
 #    where the leaf is a hash value, and in arrays. The croak is the same
-#    message the encrypt side already used (karr #59), so the rule and the
+#    message the encrypt side already used (k59), so the rule and the
 #    message live in one place: assert_representable.
 ###############################################################################
 
@@ -75,7 +75,7 @@ subtest 'plaintext emit refuses a non-finite float whose PV contradicts its numb
         });
         ok($err, "[$name] YAML refuses it");
         like($err, qr/non-finite float/,
-            "[$name] and dies with the karr #59 message");
+            "[$name] and dies with the k59 message");
 
         my $jerr = error_from(sub {
             File::SOPS::Format::JSON->emit({ v => $leaf });
@@ -90,7 +90,7 @@ subtest 'the croak names the key path' => sub {
     # already names the path (the colon-joined key sequence, '(document root)'
     # for the empty path, array indices included). _leaf_location is the one
     # helper, here -- a caller who has to learn two notations for the same
-    # document is the reason karr #68 exists at all.
+    # document is the reason k68 exists at all.
     for my $path (
         [ 'top-level hash'    => { v => dualvar($INF, 'banana') } ],
         [ 'nested hash'       => { db => { pass => dualvar($INF, 'banana') } } ],
@@ -114,11 +114,11 @@ subtest 'the croak names the key path' => sub {
 #    move them.
 ###############################################################################
 
-subtest 'a bare non-finite float: YAML manufactures a token (karr #134)' => sub {
+subtest 'a bare non-finite float: YAML manufactures a token (k134)' => sub {
     # Bare NV with no PV. _non_finite_token_leaf manufactures a dualvar for
     # it in YAML, asserting the carrier's answer carries the token PV AND
-    # the bytes the digest covers -- exactly the karr #134 path. The karr
-    # #140 fix is gated on _has_public_pv, so a bare NV does not hit the new
+    # the bytes the digest covers -- exactly the k134 path. The karr
+    # k140 fix is gated on _has_public_pv, so a bare NV does not hit the new
     # call to assert_representable.
     for my $case (
         [ '+Inf' => $INF,  '.inf'  ],
@@ -135,7 +135,7 @@ subtest 'a bare non-finite float: YAML manufactures a token (karr #134)' => sub 
 subtest 'a non-finite dualvar carrying the right go-yaml token still passes' => sub {
     # ADR 0031's `banana` row, narrowed: the leaf is a `type:float` if and
     # only if its PV is one of the twelve tokens go-yaml resolves to the
-    # same double. The karr #140 fix does not touch this case -- the new
+    # same double. The k140 fix does not touch this case -- the new
     # assert_representable call passes for it because _carries_go_non_finite_
     # token is true.
     for my $case (
@@ -155,7 +155,7 @@ subtest 'a non-finite dualvar carrying the right go-yaml token still passes' => 
 subtest 'a finite float still passes' => sub {
     # The assert_representable `encrypted => 0` branch only fires for non-
     # finite doubles. A finite one is never on the wrong side of the
-    # _carries_go_non_finite_token predicate, and the karr #140 fix must
+    # _carries_go_non_finite_token predicate, and the k140 fix must
     # not slow it down or refuse it.
     for my $value (0.0, 1.5, -3.5, 0.1 + 0.2, 1e20) {
         for my $fmt (qw( yaml json )) {

@@ -15,7 +15,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #134 / docs/adr/0037: a non-finite float is written as a token, or not
+# k134 / docs/adr/0037: a non-finite float is written as a token, or not
 # at all.
 #
 # ADR 0034 closed the UNENCRYPTED half of the plaintext round trip. This is the
@@ -46,11 +46,11 @@ use SopsBin qw(find_sops_bin);
 # whatever it says, so `dualvar(+Inf, 'banana')` is not overwritten on the
 # strength of the number beside it, and nothing a caller can build becomes
 # writable to an UNENCRYPTED slot that was not writable before. (The encrypted
-# slot did move, one ticket later: karr #122 / docs/adr/0040, which is a
+# slot did move, one ticket later: k122 / docs/adr/0040, which is a
 # decision about that slot's bytes and not about this walk, which never sees
 # an encrypted leaf at all.)
 #
-# karr #141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC
+# k141 / docs/adr/0062 NARROWED the unencrypted-slot refusal by PUBLIC
 # PV: a bare non-finite float (no public PV at all) is no longer refused
 # here, because the YAML carrier manufactures the carrying dualvar. Section 5
 # below is the row that moved -- the bare-NV rows there now write in YAML
@@ -257,7 +257,7 @@ subtest 'and it is not written as null any more' => sub {
 };
 
 ###############################################################################
-# 4. karr #140: a contradicting string half is now refused on the plaintext
+# 4. k140: a contradicting string half is now refused on the plaintext
 #    emit path too. The MAC-covered paths refused these already --
 #    assert_representable in _compute_mac's leaf sweep, and the mac_covered
 #    croak below for the JSON case. The plaintext path used to fall through
@@ -268,7 +268,7 @@ subtest 'and it is not written as null any more' => sub {
 #    canonical_float_tree now consults assert_representable's `encrypted => 0`
 #    branch, so the rule is in one place and the contradiction is caught for
 #    every caller of the walk: decrypt_file, edit, _serialize_plaintext, and a
-#    direct emit() on a tree the caller built. The croak is the karr #59
+#    direct emit() on a tree the caller built. The croak is the k59
 #    message the encrypt side already used, and the caller's text is never
 #    named in it.
 ###############################################################################
@@ -288,7 +288,7 @@ subtest 'a contradicting string half is now refused on the plaintext path' => su
         });
         ok($err, "[$name] YAML refuses it");
         like($err, qr/non-finite float/,
-            "[$name] with the karr #59 message");
+            "[$name] with the k59 message");
 
         my $jerr = error_from(sub {
             File::SOPS::Format::JSON->emit({ v => dualvar($double, $pv) });
@@ -300,7 +300,7 @@ subtest 'a contradicting string half is now refused on the plaintext path' => su
 subtest 'a stated string half that IS the go-yaml token still passes through' => sub {
     # No regression: a non-finite dualvar whose PV is one of the twelve tokens
     # go-yaml resolves to this same double is exactly what ADR 0031 made
-    # writable, and the karr #140 fix does not touch that case.
+    # writable, and the k140 fix does not touch that case.
     for my $case (
         [ '.inf'  => $INF,  '.inf'  ],
         [ '.Inf'  => $INF,  '.Inf'  ],
@@ -320,7 +320,7 @@ subtest 'a stated string half that IS the go-yaml token still passes through' =>
 #    Nothing a caller can construct becomes writable there that was not
 #    writable before -- except: a BARE non-finite float now WRITES in YAML,
 #    because docs/adr/0037's YAML carrier manufactures the carrying dualvar.
-#    The karr #141 / docs/adr/0062 narrowing by PUBLIC PV is the reason: a
+#    The k141 / docs/adr/0062 narrowing by PUBLIC PV is the reason: a
 #    bare NV has no PV at all, so the gate does not fire and the carrier is
 #    called instead. JSON has no carrier, so JSON still refuses (from the
 #    emit walk's mac_covered croak). The contradiction rows are unchanged:
@@ -367,7 +367,7 @@ subtest 'the encrypt path answers exactly as it did' => sub {
     }
 };
 
-# karr #122 / docs/adr/0040: the encrypted slot is no longer refused. It never
+# k122 / docs/adr/0040: the encrypted slot is no longer refused. It never
 # had a token on its wire in the first place -- it carries type:float and the
 # plaintext derived from the number, which is what `sops -e` writes in both
 # formats -- so nothing this ADR decided applies to it either way. What is
@@ -439,12 +439,12 @@ SKIP: {
     };
 
 ###############################################################################
-# 7. `edit` NO LONGER RETYPES IT SILENTLY -- and since karr #122 /
+# 7. `edit` NO LONGER RETYPES IT SILENTLY -- and since k122 /
 #    docs/adr/0040 it no longer refuses either. This change wrote the token
 #    into the plaintext, which is the half that made the round trip possible;
-#    karr #122 removed the rung above it, so the leaf now goes back into the
+#    k122 removed the rung above it, so the leaf now goes back into the
 #    encrypted slot as the float it always was. `sops edit`'s answer is
-#    measured beside it, unchanged: it was the row karr #122 had to reach, and
+#    measured beside it, unchanged: it was the row k122 had to reach, and
 #    the next subtest is where the two are compared.
 ###############################################################################
 
@@ -537,7 +537,7 @@ SKIP: {
 # 9. ADR 0034's ROWS MUST NOT MOVE. The unencrypted slot was closed three
 #    commits before this one and has nothing to do with the emit fix; if any of
 #    this moves, the repair has started keying on something other than the
-#    absence of a string half. karr #141 / docs/adr/0062 NARROWED the guard
+#    absence of a string half. k141 / docs/adr/0062 NARROWED the guard
 #    by public PV: a leaf whose public PV is clear (a bare NV, no token of its
 #    own) is no longer refused by assert_representable in the unencrypted
 #    slot, but the carrier still manufactures the carrying dualvar, so the

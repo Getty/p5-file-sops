@@ -6,7 +6,7 @@ use Test::More;
 use File::SOPS;
 
 # ----------------------------------------------------------------------------
-# karr #156: _path_to_aad answers ':' for an empty path -- the document ROOT --
+# k156: _path_to_aad answers ':' for an empty path -- the document ROOT --
 # which is what Go's strings.Join([], ":") + ":" would produce. The earlier
 # code returned '' for an undef OR empty array, with no live caller reaching
 # the empty case (every format builds at least one key path before a leaf) but

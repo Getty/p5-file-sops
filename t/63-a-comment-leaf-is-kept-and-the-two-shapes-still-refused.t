@@ -13,7 +13,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #108 / docs/adr/0024, FLIPPED by karr #76 / docs/adr/0041.
+# k108 / docs/adr/0024, FLIPPED by k76 / docs/adr/0041.
 #
 # sops attaches a YAML comment to the node that FOLLOWS it. Above a mapping key
 # that stays a `#ENC[...,type:comment]` line, which YAML::XS discards and sops
@@ -25,7 +25,7 @@ use SopsBin qw(find_sops_bin);
 #         - ENC[AES256_GCM,...,type:comment]
 #         - ENC[AES256_GCM,...,type:str]
 #
-# karr #108 measured what that did (sops 3.13.3, three lines of plaintext):
+# k108 measured what that did (sops 3.13.3, three lines of plaintext):
 #
 #   sops -d                                exit 0
 #   File::SOPS->decrypt                    MAC verification failed
@@ -393,7 +393,7 @@ SKIP: {
         unless $sops_bin;
 
     subtest 'sops really writes a list comment as a list element' => sub {
-        # The three-line minimal reproducer from karr #108, verbatim.
+        # The three-line minimal reproducer from k108, verbatim.
         write_file("$tempdir/seq.plain.yaml", "list:\n  # only a sequence comment\n  - one\n");
         my $out = `$sops_bin -e --age $public --input-type yaml --output-type yaml $tempdir/seq.plain.yaml 2>&1`;
         is($? >> 8, 0, 'sops -e writes the document') or diag($out);
@@ -434,7 +434,7 @@ SKIP: {
 
         write_file("$tempdir/flow.enc.yaml", $out);
         # A refusal at flow:0 under ADR 0024. sops reads [1, 2] with a
-        # comment; so do we, where karr #108 read
+        # comment; so do we, where k108 read
         # [' after a flow seq', 1, 2].
         my $got = eval { File::SOPS->decrypt(
             encrypted => scalar read_file("$tempdir/flow.enc.yaml"),

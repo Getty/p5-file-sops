@@ -16,11 +16,11 @@ use File::SOPS::Format::YAML;
 # document, because YAML::XS::Load in scalar context returns only that one.
 # Encrypting a two-document file therefore wrote one document back and threw
 # the other away, with no error and nothing in the output to show it had
-# happened. karr #31 / docs/adr/0033 replaces that with real support.
+# happened. k31 / docs/adr/0033 replaces that with real support.
 # WIRE (File::SOPS::Format::YAML->parse, _parse_in_document_order, the MAC
 # over all documents), the public API's READ path -- decrypt returns an
 # ArrayRef of HashRefs for a real stream and a bare HashRef for a single
-# document, extract takes a document => $n argument -- and, since karr #31
+# document, extract takes a document => $n argument -- and, since k31
 # step 5, the WRITE path too: encrypt/encrypt_file/encrypt_in_place/rotate and
 # decrypt_file-to-YAML all write a multi-document stream now, with one sops:
 # block per document (byte-identical) and the documents joined by --- (points
@@ -32,9 +32,9 @@ use File::SOPS::Format::YAML;
 #     -- is refused (Decision 3), because sops itself drops all but the first
 #     document there, silently, at exit 0 (N1), and this library declines to
 #     reproduce that data loss;
-#   * edit on a multi-document stream is refused (karr #41): edit re-encrypts
+#   * edit on a multi-document stream is refused (k41): edit re-encrypts
 #     under a NEW data key, and docs/adr/0033 deliberately leaves
-#     edit-on-a-stream semantics open rather than settling karr #41 by
+#     edit-on-a-stream semantics open rather than settling k41 by
 #     accident.
 #
 # The measured sops model is recorded in docs/adr/0033 and in
@@ -170,7 +170,7 @@ subtest 'single-document streams are unaffected' => sub {
 
 ###############################################################################
 subtest 'encrypt_file and encrypt_in_place write a multi-document stream, and sops -d reads it back' => sub {
-    # karr #31 step 5 landed: the emitter's document separators exist now, so
+    # k31 step 5 landed: the emitter's document separators exist now, so
     # these two write the WHOLE stream instead of refusing it. Proven against
     # the real binary in the direction that actually matters -- can sops read
     # what this library writes -- not just that this library can read its own
@@ -372,10 +372,10 @@ subtest 'rotate re-keys a multi-document stream, and sops -d still reads it (poi
 };
 
 ###############################################################################
-subtest 'edit refuses a multi-document stream, with its own karr #41 message' => sub {
+subtest 'edit refuses a multi-document stream, with its own k41 message' => sub {
     # Unlike rotate, edit's refusal is deliberate rather than mechanical:
     # docs/adr/0033 leaves edit-on-a-stream semantics open because edit
-    # re-encrypts under a NEW data key (karr #41), and enabling it here would
+    # re-encrypts under a NEW data key (k41), and enabling it here would
     # settle that question by accident. Independent fixture from the rotate
     # subtest above.
     my $sops_bin = find_sops_bin();
@@ -405,8 +405,8 @@ subtest 'edit refuses a multi-document stream, with its own karr #41 message' =>
     };
     ok(!$ok, 'edit dies rather than opening a multi-document original for editing');
     like($@, qr/edit on a multi-document YAML stream \(2 documents\) is not supported/,
-        'with the edit-specific karr #41 message, not the old write-pending one');
-    like($@, qr/edit re-encrypts under a NEW data key \(unlike sops edit, karr #41\)/,
+        'with the edit-specific k41 message, not the old write-pending one');
+    like($@, qr/edit re-encrypts under a NEW data key \(unlike sops edit, k41\)/,
         'naming why: the new-data-key divergence, not an unimplemented mechanic');
     like($@, qr/docs\/adr\/0033 deliberately leaves edit-on-a-stream semantics open/,
         'and pointing at the ADR that left this open');
@@ -450,7 +450,7 @@ PERL
 subtest 'a multi-document stream can become YAML but not json/env/ini (docs/adr/0033 Decision 3)' => sub {
     # json/env/ini have no document stream. sops converts to them silently and
     # loses every document past the first, on read AND write (N1) -- exactly
-    # the karr #14 defect class. This library refuses instead.
+    # the k14 defect class. This library refuses instead.
     # _serialize_plaintext is the one place a decrypted stream meets an output
     # format; there is currently no PUBLIC path that reaches it with more than
     # one document and a non-YAML target, because decrypt_file uses the SAME
@@ -474,7 +474,7 @@ subtest 'a multi-document stream can become YAML but not json/env/ini (docs/adr/
     like($json, qr/"alpha"/, 'a single document still converts to JSON');
     like($json, qr/"one"/, 'and carries its value');
 
-    # YAML CAN hold a stream (point 5), and now actually does: karr #31 step 5
+    # YAML CAN hold a stream (point 5), and now actually does: k31 step 5
     # landed the emitter's own document separators, so this WRITES rather than
     # refusing.
     my $yaml = File::SOPS::_serialize_plaintext($documents, 'yaml');
@@ -782,8 +782,8 @@ subtest 'N5/Decision 5: a cross-document anchor is a stream sops reads that this
     # `a: &x 1\n---\nb: *x\n` and resolves the alias in document 2 against
     # document 1's anchor. Decision 5 is that there is no fix at this layer --
     # the parser's own error must surface, loudly, rather than this library
-    # silently mis-reading or truncating the stream. karr #132, parked
-    # alongside #31.
+    # silently mis-reading or truncating the stream. k132, parked
+    # alongside k31.
     my $sops_bin = find_sops_bin();
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "

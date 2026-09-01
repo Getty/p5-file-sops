@@ -14,7 +14,7 @@ use Scalar::Util qw(dualvar);
 use YAML::XS qw(Load);
 
 # ----------------------------------------------------------------------------
-# Failures have to say WHERE and WHY (karr #19).
+# Failures have to say WHERE and WHY (k19).
 #
 # The MAC path swallowed everything it could not place, parse or decrypt, so a
 # document with one bad leaf out of a hundred produced exactly one line --
@@ -62,10 +62,10 @@ my $KEY = "\3" x 32;
     is($enc->decrypt_bytes(key => $KEY, aad => 'ts:'), $ts,
         'and the digest input is the same bytes');
 
-    # FLIPPED for karr #76 / docs/adr/0041: this asserted that a type:comment
+    # FLIPPED for k76 / docs/adr/0041: this asserted that a type:comment
     # value decrypts to its TEXT. It decrypts to a File::SOPS::Comment now,
     # because a comment is not a value and a string here is an element of the
-    # document that the file does not contain (karr #108). The text is still
+    # document that the file does not contain (k108). The text is still
     # exactly what it was, and decrypt_bytes -- what the digest would see, if
     # the digest covered a comment -- is unchanged.
     my $c = File::SOPS::Encrypted->encrypt_value(
@@ -313,7 +313,7 @@ my $KEY = "\3" x 32;
 }
 
 # ----------------------------------------------------------------------------
-# 9. A refusal is reported at the CALLER's line, not at ours (karr #71).
+# 9. A refusal is reported at the CALLER's line, not at ours (k71).
 #
 # croak names the caller of the frame it stands in, and between a caller and
 # these guards every frame is this distribution's own: File::SOPS::encrypt
@@ -331,7 +331,7 @@ my $KEY = "\3" x 32;
 # a new frame would put the library's own line back with no test going red.
 #
 # Measured over 32 refusal paths: 9 locations move, all of them out of lib/,
-# and NOT ONE message text changes -- the path prefixes karr #68 added are
+# and NOT ONE message text changes -- the path prefixes k68 added are
 # untouched, which the last subtest asserts alongside the location.
 # ----------------------------------------------------------------------------
 
@@ -380,7 +380,7 @@ my $KEY = "\3" x 32;
     }
 }
 
-# And the location is not bought with the key path karr #68 added: both have
+# And the location is not bought with the key path k68 added: both have
 # to be in the same message.
 {
     my $err = do {

@@ -20,7 +20,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #58: File::SOPS::Encrypted::value_to_bytes hashes a float at Go's full
+# k58: File::SOPS::Encrypted::value_to_bytes hashes a float at Go's full
 # precision (strconv.FormatFloat(v, 'f', -1, 64), up to 17 significant
 # digits), but every emitter -- YAML::XS via Perl stringification,
 # Cpanel::JSON::XS via %.15g -- WRITES it at 15. For a double that genuinely
@@ -32,7 +32,7 @@ use SopsBin qw(find_sops_bin);
 # fallback if it is missing -- because the defect IS a byte disagreement with
 # it; a self-consistency check alone proves half the story at best (a document
 # can fail its own MAC without a binary, but a document that WRONGLY passes,
-# as karr #58's spike found for edit(), needs the reference to be seen at
+# as k58's spike found for edit(), needs the reference to be seen at
 # all).
 # ----------------------------------------------------------------------------
 
@@ -47,7 +47,7 @@ my $sops_bin = find_sops_bin();
 unless ($sops_bin) {
     plan skip_all =>
         "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
-      . "karr #58 is specifically about byte compatibility with sops, so "
+      . "k58 is specifically about byte compatibility with sops, so "
       . "without the binary this file proves nothing. Fix: run "
       . "maint/fetch-sops .sops-bin to install the pinned binary where the "
       . "suite finds it automatically, or set SOPS_BIN=/path/to/sops.";
@@ -191,7 +191,7 @@ subtest 'floats that already round-trip at 15 digits keep their exact wire bytes
 #    Math::BigFloat->new('-0') loses the sign. This subtest is expected to be
 #    GREEN already; it exists to stay green through the fix, not to
 #    reproduce a bug of its own. (-0.0 beyond this exact case -- e.g. the
-#    YAML side, which is broken today for unrelated reasons -- is karr #62,
+#    YAML side, which is broken today for unrelated reasons -- is k62,
 #    out of scope here.)
 ###############################################################################
 
@@ -225,7 +225,7 @@ subtest 'JSON -0.0 keeps its sign at exit 0 (guards against the naive fix)' => s
 #    unencrypted float that needs full precision (0.1+0.2, exactly what sops
 #    itself writes for that value). Two separate corruptions, both measured,
 #    both JSON-specific (YAML::XS retains a parsed float's original text and
-#    survives this by accident -- karr #58's spike, section 1a):
+#    survives this by accident -- k58's spike, section 1a):
 #
 #      * rotate() re-serializes every value; a bare NV loses precision on
 #        the way back out, and the ROTATED file failed its own MAC -- sops
@@ -325,7 +325,7 @@ PERL
 };
 
 ###############################################################################
-# 5. karr #64 point 1 (the most important gap): THE FOREIGN-BIGNUM GUARD.
+# 5. k64 point 1 (the most important gap): THE FOREIGN-BIGNUM GUARD.
 #
 #    Format::JSON::emit needs allow_bignum so its OWN Math::BigFloat carrier
 #    (see _float_carrier) reaches the wire as a bare JSON number instead of a
@@ -336,14 +336,14 @@ PERL
 #    number too. detect_type calls a blessed leaf 'str', so the MAC digest
 #    covers the object's stringification while the document would carry it as
 #    a JSON number Go reparses as a float64 -- a document that fails its own
-#    MAC, produced silently. Measured in karr #58:
+#    MAC, produced silently. Measured in k58:
 #    Math::BigFloat->new('1.00000000000000000000000000001') digests as 29
 #    digits and reads back as 1.
 #
-#    _reject_referenced_leaf -- named _reject_foreign_bignum when karr #58
+#    _reject_referenced_leaf -- named _reject_foreign_bignum when k58
 #    added it -- is the fix: it croaks on any Math::BigFloat or Math::BigInt
 #    reaching the emitter that is NOT its own carrier. Entirely new
-#    behaviour as of karr #58 -- until now, not one line of test.
+#    behaviour as of k58 -- until now, not one line of test.
 #
 #    No sops binary needed for these -- the assertion is that File::SOPS
 #    refuses to produce a document at all, which is a Perl-level guarantee.
@@ -424,7 +424,7 @@ subtest 'the guard reaches a foreign bignum nested inside a hash and inside an a
 };
 
 ###############################################################################
-# 6. karr #64 point 2: a CLASS-GLOBAL Math::BigFloat->accuracy/precision must
+# 6. k64 point 2: a CLASS-GLOBAL Math::BigFloat->accuracy/precision must
 #    not corrupt the carrier. _float_carrier calls
 #    Math::BigFloat->new($text, undef, undef) -- the explicit undef, undef
 #    overriding whatever global setting is in effect -- and asserts the result
@@ -478,7 +478,7 @@ is(Math::BigFloat->precision(), $precision_before_all,
     'global Math::BigFloat->precision is back to what it was before the subtest');
 
 ###############################################################################
-# 7. karr #64 point 3: NESTED and ARRAY float leaves. canonical_float_tree's
+# 7. k64 point 3: NESTED and ARRAY float leaves. canonical_float_tree's
 #    walk is recursive, but until now only a top-level key was ever exercised.
 #    A mix of values that need the carrier and values that already round-trip,
 #    at two levels of hash nesting and inside an array, in both formats.
@@ -535,15 +535,15 @@ for my $format (qw(yaml json)) {
 }
 
 ###############################################################################
-# 8. karr #64 point 4: CROSS-FORMAT conversion, and decrypt_file's plaintext
+# 8. k64 point 4: CROSS-FORMAT conversion, and decrypt_file's plaintext
 #    against what `sops -d` itself writes. Both were "fixed as a side effect"
-#    per the karr #58 report, and both were, until now, unverified.
+#    per the k58 report, and both were, until now, unverified.
 #
 #    The fixture is a document the REAL sops wrote (not one this module
 #    produced), carrying an unencrypted float that needs full precision --
 #    exactly the shape where the pre-fix bug bit hardest: Cpanel::JSON::XS
 #    hands back a bare NV with no memory of the text it was parsed from
-#    (karr #58 section 1a), so JSON is the format where this had to be
+#    (k58 section 1a), so JSON is the format where this had to be
 #    fixed for the value to survive at all.
 ###############################################################################
 
@@ -557,7 +557,7 @@ subtest '[json -> yaml] a float that arrived as a bare NV from JSON survives re-
     is($? >> 8, 0, 'sops -e wrote the fixture') or return;
 
     # Decrypting via JSON hands back a bare NV for the float -- Cpanel::
-    # JSON::XS keeps no parsed text, unlike YAML::XS (karr #58 section 1a).
+    # JSON::XS keeps no parsed text, unlike YAML::XS (k58 section 1a).
     my $content = read_file($enc_file);
     my $data = File::SOPS->decrypt(
         encrypted => $content, identities => [$secret], format => 'json',
@@ -613,7 +613,7 @@ subtest 'decrypt_file on a sops-written JSON document matches what sops -d itsel
     # writer uses tabs and different key spacing (a pretty-printing choice,
     # not a wire-format one), so the two texts differ even for values that
     # were never broken. What must agree is the NUMBER -- both as a decoded
-    # value and, since the whole point of karr #58 was which literal digits
+    # value and, since the whole point of k58 was which literal digits
     # get written, as the literal text on the wire.
     my $sops_decoded = decode_json($sops_plain_out);
     my $our_decoded  = decode_json($our_content);
@@ -627,7 +627,7 @@ subtest 'decrypt_file on a sops-written JSON document matches what sops -d itsel
 };
 
 ###############################################################################
-# 9. karr #62: YAML -0.0. The last row of the old non-finite matrix, and the
+# 9. k62: YAML -0.0. The last row of the old non-finite matrix, and the
 #    one ADR 0006 excluded by canonical text (-0 was on $NO_AGREED_FORM).
 #
 #    Before: YAML::XS renders an NV -0.0 as `0`, value_to_bytes digests `-0`,
@@ -658,7 +658,7 @@ subtest 'decrypt_file on a sops-written JSON document matches what sops -d itsel
 #    JSON -0.0 row worked before it and works after it, byte for byte.
 ###############################################################################
 
-subtest '[yaml] -0.0 keeps its sign and its MAC (karr #62)' => sub {
+subtest '[yaml] -0.0 keeps its sign and its MAC (k62)' => sub {
     my $encrypted = File::SOPS->encrypt(
         data       => { negzero_unencrypted => -0.0, secret => 'shh' },
         recipients => [$public],
@@ -736,7 +736,7 @@ subtest '[yaml] the -0 carrier does not touch the neighbouring cases' => sub {
 
 subtest '[yaml] an ENCRYPTED -0.0 is unaffected by the carrier' => sub {
     # An encrypted leaf is an ENC[...] string by the time emit() runs, so the
-    # float never reaches the carrier at all. This worked before karr #62 and
+    # float never reaches the carrier at all. This worked before k62 and
     # has to keep working -- it is the case ADR 0008 refused to break by
     # putting format rules into assert_representable.
     for my $format (qw(yaml json)) {
@@ -756,7 +756,7 @@ subtest '[yaml] an ENCRYPTED -0.0 is unaffected by the carrier' => sub {
 };
 
 ###############################################################################
-# 10. karr #72: the READ side of the same negative zero. Section 9 above carries
+# 10. k72: the READ side of the same negative zero. Section 9 above carries
 #     the sign OUT of the library; _deserialize_value was still dropping it on
 #     the way IN. It converted a type:float plaintext with `$data + 0.0`, which
 #     is positive zero twice over -- Perl's grok_number settles the text -0 as
@@ -777,7 +777,7 @@ subtest '[yaml] an ENCRYPTED -0.0 is unaffected by the carrier' => sub {
 ###############################################################################
 
 for my $format (qw(yaml json)) {
-    subtest "[$format] an encrypted -0 survives sops -> decrypt -> rotate -> sops (karr #72)" => sub {
+    subtest "[$format] an encrypted -0 survives sops -> decrypt -> rotate -> sops (k72)" => sub {
         my $plain = scratch_file($format);
         write_file($plain, $format eq 'json'
             ? qq({\n  "negzero": -0.0,\n  "other": 1.5\n}\n)
@@ -834,7 +834,7 @@ for my $format (qw(yaml json)) {
     };
 }
 
-subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub {
+subtest 'the rest of the type:float read ladder does not move (k72)' => sub {
     # Straight through File::SOPS::Encrypted, because the claim is about one
     # plaintext -> one value -> one set of wire bytes, and a document would
     # only add noise. encrypt_value(value => $text, type => 'float') writes
@@ -895,7 +895,7 @@ subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub
 };
 
 ###############################################################################
-# 11. karr #61, first half: decrypt_file on an ENCRYPTED float. The ticket
+# 11. k61, first half: decrypt_file on an ENCRYPTED float. The ticket
 #     measured a document the real sops wrote, carrying
 #     ENC[...,type:float] 0.30000000000000004:
 #
@@ -916,10 +916,10 @@ subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub
 #
 #     Section 8 is the neighbouring case and deliberately not this one: it
 #     uses an UNENCRYPTED leaf, which is a different path (the value is the
-#     parser's, never the cipher's). karr #61 is specifically about the
-#     encrypted one, which #58 excluded from its own scope.
+#     parser's, never the cipher's). k61 is specifically about the
+#     encrypted one, which k58 excluded from its own scope.
 #
-#     The SECOND half of karr #61 -- extract() handing back an NV whose
+#     The SECOND half of k61 -- extract() handing back an NV whose
 #     stringification loses the digits, where `sops -d --extract` prints
 #     0.30000000000000004 -- is an API decision and is still open. Measured
 #     again here, still 0.3 in both formats. Not asserted, because it is not
@@ -927,7 +927,7 @@ subtest 'the rest of the type:float read ladder does not move (karr #72)' => sub
 ###############################################################################
 
 for my $format (qw(yaml json)) {
-    subtest "[$format] decrypt_file keeps an ENCRYPTED float's digits (karr #61)" => sub {
+    subtest "[$format] decrypt_file keeps an ENCRYPTED float's digits (k61)" => sub {
         my $plain = scratch_file($format);
         write_file($plain, $format eq 'json'
             ? qq({\n  "ratio": $full_precision_text,\n  "other": "hello"\n}\n)
@@ -981,7 +981,7 @@ for my $format (qw(yaml json)) {
 }
 
 ###############################################################################
-# 12. karr #73: an encrypted type:float whose plaintext is a WHOLE number came
+# 12. k73: an encrypted type:float whose plaintext is a WHOLE number came
 #     back as a value detect_type calls int, so the next write relabelled the
 #     leaf type:int -- on a document sops itself had written.
 #
@@ -998,11 +998,11 @@ for my $format (qw(yaml json)) {
 #
 #     The fix is `unpack('d', pack('d', $data))` -- a conversion that goes
 #     through the float64 Go parses into and leaves the SV NOK and nothing
-#     else. ADR 0009. The ladder below is the karr #72 ladder with the type
+#     else. ADR 0009. The ladder below is the k72 ladder with the type
 #     asserted as well: 12 of its 37 rows reported int before the fix.
 ###############################################################################
 
-subtest 'a type:float plaintext stays a float, whatever its digits spell (karr #73)' => sub {
+subtest 'a type:float plaintext stays a float, whatever its digits spell (k73)' => sub {
     # Straight through File::SOPS::Encrypted for the same reason section 10
     # does it: one plaintext -> one value -> one type and one set of wire
     # bytes, with no document in between to add noise.
@@ -1049,7 +1049,7 @@ subtest 'a type:float plaintext stays a float, whatever its digits spell (karr #
 };
 
 for my $format (qw(yaml json)) {
-    subtest "[$format] an integral type:float keeps its label through sops -> rotate -> sops (karr #73)" => sub {
+    subtest "[$format] an integral type:float keeps its label through sops -> rotate -> sops (k73)" => sub {
         my $plain = scratch_file($format);
         write_file($plain, $format eq 'json'
             ? qq({\n  "whole": 2.0,\n  "negwhole": -2.0,\n  "zero": 0.0,\n  "half": 1.5\n}\n)
@@ -1142,7 +1142,7 @@ subtest 'decrypt_file renders an integral float as ADR 0009 measured it' => sub 
 };
 
 ###############################################################################
-# 13. karr #61, second half: extract() handed back the Perl scalar it found,
+# 13. k61, second half: extract() handed back the Perl scalar it found,
 #     and for an ENCRYPTED float that is a bare NV with no PV, so every
 #     stringification went through Perl's 15 significant digits. Measured on a
 #     document the real sops wrote, re-measured against 3.13.3 today:
@@ -1161,12 +1161,12 @@ subtest 'decrypt_file renders an integral float as ADR 0009 measured it' => sub 
 #     The boundary is the point of the design and is asserted below: the
 #     dualvar reaches the LEAF extract returns and nothing else. Inside a tree
 #     it changes what the emitters write -- Cpanel::JSON::XS quotes it, so an
-#     unencrypted JSON leaf would become a string (karr #78) -- so a branch and
+#     unencrypted JSON leaf would become a string (k78) -- so a branch and
 #     everything decrypt() returns stay plain scalars.
 ###############################################################################
 
 for my $format (qw(yaml json)) {
-    subtest "[$format] extract keeps an encrypted float's digits (karr #61)" => sub {
+    subtest "[$format] extract keeps an encrypted float's digits (k61)" => sub {
         my $plain = scratch_file($format);
         write_file($plain, $format eq 'json'
             ? qq({\n  "ratio": $full_precision_text,\n  "name": "db",\n  "port": 5432,\n  "on": true\n}\n)
@@ -1233,7 +1233,7 @@ subtest 'the dualvar stops at the leaf extract returns (ADR 0010)' => sub {
     # obvious "simplification" -- fails here rather than in a document. A
     # dualvar in a tree reaches the emitters: measured, Cpanel::JSON::XS writes
     # one as a quoted string, so an unencrypted JSON float would silently
-    # become a string in the file (karr #78).
+    # become a string in the file (k78).
     my $plain = scratch_file('json');
     write_file($plain, qq({\n  "db": { "ratio": $full_precision_text }\n}\n));
 
@@ -1287,7 +1287,7 @@ subtest 'a non-finite float is returned unwrapped (ADR 0010)' => sub {
 };
 
 ###############################################################################
-# 14. karr #78 / ADR 0011: a float leaf carrying its own string form -- a
+# 14. k78 / ADR 0011: a float leaf carrying its own string form -- a
 #     dualvar -- went into an UNENCRYPTED JSON slot as a QUOTED STRING.
 #     Cpanel::JSON::XS writes a scalar with a public string half as a JSON
 #     string whenever that half differs from its own rendering of the number,
@@ -1322,7 +1322,7 @@ subtest 'a non-finite float is returned unwrapped (ADR 0010)' => sub {
 #     public SVf_POK Cpanel reads) never went near any of this.
 ###############################################################################
 
-subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot (karr #78)' => sub {
+subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot (k78)' => sub {
     my $plain = scratch_file('json');
     write_file($plain, qq({\n  "ratio": $full_precision_text\n}\n));
 
@@ -1377,7 +1377,7 @@ subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot
     cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
         'and reads the value back at full precision');
     is(File::SOPS::Encrypted->detect_type($decoded->{ratio_unencrypted}), 'float',
-        'as a float, which is what karr #78 was about');
+        'as a float, which is what k78 was about');
 
     # The same leaf in an ENCRYPTED slot is untouched: it is an ENC[...] string
     # by the time the emitter sees it. Driven through the binary, because that
@@ -1400,7 +1400,7 @@ subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot
     }
 };
 
-subtest 'a float that arrived through a YAML parse reaches JSON as a number (karr #78)' => sub {
+subtest 'a float that arrived through a YAML parse reaches JSON as a number (k78)' => sub {
     # The second route in, and the one that has nothing to do with extract:
     # YAML::XS retains the source text of every scalar it parses, so a float
     # read out of a YAML document carries a public PV exactly like the dualvar
@@ -1438,7 +1438,7 @@ subtest 'a float that arrived through a YAML parse reaches JSON as a number (kar
         'with 1.50 still a float rather than a string');
 };
 
-subtest 'YAML writes the same number, unchanged by ADR 0011 (karr #78)' => sub {
+subtest 'YAML writes the same number, unchanged by ADR 0011 (k78)' => sub {
     # YAML::XS writes the string half bare, so the document holds the canonical
     # decimal as a NUMBER and there was never anything to refuse or repair.
     # Asserted through the binary so "YAML is unaffected" is measured rather
@@ -1465,7 +1465,7 @@ subtest 'YAML writes the same number, unchanged by ADR 0011 (karr #78)' => sub {
         'and sops reads a number back') if $decoded;
 };
 
-subtest 'the repair moves no byte of the ADR 0005 / ADR 0006 cases (karr #78)' => sub {
+subtest 'the repair moves no byte of the ADR 0005 / ADR 0006 cases (k78)' => sub {
     # Every float this emitter already wrote correctly keeps the exact bytes it
     # had. These are the cases ADR 0005 (the negative zero) and ADR 0006 (16
     # and 17 significant digits, the >int64 integral texts) were paid for.
@@ -1481,7 +1481,7 @@ subtest 'the repair moves no byte of the ADR 0005 / ADR 0006 cases (karr #78)' =
         f_2_0      => 2.0,
     });
 
-    is($emitted, <<'END_JSON', 'every ADR case emits exactly the bytes it did before karr #78');
+    is($emitted, <<'END_JSON', 'every ADR case emits exactly the bytes it did before k78');
 {
    "a_neg_zero" : -0.0,
    "b_17" : 0.30000000000000004,
@@ -1504,7 +1504,7 @@ END_JSON
     like($yaml, qr/^f_2_0: 0*2$/m,        'and an integral float, which a carrier there would respell');
 };
 
-subtest 'a float that was merely printed never reaches the carrier (karr #78)' => sub {
+subtest 'a float that was merely printed never reaches the carrier (k78)' => sub {
     # The false-positive class worth naming: stringifying an NV does NOT set
     # the public SVf_POK that Cpanel::JSON::XS reads, so ordinary caller code
     # that logged or interpolated a float is untouched. Measured, not assumed.
@@ -1533,7 +1533,7 @@ subtest 'a float that was merely printed never reaches the carrier (karr #78)' =
 };
 
 ###############################################################################
-# 15. karr #88 / ADR 0014: a NEGATIVE ZERO out of a YAML parse, written as
+# 15. k88 / ADR 0014: a NEGATIVE ZERO out of a YAML parse, written as
 #     JSON. Section 9 above carries the same value in YAML and section 3 in
 #     JSON from a bare NV; this is the one cell of the four that died.
 #
@@ -1562,7 +1562,7 @@ subtest 'a float that was merely printed never reaches the carrier (karr #78)' =
 #     and every later one wrong. pack 'd' reads the NV and nothing else.
 ###############################################################################
 
-subtest '[json] a -0.0 out of a YAML parse is written, not refused (karr #88)' => sub {
+subtest '[json] a -0.0 out of a YAML parse is written, not refused (k88)' => sub {
     for my $spelling ('-0.0', '-0.00', '-0.000') {
         my $leaf = Load("v: $spelling\n")->{v};
 
@@ -1602,7 +1602,7 @@ subtest '[json] a -0.0 out of a YAML parse is written, not refused (karr #88)' =
     }
 };
 
-subtest '[json] the -0 carrier is stable across repeated writes (karr #88)' => sub {
+subtest '[json] the -0 carrier is stable across repeated writes (k88)' => sub {
     # The trap this pins: an arithmetic PV strip sets the private IOK on the
     # LEAF, so the SECOND emit of the same tree in the same process returned a
     # plain 0 and wrote a document that failed its own MAC. Measured with

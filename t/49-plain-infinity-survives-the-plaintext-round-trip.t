@@ -14,7 +14,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #123 / docs/adr/0034: a plain scalar is resolved the same way on every
+# k123 / docs/adr/0034: a plain scalar is resolved the same way on every
 # parse, so a plain YAML infinity survives a plaintext round trip.
 #
 # ADR 0026 taught the YAML parse to hand back dualvar($double, $token) for a
@@ -171,7 +171,7 @@ subtest 'a plaintext this library emitted parses back to what it emitted' => sub
 #    encrypted was written as a type:str holding `.inf`, where `sops -e` writes
 #    a type:float -- a working file whose value had silently stopped being a
 #    number -- and ADR 0034 turned that into a refusal, pinned here so the fix
-#    would flip it visibly. karr #122 / docs/adr/0040 is that fix: the parse
+#    would flip it visibly. k122 / docs/adr/0040 is that fix: the parse
 #    hands the leaf over as the float it is, and an encrypted slot carries one.
 #    So the two halves of this file's repair now meet, and the row is the third
 #    answer rather than either of the first two.
@@ -275,7 +275,7 @@ subtest 'a finite number in a plaintext is the number it was' => sub {
 ###############################################################################
 # 5. NOT A JSON CHANGE. `.inf` is not JSON, so nothing can reach a JSON
 #    document -- and the guard that refuses a non-finite float there has to
-#    stay. karr #62 is this distribution's own record of a YAML fix that took
+#    stay. k62 is this distribution's own record of a YAML fix that took
 #    JSON with it.
 ###############################################################################
 
@@ -293,7 +293,7 @@ subtest 'JSON is untouched' => sub {
 ###############################################################################
 # 6. THE TICKET, AGAINST THE BINARY. sops writes the document, a user edits an
 #    unrelated key, and the file has to come back readable to sops with the
-#    leaf untouched. This is what karr #123 measured as a croak that destroyed
+#    leaf untouched. This is what k123 measured as a croak that destroyed
 #    the edit, and what `sops edit` does at exit 0.
 ###############################################################################
 
@@ -448,18 +448,18 @@ SKIP: {
 #    is `+Inf` has no token of its own to carry: the emitter wrote a bare `Inf`,
 #    which go-yaml reads as a STRING, so the leaf came back from the editor
 #    retyped -- silently. This subtest pinned that defect so the fix would flip
-#    it visibly instead of quietly. karr #134 / docs/adr/0037 made the emitter
-#    write the token and turned the retyping into a refusal; karr #122 /
+#    it visibly instead of quietly. k134 / docs/adr/0037 made the emitter
+#    write the token and turned the retyping into a refusal; k122 /
 #    docs/adr/0040 removed the last rung, so `edit` now SAVES, and the leaf it
 #    never touched is still a type:float. `sops edit` is measured beside it,
-#    unchanged throughout: that was the row karr #122 had to reach, and this
+#    unchanged throughout: that was the row k122 had to reach, and this
 #    subtest is where the two answers are compared.
 #
 #    The full corpus for this lives in t/52 and t/54; what stays here is the
 #    row this file measured, in the direction it now goes.
 ###############################################################################
 
-    subtest 'an ENCRYPTED non-finite float survives edit (karr #134, karr #122)' => sub {
+    subtest 'an ENCRYPTED non-finite float survives edit (k134, k122)' => sub {
         my $dir = scratch();
         my ($status, $enc) =
             $encrypt_with_sops->($dir, "secret: .inf\nkeep: x\n");
@@ -481,7 +481,7 @@ SKIP: {
             'and the leaf it never touched is still a type:float');
         unlike(scalar read_file("$dir/ours.yaml"),
             qr/^secret: ENC\[.*type:str\]$/m,
-            'not silently a type:str, which is the defect karr #134 named');
+            'not silently a type:str, which is the defect k134 named');
 
         my $out = `$sops_bin -d --input-type yaml --output-type yaml $dir/ours.yaml 2>&1`;
         is($? >> 8, 0, 'the file is still perfectly readable') or diag($out);

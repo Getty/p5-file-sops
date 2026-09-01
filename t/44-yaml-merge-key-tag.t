@@ -14,7 +14,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #116 / docs/adr/0028: the !!merge tag sops writes on a merge key.
+# k116 / docs/adr/0028: the !!merge tag sops writes on a merge key.
 #
 # sops does not expand a YAML merge key -- it reads into a yaml.Node tree where
 # go-yaml resolves no merges, so `<<` stays an ordinary key and the emitter
@@ -103,7 +103,7 @@ subtest 'the untagged spelling is unchanged -- it always worked' => sub {
 };
 
 subtest 'YAML::XS still does not resolve the merge, and must not start' => sub {
-    # The open side-question in karr #116. `<<: *b` gives a LITERAL `<<` key
+    # The open side-question in k116. `<<: *b` gives a LITERAL `<<` key
     # holding the aliased node -- it is not folded into the parent -- and that
     # is what makes the round trip with sops work at all, because sops does not
     # fold it either. Dropping the tag does not touch this.
@@ -162,7 +162,7 @@ subtest 'an unrelated parse failure reports itself, unchanged' => sub {
 
     # This retry is for ONE tag, and !!binary is not it: sops base64-DECODES a
     # !!binary scalar, so removing the tag would change the value. It is still
-    # refused -- but since karr #118 (docs/adr/0032) the refusal is this
+    # refused -- but since k118 (docs/adr/0032) the refusal is this
     # module's own, naming what sops resolves the tag to, rather than libyaml's
     # `bad tag found for scalar`. t/47 is where that message is pinned.
     $data = eval { File::SOPS::Format::YAML->parse("k: !!binary 1\n") };

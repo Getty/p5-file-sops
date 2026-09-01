@@ -16,7 +16,7 @@ use SopsBin qw(find_sops_bin);
 
 ###############################################################################
 # The order-preserving reparse is asked of the FORMAT, not hardwired to YAML::PP
-# (karr #74, docs/adr/0036, refining docs/adr/0001)
+# (k74, docs/adr/0036, refining docs/adr/0001)
 #
 # The MAC is order dependent and the order is the DOCUMENT's. File::SOPS
 # recovers it by reparsing the raw text with key order preserved and walking
@@ -176,7 +176,7 @@ sub has_key      { ref $_[0] eq 'HASH' && exists $_[0]->{ $_[1] } }
 ###############################################################################
 # 2. The dispatcher asks the class it was given, and nothing else.
 #
-#    Before karr #74 there was no second argument and YAML::PP read every
+#    Before k74 there was no second argument and YAML::PP read every
 #    document whatever its format was. A handler with an answer of its own is
 #    the only way to tell the two apart from outside.
 ###############################################################################
@@ -220,7 +220,7 @@ sub has_key      { ref $_[0] eq 'HASH' && exists $_[0]->{ $_[1] } }
     is(File::SOPS::_parse_in_document_order("- one\n- two\n"), undef,
         'a document that is not a mapping declines');
 
-    # THE trap ADR 0001 and karr #31 both name. YAML::XS::Load in scalar
+    # THE trap ADR 0001 and k31 both name. YAML::XS::Load in scalar
     # context returns the LAST document of a stream and YAML::PP the FIRST, so
     # a reparse that read either side in scalar context would pair one
     # document's order with another document's values -- a wrong digest, not
@@ -320,7 +320,7 @@ subtest 'a real sops multi-document file verifies by index, and a swap fails' =>
 #
 #    This is the one failure that is not a document's fault. Falling back to
 #    sorted order for it would silently degrade every document in that format
-#    -- precisely the env/ini defect karr #74 exists to prevent -- so it is an
+#    -- precisely the env/ini defect k74 exists to prevent -- so it is an
 #    error about the distribution, not about the file.
 ###############################################################################
 

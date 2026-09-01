@@ -132,7 +132,7 @@ sub decrypt_ok {
 my $data_key = "\x02" x 32;
 
 # ----------------------------------------------------------------------------
-# #8 -- the decrypt side hashed a value that had been round-tripped through
+# k8 -- the decrypt side hashed a value that had been round-tripped through
 # Perl's numeric conversion while the encrypt side hashed the live scalar.
 #
 # File::SOPS::Encrypted::_deserialize_value applies int() to type:int and
@@ -175,7 +175,7 @@ subtest 'lossy values survive a File::SOPS round trip' => sub {
     # the live scalar, so anything the decrypt side normalises differently
     # made the document reject itself.
     #
-    # These are Perl STRINGS, so since karr #15 / ADR 0002 they are type:str
+    # These are Perl STRINGS, so since k15 / ADR 0002 they are type:str
     # and are written verbatim -- there is no numeric normalisation left for
     # the two sides to disagree about, and the value that comes back is the
     # one that went in. That is the assertion; it used to be a weaker
@@ -217,7 +217,7 @@ subtest 'lossy values survive a File::SOPS round trip' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# #9 -- values excluded from encryption were hashed by the encrypt side and
+# k9 -- values excluded from encryption were hashed by the encrypt side and
 # skipped by the decrypt side, because the decrypt side only ever saw ENC
 # values. The Go implementation covers them on both sides unless
 # mac_only_encrypted is set. Fires with zero configuration: unencrypted_suffix
@@ -356,7 +356,7 @@ subtest 'mac_only_encrypted uses a distinct digest initialization' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# #10 -- the decrypt side used to scrape ENC values out of the raw text and
+# k10 -- the decrypt side used to scrape ENC values out of the raw text and
 # skip the metadata MAC with an unanchored /mac:/ look-behind, so a user key
 # called hmac or webmac was skipped as well: its value never reached the
 # digest and every such document failed verification, with no workaround short
@@ -408,7 +408,7 @@ subtest 'the metadata MAC never hashes itself' => sub {
 };
 
 # ----------------------------------------------------------------------------
-# #11 -- verification was conditional on the MAC being present AND parseable,
+# k11 -- verification was conditional on the MAC being present AND parseable,
 # so deleting the mac line, or corrupting it into anything the ENC regex
 # rejects, silently turned verification off and handed back the data as though
 # it had been checked. Go refuses in both cases unless --ignore-mac.
