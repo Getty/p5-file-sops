@@ -3,9 +3,9 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: metadata, wire-format, env, ini, escaping, interop
-- Resolves karr #75 (split out of #36 as 36b; #37 shares it)
+- Resolves k75 (split out of k36 as 36b; k37 shares it)
 - Depends on nothing here yet: `File::SOPS::Metadata::Flat` has **no caller**
-  until the ENV (#36) and INI (#37) handlers exist. This ADR records the shape
+  until the ENV (k36) and INI (k37) handlers exist. This ADR records the shape
   the layer was cut to so that both use it rather than each growing its own.
 
 ## Context
@@ -120,7 +120,7 @@ Three reasons, in the order they matter.
 
 - **It has to serve two format handlers that do not exist yet.** Building it
   inside whichever of ENV/INI lands first is precisely how the two drift, which
-  is what karr #75 was split out of #36 to prevent. A module both `use` is the
+  is what k75 was split out of k36 to prevent. A module both `use` is the
   sharing mechanism.
 - **`Metadata.pm` models the section's *semantics*** — which backends, which
   encryption rule, what is key material. This is one *encoding* of that
@@ -187,7 +187,7 @@ Perl's `'false'` is **true**, so handing `unflatten`'s output straight to
 `from_hash` would make this library compute the wrong digest for a document
 sops reads.
 
-Typing the flat formats' values is **karr #77**'s decision (per-format type
+Typing the flat formats' values is **k77**'s decision (per-format type
 policy, which also has to answer why `NUM=5` is `type:str` to the env store and
 `type:int` here under ADR 0002). It is MAC-relevant and it spans the wire and
 API lanes, so it is not the format lane's to settle alone. Until it lands, a
@@ -202,7 +202,7 @@ no caller. It touches no emitter, no parser and no MAC path, and the metadata
 section is excluded from the digest structurally, so nothing existing can
 change. It is new surface only.
 
-**What #36 and #37 still owe.** This layer is the *metadata* half. Both
+**What k36 and k37 still owe.** This layer is the *metadata* half. Both
 handlers still need the document half — and one piece of it is MAC-relevant and
 belongs to the wire lane, not here: **ENV applies the same `\n` escape to data
 values**, so an unencrypted ENV value containing a literal backslash-`n` reads
@@ -214,7 +214,7 @@ section that `sops -d --output-type json` shows as `"DEFAULT": {}`.
 
 **INI alignment padding is cosmetic.** sops pads `key = value` to the longest
 key *in that section*; stripping the padding entirely from a file it wrote
-still decrypts, exit 0. Reproducing it is a diff-readability choice for #37,
+still decrypts, exit 0. Reproducing it is a diff-readability choice for k37,
 not a correctness one — though reproducing it does make our `[sops]` section
 byte-identical to sops's, which it currently is.
 

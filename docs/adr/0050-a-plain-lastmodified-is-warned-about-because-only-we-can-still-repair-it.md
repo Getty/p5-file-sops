@@ -5,7 +5,7 @@
   copy of the tree at 42f15b8, before anything in `lib/` was touched
 - Date: 2026-08-21
 - Tags: yaml, metadata, parser, interop, guards
-- Resolves karr #159, which is karr #144's second direction — the one ADR 0044
+- Resolves k159, which is k144's second direction — the one ADR 0044
   measured, named and could not implement where it lived
 - Depends on ADR 0044 (`lastmodified` is decoded in `from_hash`, and the
   attribute is Go's re-format rather than the document's text — so this guard
@@ -14,7 +14,7 @@
   `Metadata.pm`), ADR 0026 (the plain/quoted question, asked here of a different
   oracle for a measured reason) and ADR 0032 (`!!timestamp` never reaches this
   guard, because `YAML::XS` refuses it at parse)
-- Answers karr #145's condition — "does the guard refuse a document sops
+- Answers k145's condition — "does the guard refuse a document sops
   accepts?" — with a measured no, and lands on a **warning** rather than the
   refusal that question was about
 - **Moves no bytes.** Nothing is parsed differently, nothing is emitted
@@ -80,7 +80,7 @@ expected type 'string', got unconvertible type 'time.Time'`, exit 1, before any
 value is decrypted. **`File::SOPS->decrypt` read all 30 documents at HEAD**, in
 both columns, without a word.
 
-**There is no accepted bare spelling.** That is the whole of karr #145's
+**There is no accepted bare spelling.** That is the whole of k145's
 question, answered: a guard keyed on "the scalar is plain and go-yaml resolves
 it as a timestamp" cannot refuse or warn about a document sops opens.
 
@@ -95,7 +95,7 @@ it as a timestamp" cannot refuse or warn about a document sops opens.
 go-yaml runs `parseTimestamp` only for an untagged node, so an explicit `!!str`
 makes the same bytes a string and sops reads the document. A guard that looked
 only at the scalar's *style* would fire on this one — on a document sops
-accepts, which is precisely what karr #145 was protecting against. Hence: a
+accepts, which is precisely what k145 was protecting against. Hence: a
 scalar carrying any tag answers "not plain". The one tag that *would* resolve
 to a timestamp, `!!timestamp`, never reaches here — `YAML::XS` refuses it at
 parse and `%TAG_REFUSAL` names it (ADR 0032).
@@ -223,7 +223,7 @@ told how to fix it — including that re-encrypting it here is the fix.
 
 ## Rejected alternatives
 
-**Refuse the document.** The fail-loud reading, and what karr #145's question
+**Refuse the document.** The fail-loud reading, and what k145's question
 was framed around. Rejected on measurement 4: `rotate` turns such a file into
 one `sops -d` reads, and a refusal deletes that path. It would also be the first
 refusal in this distribution for a document that is read *correctly* — the
@@ -242,7 +242,7 @@ guard speaks only where **the plain/quoted state is what makes sops refuse**.
 
 **Narrow the predicate until it matches go-yaml's `parseTimestamp` exactly.**
 Would remove the `+25:00` over-reach in measurement 5 by reproducing Go's zone
-range checks. Rejected for karr #145's reason: a refusal — or a warning — is
+range checks. Rejected for k145's reason: a refusal — or a warning — is
 only as good as the grammar behind it, and hand-narrowing a grammar is how a
 guard starts speaking about the wrong documents. The over-reach is one spelling,
 in the direction that cannot hurt.
@@ -276,13 +276,13 @@ mechanism it fails **32 assertions across 4 of its 12 subtests**.
 
 ### What this leaves open, and where
 
-**karr #148 is not touched by this**, and was measured in the same session
+**k148 is not touched by this**, and was measured in the same session
 rather than implemented — see the ticket. Its short form: a comment above a
 mapping key is lost in both directions, and the write half is a wall rather than
 a lane handoff. `YAML::XS` is libyaml, whose emitter cannot write a comment at
 all; `YAML::PP`'s emitter has no comment event either, and its own documentation
 lists comment-preserving round trips as a TODO. The read half is nearer than
-karr #148's body says — `YAML::PP`'s *parser* keeps the comment text in its raw
+k148's body says — `YAML::PP`'s *parser* keeps the comment text in its raw
 token stream, through an undocumented accessor — but a recovered comment has
 nowhere to go: ADR 0041 could preserve a sequence comment because a sequence
 element is a slot the tree already has, and a mapping-position comment sits

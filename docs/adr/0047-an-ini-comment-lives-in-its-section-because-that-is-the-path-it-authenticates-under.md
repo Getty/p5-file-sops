@@ -3,8 +3,8 @@
 - Status: **accepted** — decided and implemented together, in this commit.
 - Date: 2026-08-21
 - Tags: ini, format, mac, aad, comments, interop, roadmap
-- Resolves karr #37 (the INI format handler), which CLAUDE.md has promised
-  since 0.001. Unblocked by karr #74, #75, #76, #77 and #36
+- Resolves k37 (the INI format handler), which CLAUDE.md has promised
+  since 0.001. Unblocked by k74, k75, k76, k77 and k36
 - Depends on, and does not revisit: **ADR 0022** (the flat metadata encoding,
   here with an empty prefix), **ADR 0035** (an untyped store's unencrypted leaf
   is written as its digest bytes), **ADR 0036** (the order-preserving reparse is
@@ -24,7 +24,7 @@ would have to measure for itself. The item it flagged hardest was the comment:
 > the comment key (INI is two levels deep, so a comment's path is a section,
 > not the root — **that has to be measured, not assumed**)
 
-The guess in karr #37's body was `['section','']`, AAD `section::`. It is
+The guess in k37's body was `['section','']`, AAD `section::`. It is
 wrong, and the measurement below is the whole reason this ADR exists.
 
 ## What was measured
@@ -120,7 +120,7 @@ mac plaintext
 ```
 
 Three properties in one measurement, in a **third** format after YAML (karr
-#108) and dotenv (karr #36): comments are **not** in the digest, an unencrypted
+k108) and dotenv (k36): comments are **not** in the digest, an unencrypted
 leaf contributes the literal text of its line, and an empty value contributes
 the empty string. A value outside any section is hashed under `DEFAULT:<key>`,
 so `DEFAULT` is real in the AAD and not only in the JSON view.
@@ -224,7 +224,7 @@ it. The rule is deliberately narrow, and both halves are load-bearing:
 The one shape whose AAD moves is a mapping key `''` holding a list of nothing
 but comments, below the top level.
 
-**Corrected 2026-08-21 by the wire lane's review of this change, karr #167.**
+**Corrected 2026-08-21 by the wire lane's review of this change, k167.**
 This paragraph first said that sops writes that shape as the branch's path and
 that the change therefore moves us *toward* sops. That is measured wrong, and
 backwards. A genuine empty key **does** contribute a path component:
@@ -344,7 +344,7 @@ file, because go-ini collapsed it on the way in.
 `File::SOPS::Metadata::Flat` with `prefix => ''` (ADR 0022), and
 `File::SOPS::Format::ENV::Ordered` — the tied hash ADR 0036 requires — **used
 where it stands** rather than built a second time. It now has two callers and
-belongs in a file of its own; that is karr #158, and this is the second caller
+belongs in a file of its own; that is k158, and this is the second caller
 that closes the argument.
 
 ## Consequences
@@ -379,7 +379,7 @@ against the binary in both runs. Every other path is untouched, byte for byte.
 
 ## Rejected alternatives
 
-**Refuse comments, as `Format::YAML` does (ADR 0024).** karr #37 and karr #108
+**Refuse comments, as `Format::YAML` does (ADR 0024).** k37 and k108
 both say why not: in an ini file a comment is the ordinary case, so a handler
 that refuses one refuses almost every real document, and a `decrypt_file` that
 dropped them would silently delete them from the file it rewrites.
@@ -415,6 +415,6 @@ nothing about sops without a binary — both directions against the real one plu
 the full sops → File::SOPS → sops chain. Removing the walk rule makes it fail.
 
 `prove -lr t/`: 63 files, 1284 tests, PASS — 61/1262 before this change, plus
-this ADR's `t/61` (11) and two loads in `t/00-load.t` (karr #155), plus a `t/62`
-that karr #161 landed in the same window. `t/04-interop.t` **ran** against
+this ADR's `t/61` (11) and two loads in `t/00-load.t` (k155), plus a `t/62`
+that k161 landed in the same window. `t/04-interop.t` **ran** against
 sops 3.13.3 at `/tmp/sops`: 32 tests, PASS.

@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-09
 - Tags: json, interop, wire-format, dependencies
-- Resolves karr #56; amends what karr #49 pinned in `t/11-api-edges.t` (f)
+- Resolves k56; amends what k49 pinned in `t/11-api-edges.t` (f)
 - Depends on ADR 0002 (a value's type comes from the scalar) and ADR 0001 (the
   MAC is verified against a reparse of the document, so what the emitter wrote
   and what the parser reads back are both wire questions)
@@ -35,7 +35,7 @@ So the same data was written two ways by the same library, decided by what the
 *calling program* had loaded. For a library whose stated purpose is
 git-friendly diffs, that alone is a defect. The measurements below say it is
 also a correctness defect, in both directions, and that the fix is not the one
-karr #56 proposed.
+k56 proposed.
 
 ### What the three backends write (Perl 5.36, Cpanel 4.40, JSON::XS 4.04, JSON::PP 4.16)
 
@@ -106,7 +106,7 @@ text.
    sops 3.13.3 cannot read back a JSON document it just wrote. Matching its
    bytes here would import that.
 
-So karr #56's premise — "sops agrees with JSON::XS, not with the backend we
+So k56's premise — "sops agrees with JSON::XS, not with the backend we
 land on" — is true about the bytes and false about the outcome. Of the two
 renderings, only Cpanel's produces documents both implementations accept.
 
@@ -127,12 +127,12 @@ anything that touches a document.
 reach the wire: `JSON->true` / `JSON->false` in `File::SOPS::Encrypted` and
 `File::SOPS::Metadata`. All three backends bless booleans into
 `JSON::PP::Boolean` (measured), so that object is backend-independent — which
-is exactly why karr #49 was right that the boolean guarantee does not come from
+is exactly why k49 was right that the boolean guarantee does not come from
 `File/SOPS.pm`'s use line.
 
 ### Alternatives rejected
 
-1. **Pin `JSON::XS`, to match the bytes sops writes.** This is what karr #56
+1. **Pin `JSON::XS`, to match the bytes sops writes.** This is what k56
    leaned towards. It buys `1` and `-0` and costs both failures above: valid
    sops documents rejected on read, and `-0` documents that fail their own MAC
    on write. The reference's own bytes are not the specification when the
@@ -208,10 +208,10 @@ and wrote a different wire format.
 Nothing to the wire, as of this ADR. Commit 36aafbd kept that line with a
 comment saying it decides the JSON backend and that deleting it is a wire
 change; that is no longer true, and the comment is corrected to say so. Whether
-the line goes is the API lane's call (karr #49 closed against a premise that
+the line goes is the API lane's call (k49 closed against a premise that
 this ADR has now changed) — this ADR only stops it from being load-bearing.
 
-The test karr #49 left in `t/11-api-edges.t` (f) asserts that loading
+The test k49 left in `t/11-api-edges.t` (f) asserts that loading
 `File::SOPS` picks the same backend `JSON::MaybeXS` would on its own. That
 claim is still true and still passes, but it is no longer the thing that
 protects the wire format; the new checks in `t/23-json-backend.t` are, and they
@@ -229,10 +229,10 @@ in here:
   shortest form that round-trips (up to 17). So an unencrypted `0.1+0.2` is
   written `0.3` and hashed `0.30000000000000004`: the document fails its own
   MAC and sops's, in *both formats*. sops writes such a value with full
-  precision. (karr #58)
+  precision. (k58)
 - **Non-finite floats.** `+Inf` reaches JSON as `null` under Cpanel (the value
   is gone) and as the invalid token `inf` under JSON::XS; YAML writes `Inf`.
-  The digest says `+Inf` in all three cases, so nothing round-trips. (karr #59)
+  The digest says `+Inf` in all three cases, so nothing round-trips. (k59)
 
 ## Notes
 

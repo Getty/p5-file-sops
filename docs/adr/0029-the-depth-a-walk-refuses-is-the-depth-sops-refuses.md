@@ -2,19 +2,19 @@
 
 - Status: accepted
 - Date: 2026-08-21
-- Revised: 2026-08-23 — Survey gap closed by ADR 0057 (karr #179): a third walk
-  outside `SOPS.pm`, `Format::YAML::_go_repair_int_leaves` (added at karr #127
-  / ADR 0054, after karr #120's survey shipped), was missed by the karr #120
+- Revised: 2026-08-23 — Survey gap closed by ADR 0057 (k179): a third walk
+  outside `SOPS.pm`, `Format::YAML::_go_repair_int_leaves` (added at k127
+  / ADR 0054, after k120's survey shipped), was missed by the k120
   survey and was the source of the 167 deep-recursion warnings t/45's `What
   is still noisy` diag kept reporting. The fix is the same one-line
-  `no warnings 'recursion';` karr #120 applied to its two walks, since
+  `no warnings 'recursion';` k120 applied to its two walks, since
   `_go_repair_int_leaves` is structurally identical to
   `_restring_non_finite_leaves`. After the change: zero residue; the open
   bullet below closes.
 - Tags: api, guards, robustness, diagnostics, interop
-- Resolves karr #117
-- Opens karr #120 (the walks outside `SOPS.pm` still warn); ADR 0057 closes
-  the survey gap that karr #120 left behind
+- Resolves k117
+- Opens k120 (the walks outside `SOPS.pm` still warn); ADR 0057 closes
+  the survey gap that k120 left behind
 - Related: ADR 0025 (a document that contains itself is refused — this bound is
   what stops the same walks when that guard is not the one asking), ADR 0027
   (the alias budget is go-yaml's ratio — same rule about whose number a
@@ -45,7 +45,7 @@ encrypted correctly, verified, and `sops -d` read it back. It was a successful
 operation that reads like a crash.
 
 The obvious fix — `no warnings 'recursion'` in the walks — was not free, and
-that is why karr #117 was a ticket and not a one-line commit.
+that is why k117 was a ticket and not a one-line commit.
 `t/41-recursive-anchor-refused.t` bounds ADR 0025's regression by dying on the
 first deep-recursion warning in a forked child: perl raises it at depth 100, so
 a runaway walk is caught in milliseconds, before it has allocated anything.
@@ -173,10 +173,10 @@ without it the bound is decorative.
 - `t/45-deep-document-is-quiet.t` pins the noise itself, the bound in each of
   the six walks, and the sops boundary the number comes from.
 - **The noise is not gone yet.** The walks in `Encrypted.pm` and
-  `Format/YAML.pm` were held by karr #116 when this landed and could not be
+  `Format/YAML.pm` were held by k116 when this landed and could not be
   touched: `Encrypted::_canonical_floats` runs inside every emit, and
   `Format::YAML`'s two leaf walks run on every parse. 168 of the original 505
-  lines remain, all from there. karr #120 carries the same two changes to them;
+  lines remain, all from there. k120 carries the same two changes to them;
   section 2 of t/45 is a TODO block that flips when it lands.
 
 ## Alternatives considered

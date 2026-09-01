@@ -2,13 +2,13 @@
 
 - Status: **accepted** — 2026-09-01, by the maintainer, who took the return-type
   decision (Decision 1: a stream is an ArrayRef, one document stays a HashRef) as
-  written and cleared karr #31 to implement. The review stack the ADR's schedule
+  written and cleared k31 to implement. The review stack the ADR's schedule
   note warned about is now closed.
 - Date: 2026-08-21
 - Tags: api, yaml, interop, wire-format, multi-document
-- Prepares karr #31 step 1 (the plan in that ticket makes this ADR a precondition
+- Prepares k31 step 1 (the plan in that ticket makes this ADR a precondition
   for every other step)
-- Follows karr #14, which stopped the data loss by refusing multi-document YAML
+- Follows k14, which stopped the data loss by refusing multi-document YAML
   rather than truncating it
 - Related: ADR 0001 (MAC key order comes from an order-preserving reparse — the
   reparse is one of the two places the one-document rule is held, and it is the
@@ -29,7 +29,7 @@ sops supports these streams. Not as "several files concatenated", but as **one
 tree with N branches** carrying **one** metadata section and **one** MAC across
 all of them. Reproducing that reaches encryption, the MAC on both sides, the
 order-preserving reparse, `decrypt_file`'s emitter, `extract`'s path language and
-`rotate` — which is why karr #31 asks for a decision before an implementation.
+`rotate` — which is why k31 asks for a decision before an implementation.
 
 The open question is the public API shape. `encrypt(data => ...)` takes a HashRef
 and `decrypt` is documented to return one. A stream has N documents. Something in
@@ -38,7 +38,7 @@ the signature has to carry the document axis, or it has to be declared absent.
 ## What sops does
 
 Everything below was re-measured today against **sops 3.13.3** (`/tmp/sops`), on a
-throwaway age keypair, in a scratch directory. The seven points karr #31 recorded
+throwaway age keypair, in a scratch directory. The seven points k31 recorded
 on 2026-08-08 all still hold; the numbered findings after them are new and were
 not in the ticket.
 
@@ -79,7 +79,7 @@ not in the ticket.
 **only the first document**, exit 0, nothing on stderr. Worse, the same is true on
 the **write** path: `sops -e --input-type yaml --output-type json` on a
 two-document input writes a single-document JSON file containing only the first
-document's keys, exit 0, silent. This is precisely the karr #14 defect class,
+document's keys, exit 0, silent. This is precisely the k14 defect class,
 present in the reference implementation. It is measured, and it is not a mandate.
 
 **N2. `sops --extract` sees document 0 and nothing else.** On a two-document
@@ -130,7 +130,7 @@ policy is a property of the stream, not of a document.
 
 ## The trap, re-measured
 
-karr #31 records it and it is unchanged today, on `YAML::XS` v0.910.0 and
+k31 records it and it is unchanged today, on `YAML::XS` v0.910.0 and
 `YAML::PP` v0.41.0:
 
 | | scalar context | list context |
@@ -219,7 +219,7 @@ house rule exists for. `sops` silently drops all but the first document when the
 output format cannot hold a stream — on read *and* on write, exit 0, no warning.
 JSON has no document stream, so there is no faithful representation to produce.
 
-Copying that would re-introduce karr #14 in a new place. So: converting a
+Copying that would re-introduce k14 in a new place. So: converting a
 multi-document stream to a format that cannot hold one is **refused**, with a
 message that names the document count and the target format. The wire is
 unaffected — this only governs a conversion sops performs lossily and we decline
@@ -321,7 +321,7 @@ re-encrypted on its own. Dropping a document fails verification, measured.
 
 - `Format::YAML->parse` returns a document list, and `_parse_in_document_order`
   returns one too. They must change **together**: the trap is that one supplies
-  order and the other values. This is why karr #31's plan puts the trap first, in
+  order and the other values. This is why k31's plan puts the trap first, in
   one commit, before the MAC change.
 - The MAC becomes leaves in document order, each document contributing its own key
   order. Nothing else about the digest moves.
@@ -336,12 +336,12 @@ re-encrypted on its own. Dropping a document fails verification, measured.
 
 ## What this does not decide
 
-- Whether `edit` on a stream keeps its current new-data-key divergence (karr #41).
+- Whether `edit` on a stream keeps its current new-data-key divergence (k41).
 - The N5 anchor-scope divergence, which needs a ticket of its own.
 - Multi-document support for any format other than YAML. JSON has no document
-  stream; ENV and INI do not exist yet (karr #36, #37).
+  stream; ENV and INI do not exist yet (k36, k37).
 
-## Effort for karr #31 steps 2–6
+## Effort for k31 steps 2–6
 
 Honest estimate, assuming this ADR is accepted as written and the lanes run in the
 ticket's binding order. The interop suite must run for real at every step — a
@@ -362,7 +362,7 @@ almost all the risk, and both fail silently rather than loudly when they are wro
 per-document decision each (Decision 4), and one of them (ADR 0026) needs
 restructuring rather than a parameter.
 
-The largest schedule risk is not in the table: karr #31's own board note asks that
+The largest schedule risk is not in the table: k31's own board note asks that
 this ticket not land while the review stack is open, because six steps touching
 the same files make every later diff unreadable. Three lanes were working in
 `lib/` when this ADR was written.

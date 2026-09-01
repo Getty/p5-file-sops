@@ -3,8 +3,8 @@
 - Status: **accepted** — decided and implemented together, in this commit.
 - Date: 2026-08-21
 - Tags: mac, format, parser, interop, roadmap, env, ini
-- Resolves karr #74 (split out of karr #36 as 36a). Prerequisite for karr #36
-  (ENV) and karr #37 (INI).
+- Resolves k74 (split out of k36 as 36a). Prerequisite for k36
+  (ENV) and k37 (INI).
 - **Refines ADR 0001; it does not change it.** Every decision ADR 0001 took is
   still in force, including the one that looks like it moves — see
   *What ADR 0001 says now* below.
@@ -28,9 +28,9 @@ order**, so every such file whose keys were not already sorted would fail
 verification, with an error naming the MAC and nothing pointing at the cause.
 
 So the mechanism was bound to a format it did not have to be bound to. That is
-the standalone value karr #74 names, and it is also a hard precondition: no ENV
+the standalone value k74 names, and it is also a hard precondition: no ENV
 and no INI handler can verify a MAC `sops` wrote until this is fixed, which is
-why #36 and #37 both depend on it.
+why k36 and k37 both depend on it.
 
 The mechanism has two halves, and only one of them is format-independent:
 
@@ -80,7 +80,7 @@ POD:
 A format class that cannot do this **at all** — no such method — is a `croak`,
 not a fallback. That is not a document's fault, it is a hole in this
 distribution, and swallowing it would silently degrade every document in that
-format to sorted order: precisely the env/ini defect karr #74 exists to
+format to sorted order: precisely the env/ini defect k74 exists to
 prevent. The message names the missing method and says what would otherwise
 have happened.
 
@@ -109,7 +109,7 @@ change touches `_mac_digest`, `_mac_bytes`, `_sorted_leaves` or
 `YAML::PP->load_string` returns the **first**. The walk takes its order from one
 and its values from the other, so a reparse that quietly accepted a stream would
 pair one document's order with another document's values — a wrong digest, not
-an error. This was live in shipped code once (karr #31). The LIST-context call
+an error. This was live in shipped code once (k31). The LIST-context call
 and the `@docs == 1` test moved into `Format::YAML->parse_in_document_order`
 verbatim and are pinned in `t/51` for the handler, the JSON delegation and the
 dispatcher, alongside the existing `t/13` assertions on the dispatcher.
@@ -152,7 +152,7 @@ The pre-change library was reconstructed in a scratch copy of `lib/` by
 reversing the three edits, and it reproduced the baseline byte for byte before
 being used as the reference.
 
-**Because no digest moves, this stays in the format lane.** karr #74's body
+**Because no digest moves, this stays in the format lane.** k74's body
 says "hand over to wire as soon as what the digest covers moves". It does not
 move: this is restructuring, and the measurement is the evidence.
 
@@ -187,7 +187,7 @@ non-ASCII on the wire as UTF-8 — so it takes a hand-written key to reach. When
 it is reached the key sets disagree and `_document_leaves` says so at the path
 (`present in the document but not in the parsed tree`), measured. **A false
 refusal, never a false pass**, so it is a fidelity gap of the same class as
-karr #29 and not a correctness hole.
+k29 and not a correctness hole.
 
 `Cpanel::JSON::XS` has no order-preserving decode mode, so giving JSON a reader
 of its own means a second hand-written scanner over raw text — which is what
@@ -198,7 +198,7 @@ silently dropped values from the digest. So the delegation stands, and it is now
 
 ## What an ENV handler must now deliver
 
-This is what karr #36 and karr #37 get out of this ADR:
+This is what k36 and k37 get out of this ADR:
 
 ```perl
 sub parse_in_document_order {

@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-23
 - Tags: mac, hint, yaml, json, interop, sops-bug
-- Resolves karr #121
+- Resolves k121
 - Depends on ADR 0014 (Perl `-0.0` is shipped as `-0.0`, never as bare
   `-0`; the broken shape exists only on the Go side), ADR 0052 (the
   precedent for hedged MAC-failure hints, on env / ini display forms)

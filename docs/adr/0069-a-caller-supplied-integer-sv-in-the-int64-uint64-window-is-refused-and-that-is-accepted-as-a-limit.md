@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-01
-- Resolves karr #104 (part b — part a landed in c8eee80)
+- Resolves k104 (part b — part a landed in c8eee80)
 - Depends on ADR 0021 (which fixed the window for a value that arrives through
   `Format::JSON::parse`, and deferred exactly this remainder), ADR 0006 (the
   acceptance condition: the literal text equals `FormatFloat(double,'f',-1,64)`
@@ -23,7 +23,7 @@ still carries `SVf_IOK` and still hits `assert_representable`, which croaks: no
 `type:int` exists outside int64 (Go's int type), and this side refuses rather
 than silently truncating to a float.
 
-Part (a) of karr #104 (c8eee80) already did the cheap, safe half: the croak
+Part (a) of k104 (c8eee80) already did the cheap, safe half: the croak
 message now names **both** answers the caller has — pass the value as a string
 to store the digits exactly (`type:str`, verbatim, both formats, both slots),
 or as a float (`unpack('d', pack('d', $value))`) to get what sops writes for
@@ -88,7 +88,7 @@ against.
 ## Consequences
 
 - The four-file change that would close it (option a) is on record as rejected,
-  with the reason. Reopening karr #104(b) means overturning that decision, not
+  with the reason. Reopening k104(b) means overturning that decision, not
   rediscovering the case.
 - No MAC, AAD, encrypted wire byte, parser, emitter or type-ladder decision
   moves. The guard that refuses, and the message that names the two answers,

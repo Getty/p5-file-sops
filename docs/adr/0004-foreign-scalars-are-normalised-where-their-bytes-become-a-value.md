@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-09
 - Tags: crypto, dependencies, types, determinism
-- Records the rule introduced by commit cf2bb15 (karr #32) and scopes it against
+- Records the rule introduced by commit cf2bb15 (k32) and scopes it against
   ADR 0002, which is what makes the unconditional version of it wrong
 
 ## Context
@@ -185,7 +185,7 @@ non-terminating as the primitive it wraps.
    number.
 
 4. **Wait for the upstream fix.** The report is drafted (`refs/cryptx-pv-defect.md`,
-   karr #42) and it is the correct fix, but it fixes the machines that upgrade.
+   k42) and it is the correct fix, but it fixes the machines that upgrade.
    The workaround costs one character and cannot be withdrawn when the fix lands
    either, because this distribution cannot re-install its users' CryptX. The two
    are different timescales, not alternatives.

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-21
-- Resolves karr #145 and karr #146, and clears the two divergences ADR 0042
+- Resolves k145 and k146, and clears the two divergences ADR 0042
   measured and left open
 - Depends on ADR 0042 (the two typed metadata fields, and the shape refusal it
   established for them) and ADR 0002 (the type comes from the scalar)
@@ -14,9 +14,9 @@ ADR 0042 decoded the two fields in a `sops` section that are **not** strings,
 and named two divergences in the fields that **are**, both left open:
 
 - a float-spelled string field — `unencrypted_suffix: 1e20` is
-  `100000000000000000000` in Go and `1e+20` here (karr #146);
+  `100000000000000000000` in Go and `1e+20` here (k146);
 - `version` is weakly stringified and then **semver-parsed**, so sops refuses
-  `version: 3` where this library accepts it (karr #145).
+  `version: 3` where this library accepts it (k145).
 
 Both were filed as "what does `from_hash` do with a field whose value is not
 what sops expects", and the answer turns out to be **three** answers, not one.
@@ -103,7 +103,7 @@ normalise this field to its own version.
 
 **Three questions, three answers, and the severity decides which.**
 
-### 1. A reference in a string field is refused — karr #145's and #146's shape half
+### 1. A reference in a string field is refused — k145's and k146's shape half
 
 `File::SOPS::Metadata->from_hash` refuses a list, a map, a code reference or a
 blessed object in any of the nine string fields, naming the field and the shape
@@ -123,7 +123,7 @@ and `key_groups` is a list by definition.
 there to be faithful to, and what a Perl caller means by
 `File::SOPS::Metadata->new(mac => $x)` is a Perl question.
 
-### 2. A non-string scalar is **not** restringified — karr #146
+### 2. A non-string scalar is **not** restringified — k146
 
 `unencrypted_suffix: 3` stays the number 3. For every spelling Perl's text and
 Go's agree, and the one that differs — a float outside positional range —
@@ -139,7 +139,7 @@ wire behaviour but a repair of somebody's hand-editing — and reproducing it
 would mean giving `Metadata.pm` a second opinion about a scalar's text, which
 is ADR 0002's territory and this distribution's signature defect.
 
-### 3. `version` is **not** semver-parsed — karr #145
+### 3. `version` is **not** semver-parsed — k145
 
 The fail-loud rule points the other way and is answered on the measurement, not
 waved off:
@@ -178,7 +178,7 @@ sitting in the code unremarked.
   unchanged and green at 145/145, and with `t/04-interop.t` (32/32,
   **executed** against sops 3.13.3) and the new `t/57` the lane is
   **183/183**. `SOPS_BIN=/tmp/sops prove -lr t/` was green over the whole tree
-  at the time of the run, which also carried the karr #76 lane's work in
+  at the time of the run, which also carried the k76 lane's work in
   progress.
 - **`rotate` can no longer turn a malformed rule into a plaintext file.** For
   the reference half of it. A rule that is a perfectly ordinary string and

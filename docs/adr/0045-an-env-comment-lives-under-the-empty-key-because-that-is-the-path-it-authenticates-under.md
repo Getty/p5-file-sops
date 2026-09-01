@@ -3,8 +3,8 @@
 - Status: **accepted** — decided and implemented together, in this commit.
 - Date: 2026-08-21
 - Tags: env, format, mac, comments, interop, roadmap
-- Resolves karr #36 (the ENV format handler), which CLAUDE.md has promised since
-  0.001. Unblocked by karr #74, #75, #76 and #77, all four landed today
+- Resolves k36 (the ENV format handler), which CLAUDE.md has promised since
+  0.001. Unblocked by k74, k75, k76 and k77, all four landed today
 - Depends on, and does not revisit: **ADR 0022** (the flat `sops_*` metadata
   encoding and its escape), **ADR 0030** (an ENV value the escape cannot carry
   is refused), **ADR 0035** (an untyped store's unencrypted leaf is written as
@@ -17,7 +17,7 @@
 
 ## Context
 
-karr #36's body said the hard parts were the flat metadata (1), the MAC's key
+k36's body said the hard parts were the flat metadata (1), the MAC's key
 order (2), `type:comment` (3) and a per-format type policy (4), and that the
 parse/serialize class was "the cheap part" (5). Four ADRs have since answered
 1–4 — including the finding that 4 was not a real question, since ADR 0002
@@ -231,7 +231,7 @@ in sorted order.
   `File::SOPS::Encrypted->value_to_bytes($leaf)` (ADR 0035) — asked of the
   single source of truth, never re-derived. That is where this library writes
   `True`, an empty string and `1` for the three values sops writes as `true`,
-  `<nil>` and `1.0` and then cannot read (karr #124, #125, #137).
+  `<nil>` and `1.0` and then cannot read (k124, k125, k137).
 - **A value the escape cannot carry** is refused when the document is written
   (ADR 0030), through the round-trip test on the escape rather than a test for
   a character, and only for unencrypted leaves and only on the write side.
@@ -279,7 +279,7 @@ plaintext `.env` carries no metadata at all. The prefix is not spelled in
 `decrypt_file`, `encrypt_in_place`, `edit`, `extract` and `rotate` all work on
 env documents, with comments, in both directions against the binary.
 
-**A commented `.env` survives `decrypt_file` and `edit`** — the half of karr #76
+**A commented `.env` survives `decrypt_file` and `edit`** — the half of k76
 that ADR 0041 had to leave open, since `Format::YAML` cannot write a comment
 line and refuses rather than dropping one. This handler can, and does.
 
@@ -293,7 +293,7 @@ it.
 
 **A plaintext env document written here spells a boolean `True`.** `sops -d`
 writes `true` for the same leaf. There is no digest over a plaintext document,
-so this is cosmetic — but it is the one place the single emitter (karr #35:
+so this is cosmetic — but it is the one place the single emitter (k35:
 `emit` is `serialize` without the metadata and is also what `decrypt_file`
 writes) shows through, and re-encrypting either spelling yields a `type:str`
 string in both implementations.
@@ -303,7 +303,7 @@ and the comments move to the top. That is the cost of decision 2 and it is
 paid once per file, not per edit: a document this library rewrites is stable
 under further rewrites.
 
-**INI (karr #37) inherits most of this.** The flat metadata (ADR 0022), the type
+**INI (k37) inherits most of this.** The flat metadata (ADR 0022), the type
 rule (ADR 0035, measured identical line for line), the order-preserving reparse
 (ADR 0036) and the comment leaf (ADR 0041) are shared, and so is the shape of
 this handler. What it does **not** inherit: the escape guard (ADR 0030 measured
@@ -319,7 +319,7 @@ and is accepted now; every YAML and JSON path is untouched, byte for byte.
 ## Rejected alternatives
 
 **Drop comments at parse.** The cheapest handler, and it makes `decrypt_file`
-silently delete every comment in the file it rewrites. karr #36's own
+silently delete every comment in the file it rewrites. k36's own
 constraint says a comment is the ordinary case in this format; that is exactly
 where dropping is least acceptable.
 

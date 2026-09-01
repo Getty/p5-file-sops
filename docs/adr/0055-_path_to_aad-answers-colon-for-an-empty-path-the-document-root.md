@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #156
+- Resolves k156
 - Touches the shared AAD derivation used by every format and by the MAC
 - Lane: wire
 
@@ -24,8 +24,8 @@ env comment: `Format::ENV` writes those leaves under the literal empty key
 `""`, the path is `[ '' ]`, and `_path_to_aad([''])` answers `":"` -- which
 matches sops and is why the round trip works.
 
-The divergence was discovered at karr #36 (docs/adr/0044, measurement 3)
-and filed as karr #156. Recorded in `Format::ENV`'s POD and in `Format::INI`'s
+The divergence was discovered at k36 (docs/adr/0044, measurement 3)
+and filed as k156. Recorded in `Format::ENV`'s POD and in `Format::INI`'s
 POD as a comment that names the four callers and explains the gap. Until
 now nothing fixed it.
 

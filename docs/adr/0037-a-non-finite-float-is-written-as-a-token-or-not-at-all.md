@@ -6,9 +6,9 @@
   anything in the repository changed.
 - Date: 2026-08-21
 - Tags: float, yaml, json, editor, wire-format, interop, mac
-- Resolves karr #134. Files karr #140 (a contradictory string half in a
+- Resolves k134. Files k140 (a contradictory string half in a
   plaintext emit) for what it deliberately leaves alone, and adds a measured
-  note to karr #122, whose stated premise did not survive this measurement.
+  note to k122, whose stated premise did not survive this measurement.
 - Depends on ADR 0026 (which taught the parse to read a plain token back as the
   float go-yaml resolves), ADR 0031 (whose gate, table and verdict this reuses
   unchanged, and whose `return $node` short-circuit this replaces), ADR 0034
@@ -18,7 +18,7 @@
   ADR 0002 (the type comes from the SV; nothing here reads a leaf's text to
   decide what it is)
 - Does **not** touch `Encrypted::encrypt_value`'s refusal of a non-finite float
-  in an encrypted slot. That is karr #122, it is what stops this change from
+  in an encrypted slot. That is k122, it is what stops this change from
   closing the `edit` round trip, and it is named in "What this leaves broken"
   with the measurement that reopens it
 
@@ -200,7 +200,7 @@ MAC-covered document that was not writable before** — `assert_representable`
 runs first, from `_compute_mac`'s leaf sweep, and its gate is untouched.
 
 A plaintext emit of `dualvar(+Inf, 'banana')` still writes `banana`, which is
-its own small defect and predates this change. Filed as karr #140 rather than
+its own small defect and predates this change. Filed as k140 rather than
 absorbed.
 
 ### What was measured
@@ -262,9 +262,9 @@ protect, and both are edited in place rather than deleted:
   untouched and the carrier is never asked about it, and that the **bare** one is
   the single leaf the carrier is asked to replace.
 - **`t/49` section 8**, `an ENCRYPTED non-finite float is still retyped by edit
-  (karr #134)`. Written to pin this defect "so the fix flips it visibly instead
+  (k134)`. Written to pin this defect "so the fix flips it visibly instead
   of quietly", which is what it now does: the subtest is
-  `an ENCRYPTED non-finite float is no longer retyped by edit (karr #134)` and
+  `an ENCRYPTED non-finite float is no longer retyped by edit (k134)` and
   asserts the refusal, the untouched wire and `sops edit`'s answer beside it.
 
 ### Cost
@@ -302,7 +302,7 @@ The knock-on for the **encrypted** wire is a refusal, not different bytes:
 | input | before | after |
 |---|---|---|
 | `decrypt_file` of a YAML document with an encrypted `type:float` `+Inf` / `-Inf` / `NaN` | writes `Inf` / `-Inf` / `NaN` | **writes `.inf` / `-.inf` / `.nan`**, byte-identical to `sops -d` |
-| `edit` of the same document, editing any key | returns 1, the leaf silently becomes `type:str` | **croak**, naming the key path; the file is untouched and the edit is lost (karr #122, karr #123) |
+| `edit` of the same document, editing any key | returns 1, the leaf silently becomes `type:str` | **croak**, naming the key path; the file is untouched and the edit is lost (k122, k123) |
 | `decrypt_file` of a **JSON** document with such a leaf | writes `"secret": null` | **croak**, naming the key path — as `sops -d --output-type json` refuses it, exit 4 |
 | `edit` of that JSON document | returns 1, the `ENC[...]` is replaced by a bare unencrypted `null` | **croak**; `sops edit` refuses the same document, exit 4 |
 | `decrypt` / `extract` of either | the float | **unchanged** — nothing here is on the read path |
@@ -319,27 +319,27 @@ The knock-on for the **encrypted** wire is a refusal, not different bytes:
   slot.** The plaintext now says `.inf`, the reparse now reads it back as the
   float it is — and `Encrypted::encrypt_value` refuses to put a non-finite float
   in an encrypted slot at all (ADR 0031, part 3). So the round trip ends one rung
-  higher than it did, loudly instead of silently, and karr #122 is the rung.
+  higher than it did, loudly instead of silently, and k122 is the rung.
   This change is deliberately shipped without it: turning silent corruption into
   a refusal that names the key path is the same trade ADR 0034 made three commits
   ago for the same leaf class, for the same reason, and with the same ticket
   named as the thing that removes it.
 
-  **And karr #122's stated premise did not survive this measurement.** ADR 0031
+  **And k122's stated premise did not survive this measurement.** ADR 0031
   refused the encrypted slot because "the two formats disagree about it (YAML
   exit 0, JSON exit 4)". Measured here, six documents: `sops -e` writes a JSON
   wire document carrying `type:float` `+Inf` at **exit 0**, and both wire formats
   read back at exit 0 with `--output-type yaml` and at exit 4 with
   `--output-type json`. The disagreement is between **output** formats, which is
   not a property of the document being written — so the format `encrypt_value`
-  was said to need may not be needed at all. Recorded on karr #122; it is a
+  was said to need may not be needed at all. Recorded on k122; it is a
   decision about an encrypted slot's bytes and it gets its own ADR.
 
 - **A plaintext emit still writes a non-finite float's contradictory string half
   verbatim.** `dualvar(+Inf, 'banana')` reaches a plaintext YAML document as
   `banana` and a plaintext JSON one as `"banana"`. It is refused everywhere a MAC
   is involved, it is unchanged by this decision, and repairing it would mean
-  overwriting a string half the caller chose. karr #140.
+  overwriting a string half the caller chose. k140.
 
 - **`edit` destroys the edit whenever the re-encryption refuses.** Untouched
   here, named again because this change adds a case: the temporary file is
@@ -392,7 +392,7 @@ reference succeeds; the formats really are different here, and the emitter is
 asked rather than assumed precisely so that the difference is stated once, by
 the side that owns it.
 
-**Fix karr #122 in the same change so the `edit` round trip closes.** It is a
+**Fix k122 in the same change so the `edit` round trip closes.** It is a
 decision about the bytes of an **encrypted** slot, it reopens a refusal ADR 0031
 argued for explicitly, and the measurement that reopens it (above) is new. It
 deserves its own corpus and its own ADR, and folding it in here would mean

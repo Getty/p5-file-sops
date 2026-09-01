@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #168
+- Resolves k168
 - Lane: api
 - Depends on ADR 0041 (the File::SOPS::Comment mapping-value guard, the twin
   shape) and ADR 0046 (the read-side `_decrypt_tree` rule-driven exit, which
@@ -72,7 +72,7 @@ naming the path and the shape.
 
 The guard lives in the leaf branch of `_encrypt_tree`, BEFORE the existing
 `return $node unless $metadata->should_encrypt_path($path);` early return,
-with a predicate of three conjuncts that exactly match the karr #168 ticket:
+with a predicate of three conjuncts that exactly match the k168 ticket:
 
 ```perl
 croak _at_path($path, "a caller string whose text parses as an "
@@ -158,7 +158,7 @@ matching the documentation density of the line-3396 guard it twins.
 - **The `_decrypt_tree` mapping-value guard (line 3480, ADR 0041) is
   unchanged.** That guard fires on the read side, where the symptom on
   decrypt was already `Authentication failed`. Closing the write side keeps
-  the file this library writes honest; closing the read side is karr #160
+  the file this library writes honest; closing the read side is k160
   territory and lives in another lane.
 - **A `type:str` (or any other label) ENC token at an excluded path still
   WRITES verbatim.** The guard's predicate discriminates on the label, and
@@ -171,10 +171,10 @@ matching the documentation density of the line-3396 guard it twins.
 
 - **No new guard on the read side.** The `_decrypt_tree` mapping-value
   type:comment guard at line 3480 stays as it is. Closing the read side is
-  the asymmetric-walk ticket (karr #160, wire lane) and is its own decision
+  the asymmetric-walk ticket (k160, wire lane) and is its own decision
   -- it moves what the digest covers, which is not the API lane's.
 - **No guard on a plain string parsing as `ENC[...,type:comment]` in any
-  other excluded shape.** The karr #168 ticket names one shape -- a plain
+  other excluded shape.** The k168 ticket names one shape -- a plain
   string at an excluded path -- and that is what this guard catches. A
   caller passing a list whose element is the bad shape fires the guard at
   the leaf, with the same path naming; a caller passing it inside a
@@ -184,7 +184,7 @@ matching the documentation density of the line-3396 guard it twins.
   job, and a Comment object at an included path encrypts to `type:comment`
   the way the file shape ADR 0041 describes.
 - **No regex-dialect handling.** A rule regex RE2 cannot compile is a
-  separate question (karr #161, ADR 0048 / ADR 0051), and the predicate
+  separate question (k161, ADR 0048 / ADR 0051), and the predicate
   here uses the existing `should_encrypt_path` which already answers in
   RE2's dialect on the read path.
 
@@ -194,7 +194,7 @@ matching the documentation density of the line-3396 guard it twins.
 today. The symptom on decrypt is `Authentication failed` from
 `_decrypt_tree`'s line-3557 guard (the rule-says-encrypted-but-the-file-
 holds-a-plain-value half), and the file is not silently corrupted. Rejected
-because it is the same defect class karr #18 and karr #150 already
+because it is the same defect class k18 and k150 already
 demonstrated: a file this library wrote and cannot read back is a broken
 file, not a working file that errs on read. The exit is louder than the
 MAC mismatch that would have happened on the line-3396 guard's twin, but
@@ -220,7 +220,7 @@ read drops nothing) -- the gate fixes the second, the new guard fixes the
 first.
 
 **Refuse the literal ENC token in `Encrypted->encrypt_value` itself.**
-Wider than the karr #168 ticket. Rejected because encrypt_value sees leaves
+Wider than the k168 ticket. Rejected because encrypt_value sees leaves
 the rule SELECTS, where the leaf is about to be encrypted under the data
 key and the type:comment label is just a label -- the bug is specific to
 the EXCLUDED slot, and the guard lives in `_encrypt_tree` to keep the

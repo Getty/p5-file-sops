@@ -6,7 +6,7 @@
   changed until the tables existed.
 - Date: 2026-08-21
 - Tags: yaml, json, wire-format, mac, data-model, interop, guards
-- Resolves karr #76 for the shape that occurs. Removes the parse-time guard
+- Resolves k76 for the shape that occurs. Removes the parse-time guard
   ADR 0024 installed and replaces it with two narrower ones, on the write side
 - **Supersedes the decision of ADR 0024** — "a `type:comment` leaf found in a
   parsed YAML tree is refused" — which that ADR wrote as a deliberate
@@ -40,13 +40,13 @@ ADR 0024 refused such a document, because reading the leaf as a value put a
 string in the caller's list that the file does not contain, and a
 `decrypt` + `encrypt` cycle made it permanent with every party reporting
 success. The refusal closed the corruption and cost the ability to read a
-document `sops -d` reads at exit 0. karr #36 and karr #37 then reported that the
+document `sops -d` reads at exit 0. k36 and k37 then reported that the
 cost is not payable at all for ENV and INI, where a comment is the ordinary
 case rather than the exception.
 
-karr #76's body states that a comment leaf is **in the digest**. It is not, and
+k76's body states that a comment leaf is **in the digest**. It is not, and
 that premise is what made the ticket look like a data-model change of its own.
-Four measurements at karr #108 said so; a fifth, sixth and seventh are below.
+Four measurements at k108 said so; a fifth, sixth and seventh are below.
 
 ## What was measured
 
@@ -76,7 +76,7 @@ Two further rows decide the size of the whole ticket:
 So the only shape any sops document carries is **a comment as a sequence
 element**, in both wire formats. A sequence element is not a leaf without a
 key: it **is** an entry, and the tree model already has a place for it. The
-key-less leaf karr #76 was filed for does not occur, and nothing needs to be
+key-less leaf k76 was filed for does not occur, and nothing needs to be
 invented for it.
 
 ### 2. The AAD is the ordinary path
@@ -96,7 +96,7 @@ The digest, computed here in document order from the leaves of a
 | document | comments **in** the digest | comments **out** |
 |---|---|---|
 | six comments, five positions | `B40539D2CD54EA9F…`, differs | `461FE3EA428F023F…`, **matches sops** |
-| karr #108's three-line reproducer | `F327F66D8A39C28F…`, differs | `05F70341078ACF6A…`, **matches sops** |
+| k108's three-line reproducer | `F327F66D8A39C28F…`, differs | `05F70341078ACF6A…`, **matches sops** |
 | `--mac-only-encrypted` | differs | **matches sops** |
 | a comment beside an `_unencrypted` subtree | differs | **matches sops** |
 
@@ -134,7 +134,7 @@ ADR 0024's guard lives in `Format::YAML::parse`. `Format::JSON` has none, and
 sops writes `type:comment` leaves into JSON (row 1 above). Measured at HEAD on
 such a document: `decrypt` dies with `MAC verification failed`, and
 `decrypt(ignore_mac => 1)` returns `{ list => [' a comment', 'one'] }` — the
-phantom element karr #108 reports, still open in the other format. It is closed
+phantom element k108 reports, still open in the other format. It is closed
 here by the representation rather than by a second guard.
 
 ### 7. A comment leaf in a mapping VALUE slot is corruption, and now it is measured
@@ -242,7 +242,7 @@ the text.
   them** — from a digest sops does not compute to the one it does. No document
   without a comment leaf is affected, which is every document this library has
   ever written.
-- **karr #108's defect is closed in JSON too**, where the guard never reached.
+- **k108's defect is closed in JSON too**, where the guard never reached.
 - **`decrypt_value` returns an object for `type:comment`** where it returned the
   text. Reachable only by a direct caller, since no read path produced one
   before this change.
@@ -250,12 +250,12 @@ the text.
   leaf**, now from the emitter and with a message that says why: the plaintext
   the editor would see cannot carry the comment, and re-reading such a plaintext
   would drop it (`YAML::XS` discards comment lines), so writing one would be a
-  silent loss on the way back in. That is the ENV/INI-shaped half of karr #76
+  silent loss on the way back in. That is the ENV/INI-shaped half of k76
   that stays open — those handlers **can** write and re-read a comment line, and
   this decision is what gives them the leaf to write.
 - **Mapping-position comments are unchanged**: dropped by `YAML::XS` on the way
   in, absent from anything written here, and dropped by sops itself in JSON.
-  Not made better or worse, and now the only part of karr #76 still open.
+  Not made better or worse, and now the only part of k76 still open.
 - **The JSON emitter's refusal of a `File::SOPS::Comment` is Cpanel's generic
   one**, not a targeted message. Recorded rather than fixed here; the JSON
   handler is another lane's file.
@@ -277,8 +277,8 @@ before.
 ## Rejected alternatives
 
 **Keep refusing (ADR 0024, unchanged).** Correct for the read defect and
-unpayable for ENV and INI, where a comment is the ordinary case (karr #36,
-karr #37) — and, as measurement 6 shows, incomplete even for YAML's own defect,
+unpayable for ENV and INI, where a comment is the ordinary case (k36,
+k37) — and, as measurement 6 shows, incomplete even for YAML's own defect,
 which reaches JSON through `--output-type json`.
 
 **Drop the comment leaf from both trees at parse.** ADR 0024 measured this to

@@ -2,16 +2,16 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #157
+- Resolves k157
 - Lane: api
 - Depends on **ADR 0022** (the flat metadata encoding ENV and INI share via
   `File::SOPS::Metadata::Flat` — the prefix is the only thing that differs
-  between them) and the `karr #18` reasoning this guard was originally
+  between them) and the `k18` reasoning this guard was originally
   written to enforce (`t/09-reserved-sops-key.t` pins that case for YAML
   and JSON).
 - **Moves no wire bytes.** The YAML and JSON case is unchanged; ENV and
   INI now accept a `sops` data key and write/read it like any other entry.
-  Every existing YAML/JSON test that pins the `karr #18` refusal still
+  Every existing YAML/JSON test that pins the `k18` refusal still
   passes byte-for-byte.
 
 ## Context
@@ -19,7 +19,7 @@
 SOPS keeps its metadata under a single namespace root. For YAML and JSON
 that namespace is a literal `sops:` mapping at the top of the document;
 the metadata and the user's data live in the same hash and a collision
-overwrites one with the other. `karr #18` is the bug that followed from
+overwrites one with the other. `k18` is the bug that followed from
 not noticing it: `serialize` assigned the metadata into `sops`
 unconditionally, so a user value under that name was overwritten by the
 metadata section; the digest, computed before serialization, had already
@@ -135,7 +135,7 @@ leading clause; the only thing that changed is the advice.
   `encrypt_file` refuses an already-encrypted file, (c) `encrypt_file`
   refuses in-place re-encryption, (d) the same refusal for a `sops`
   entry that is not a mapping, all pass byte-for-byte. The MAC
-  verification failure mode `karr #18` describes is unchanged.
+  verification failure mode `k18` describes is unchanged.
 - **`rotate` and `edit` succeed on a sops-written env file with
   `sops=1`.** Both reach `encrypt` for the re-encryption; before the
   fix, both died with the format-blind refusal. After the fix, the
@@ -203,7 +203,7 @@ shape the binary accepts would be a wire break in everything but name.
 
 **Strip the `sops` key from `$data` in `encrypt` and let the file
 emit normally.** Looser. Rejected because it would silently drop the
-caller's value, which is the failure mode `karr #18` was meant to
+caller's value, which is the failure mode `k18` was meant to
 prevent. The MAC covers the value; if the value disappears between
 digest and serialize, the document fails its own MAC on the next read.
 Refusing is louder than dropping.
@@ -223,7 +223,7 @@ the user's value. A YAML caller passing `{ sops => 'mine' }` would
 reach the handler guard with a MAC already computed over `mine`, and
 the resulting document would either silently drop the user's value or
 fail the handler guard — both wrong, and one of them silently wrong,
-which is the `karr #18` failure mode the guard exists to prevent.
+which is the `k18` failure mode the guard exists to prevent.
 
 **Use `sops -i` as the recovery path in the error message.** Closer to
 the previous wording, but worse. `sops -i` is editor mode; the SOPS
@@ -259,9 +259,9 @@ Three commits, in this order:
   added — round-trip pin for env with `sops=1`, INI refusal pin, the
   YAML/JSON guard-still-fires regression net, rotate and
   encrypt_in_place pins, the wording pin, and the binary round-trip
-  subtests. Cites karr #157 in the header.
+  subtests. Cites k157 in the header.
 - **DOCS** (this ADR + `Changes` entry): this file plus the
-  `karr #157` bullet in `Changes`.
+  `k157` bullet in `Changes`.
 
 The ENV handler guard at line 565-570 and the INI handler guard at
 line 798-803 are unchanged. `Metadata/Flat.pm` is unchanged (the
@@ -272,6 +272,6 @@ JSON handler are untouched.
 
 Lane: api. The decision moves an argument guard in `encrypt`, which is
 api-layer territory; the wire bytes do not move (every YAML/JSON test
-that pins the `karr #18` refusal still passes byte-for-byte), and the
+that pins the `k18` refusal still passes byte-for-byte), and the
 flat metadata encoding that decides the format-specific guard behavior
 is api-visible through `%RESERVES_SOPS_KEY`.

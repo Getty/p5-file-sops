@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #141
+- Resolves k141
 - Lane: wire
 - Depends on **ADR 0031** (the non-finite guard, whose `!_carries_go_non_finite_token`
   half is left exactly as it is and whose `!_has_public_pv` half this ADR
@@ -14,12 +14,12 @@
   and `_has_public_pv` is what reads the public half)
 - Does **not** touch `Encrypted::encrypt_value`. An encrypted slot is
   reached by `encrypt_value`, not by `assert_representable` on the read or
-  write path, and karr #122 / ADR 0040 is still the decision that owns
+  write path, and k122 / ADR 0040 is still the decision that owns
   that slot. The narrowing is `assert_representable`'s `encrypted => 0`
   branch only.
 - **Moves no wire bytes for any leaf that already passed.** What changes
   is which leaves pass. A bare NV in an unencrypted YAML slot, which
-  `karr #59 / ADR 0031` refused at exit 1, reaches the file as `.inf`
+  `k59 / ADR 0031` refused at exit 1, reaches the file as `.inf`
   / `-.inf` / `.nan` — the byte `sops -d` itself writes for the same
   document — and `sops -d` reads it back at exit 0 as `+Inf` / `-Inf` /
   `NaN`.
@@ -28,11 +28,11 @@
 
 A non-finite float this library encrypts has two paths to the wire:
 
-- an **encrypted** slot, reached by `Encrypted::encrypt_value` (karr #122
+- an **encrypted** slot, reached by `Encrypted::encrypt_value` (k122
   / ADR 0040 narrows that path to "carries one of go-yaml's twelve tokens
   as its public PV" in YAML and refuses it in JSON)
 - an **unencrypted** slot, reached by `_compute_mac` on the encrypt path
-  and by `_canonical_floats` on the plaintext emit path (karr #140 /
+  and by `_canonical_floats` on the plaintext emit path (k140 /
   ADR 0053), both of which call `assert_representable` with `encrypted
   => 0`
 
@@ -56,7 +56,7 @@ that difference is what the ticket names.
 
 ### The premise the original guard was written under, and where it stopped holding
 
-The karr #59 / ADR 0031 guard refused every bare NV because `value_to_bytes`
+The k59 / ADR 0031 guard refused every bare NV because `value_to_bytes`
 writes `+Inf` / `-Inf` / `NaN` — Go's `strconv.FormatFloat` text, the
 text the digest covers — while the YAML emitter writes a bare `Inf` /
 `-Inf` / `NaN` (which go-yaml reads as a string) and the JSON emitter
@@ -69,7 +69,7 @@ which hands it to the format handler's carrier and verifies the answer.
 The YAML carrier answers `dualvar($double, '.inf')`, which the YAML
 emitter writes as `.inf` — the exact text go-yaml resolves back to
 `+Inf`, byte-identical to what `sops -d` itself writes. The JSON
-carrier croaks, with a different message (the existing karr #134
+carrier croaks, with a different message (the existing k134
 `_non_finite_token_leaf` croak). The two formats now have different
 answers, and the answers live in the carriers.
 
@@ -127,7 +127,7 @@ fourth and ADR 0031's row writes too, which it must.
 
 The `encrypted => 1` branch — the one `Encrypted::encrypt_value`
 consults — is unchanged. ADR 0040's narrowing is still the decision
-that owns the encrypted slot, and karr #122 is still open for it.
+that owns the encrypted slot, and k122 is still open for it.
 
 ### Why the same `_has_public_pv` half the encrypted slot already gates on
 
@@ -142,7 +142,7 @@ scalar it sees (a `_has_public_pv` that said true for a bare NV would
 let the contradicting rows write, and they would fail their own MAC);
 `_has_public_pv` reads the public `SVf_POK`, which is set by every
 parser and by `Scalar::Util::dualvar`, and is the same gate the karr
-#168 / ADR 0056 leaf guard uses.
+k168 / ADR 0056 leaf guard uses.
 
 The gate is the same in both branches on purpose: a refusal that ran
 in only one would move the leaf class between them, and a leaf that
@@ -152,7 +152,7 @@ reached the wire in one branch would not in the other.
 
 The refusal's reach is narrower, not the refusal's verdict for a leaf
 that still hits it. Every leaf the previous refusal caught and refused
-with the karr #59 message is still caught and refused with the same
+with the k59 message is still caught and refused with the same
 gate, the same gate's logic, and — modulo the message reword — the same
 verdict. What is removed is one leaf class (the bare NV in an
 unencrypted slot) that the carrier now handles in YAML and the JSON
@@ -169,22 +169,22 @@ twelve tokens) still passes the gate, in either branch.
 
 | input | before | after |
 |---|---|---|
-| `rotate` of a sops-written YAML document whose unencrypted slot holds a bare `+Inf` / `-Inf` / `NaN` | croak, karr #59 message | **written**, `sops -d` exit 0, wire byte-identical to `sops -d` for the same document |
-| `encrypt` / `encrypt_file` of a hand-built tree with `v => 9**9**9` (or any of the three spellings) in an unencrypted YAML slot | croak, karr #59 message | **written**, the carrier's `dualvar($double, $token)`, `.inf` / `-.inf` / `.nan` on disk |
+| `rotate` of a sops-written YAML document whose unencrypted slot holds a bare `+Inf` / `-Inf` / `NaN` | croak, k59 message | **written**, `sops -d` exit 0, wire byte-identical to `sops -d` for the same document |
+| `encrypt` / `encrypt_file` of a hand-built tree with `v => 9**9**9` (or any of the three spellings) in an unencrypted YAML slot | croak, k59 message | **written**, the carrier's `dualvar($double, $token)`, `.inf` / `-.inf` / `.nan` on disk |
 | `decrypt_file` of a sops-written YAML document whose unencrypted slot holds a bare `+Inf` / `-Inf` / `NaN` | croak | written, `.inf` / `-.inf` / `.nan` — what ADR 0037 already wrote in the encrypted-leaf's reverse case |
-| `encrypt` / `encrypt_file` of the same bare NV in an **unencrypted JSON** slot | croak, karr #59 message | **croak**, the JSON carrier's `_non_finite_token_leaf` message — names the key path; the call never reaches the file |
-| `rotate` / `decrypt_file` of a JSON document with a bare NV in an unencrypted slot | croak, karr #59 message | croak, JSON carrier's message; same `sops -d` exit 4 reference answer |
+| `encrypt` / `encrypt_file` of the same bare NV in an **unencrypted JSON** slot | croak, k59 message | **croak**, the JSON carrier's `_non_finite_token_leaf` message — names the key path; the call never reaches the file |
+| `rotate` / `decrypt_file` of a JSON document with a bare NV in an unencrypted slot | croak, k59 message | croak, JSON carrier's message; same `sops -d` exit 4 reference answer |
 | `dualvar(+Inf, '.inf')` (or any of the twelve tokens) in either format, either slot | YAML written, JSON croak (ADR 0031) | **unchanged** |
-| `dualvar(+Inf, 'banana')`, `dualvar(+Inf, '.INf')`, `dualvar(+Inf, '-.inf')` in either format, either slot | croak, karr #59 message | **unchanged** — still refused, same gate, same twelve-row counter-check |
-| a bare NV in an **encrypted** slot, either format | croak, `Encrypted::encrypt_value` (karr #122 / ADR 0040) | **unchanged** |
+| `dualvar(+Inf, 'banana')`, `dualvar(+Inf, '.INf')`, `dualvar(+Inf, '-.inf')` in either format, either slot | croak, k59 message | **unchanged** — still refused, same gate, same twelve-row counter-check |
+| a bare NV in an **encrypted** slot, either format | croak, `Encrypted::encrypt_value` (k122 / ADR 0040) | **unchanged** |
 | `encrypt` of a finite float (any signed zero, any normal, any subnormal) | written, `type:float`, digest covers the value | **unchanged** |
 | `decrypt` / `extract` of any of the above | the float, exactly as ADR 0037 reads it | **unchanged** — the read path is not on this layer |
 
 ### Test sections that flip from RED to GREEN
 
 Each of these sections asserted a refusal where the carrier now writes,
-or asserted a YAML croak with the karr #59 message where the carrier
-now writes, or split a JSON refusal between karr #59 and the carrier's
+or asserted a YAML croak with the k59 message where the carrier
+now writes, or split a JSON refusal between k59 and the carrier's
 own croak. Each was RED against the unpatched tree and GREEN against
 the tree with this change, with the message text updated where the
 croak moved from `assert_representable` to the carrier:
@@ -204,10 +204,10 @@ croak moved from `assert_representable` to the carrier:
   (the refusal croaked before the file was touched) is now
   `.inf` / `-.inf` / `.nan` — the byte `sops -d` itself writes for
   the same document.
-- **Nothing else.** The encrypted slot is unchanged (karr #122 owns it).
+- **Nothing else.** The encrypted slot is unchanged (k122 owns it).
   The contradicting dualvars in either format are unchanged. JSON is
   unchanged: the call still croaks, and the message moves from the
-  karr #59 wording to the JSON carrier's wording, which already names
+  k59 wording to the JSON carrier's wording, which already names
   the key path. A document that did not carry a bare NV in an
   unencrypted slot is byte-identical — measured before and after
   against the full corpus of every format, every slot, every dualvar
@@ -224,7 +224,7 @@ croak moved from `assert_representable` to the carrier:
   the encrypted slot, with the same ticket named as the thing that
   could change it (none filed: the carrier does not exist for JSON).
 - **A bare NV in an encrypted slot still croaks** at
-  `Encrypted::encrypt_value`, unchanged. karr #122.
+  `Encrypted::encrypt_value`, unchanged. k122.
 
 ## Rejected alternatives
 
@@ -236,7 +236,7 @@ and would lose the message that names the form and points at `type:str`
 — the only message a caller with `dualvar(+Inf, 'banana')` by hand has
 to act on. The two refusals are different refusals: the carrier refuses
 "no token a YAML emitter can write", the gate refuses "your token says
-something your number does not". The karr #59 message names the second
+something your number does not". The k59 message names the second
 verdict; the carrier's message names the first.
 
 **Move the gate to `_canonical_floats`'s `mac_covered` croak instead.**
@@ -244,7 +244,7 @@ The walk already knows the format and the key path. Rejected because
 `_compute_mac` calls `assert_representable` first and would still croak
 for every bare NV — the gate would have to live in two places, with the
 key path concatenation duplicated, and a future change to the gate would
-drift in the way the karr #113 / 0031 line of work set out to prevent.
+drift in the way the k113 / 0031 line of work set out to prevent.
 The narrowing is one conjunct in the predicate both call.
 
 **Add the public PV conjunct in `_compute_mac` and leave
@@ -292,4 +292,4 @@ plaintext emit's ADR 0053 consult are all untouched.
 Lane: wire. The decision moves the value→bytes conversion's first line
 of defence; both branches of the predicate that ADR 0031 / ADR 0040
 narrowed share the same gate, and keeping them in step is the property
-this ADR inherits from the karr #113 / 0031 line of work.
+this ADR inherits from the k113 / 0031 line of work.

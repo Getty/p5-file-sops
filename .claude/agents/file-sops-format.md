@@ -58,7 +58,7 @@ property of the emitters is load-bearing for the whole encoding rule.
   `edit` hands the editor — is `emit` on its own. So a change that looks like it only
   affects the plaintext output changes the encrypted document too.
 
-  The trap here **inverted** with karr #35 (commit 3e4f3bb). Until then `decrypt_file`
+  The trap here **inverted** with k35 (commit 3e4f3bb). Until then `decrypt_file`
   called `YAML::XS::Dump` directly and the danger was that a change in the handler did
   *not* reach it. Now the danger is the reverse. In particular `canonical` in the JSON
   encoder and the boolean mode in the YAML one are MAC-relevant: sorted key order is
@@ -74,12 +74,12 @@ property of the emitters is load-bearing for the whole encoding rule.
 
 - **Resolver differences are visible now.** Since types come from the parser, a
   disagreement between YAML::XS and Go's yaml.v3 shows up as a type difference on the
-  wire (`0x10`, `1_000` — karr #29). It is a fidelity gap rather than a corruption, and
+  wire (`0x10`, `1_000` — k29). It is a fidelity gap rather than a corruption, and
   ADR 0001 explains why swapping parsers to fix it is not free.
 
 - **Multi-document YAML is refused, deliberately** — sops's model is one metadata
   section and one MAC spanning all documents, which is a data-model change, not a parser
-  change. The measured specification is in karr #31.
+  change. The measured specification is in k31.
 
 ## Measure, do not reason
 

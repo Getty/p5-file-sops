@@ -4,13 +4,13 @@ Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
 > **Status of this file:** it is the original *design document*, kept as the roadmap.
 > What still does not exist: **every backend beyond age** — PGP, AWS KMS, GCP KMS,
-> Azure KV, Vault (karr #39; their metadata fields already round-trip, only the
+> Azure KV, Vault (k39; their metadata fields already round-trip, only the
 > wrapping is missing), and that one is *parked* on a maintainer decision rather
 > than merely undone.
 > Implemented since: `encrypt_in_place`, `edit`, `.sops.yaml` creation rules
-> (`creation_rules_for`, karr #38 — with one deliberate divergence from sops,
+> (`creation_rules_for`, k38 — with one deliberate divergence from sops,
 > confirmed by the maintainer and recorded in ADR 0007), and **all four format
-> handlers** — the ENV/dotenv one (karr #36) and the INI one (karr #37) both
+> handlers** — the ENV/dotenv one (k36) and the INI one (k37) both
 > landed on 2026-08-21, so `format => 'env'` and `format => 'ini'` are no longer
 > roadmap anywhere below.
 > The description of what exists lives in skill `file-sops-core`; the POD in
@@ -207,7 +207,7 @@ Two things the POD spells out and this sketch cannot: the search runs upward fro
 the **file's** directory where sops searches from the **working directory** — a
 deliberate divergence, confirmed and recorded in ADR 0007 — and `$SOPS_CONFIG`
 is not read from the environment. Not supported: `key_groups`, `shamir_threshold`,
-and recipients for backends other than age (karr #39); all are refused rather than
+and recipients for backends other than age (k39); all are refused rather than
 ignored.
 
 ## Dependencies
@@ -226,7 +226,7 @@ requires 'JSON::MaybeXS';     # JSON parsing
 ## Encryption Backends
 
 **age only** — and `File::SOPS::Backend::Age` is the only backend module. HashiCorp Vault
-is the only other one on the roadmap (karr #39).
+is the only other one on the roadmap (k39).
 
 `File::SOPS::Metadata` models the `sops`-section fields for every backend sops supports
 (`pgp`, `kms`, `gcp_kms`, `azure_kv`, `hc_vault`) as first-class attributes, and round-trips
@@ -250,7 +250,7 @@ cannot re-wrap.
 
 ## Files
 
-Everything under `lib/` below exists, `ENV.pm` and `INI.pm` included (karr #36, #37,
+Everything under `lib/` below exists, `ENV.pm` and `INI.pm` included (k36, k37,
 both landed 2026-08-21).
 The `t/` layout below was the sketch — the real suite is listed by `ls t/` and is
 well past 40 files, and `t/04-interop.t` is **no longer** the only one that talks
@@ -280,7 +280,7 @@ lib/
 
 `Metadata/Flat.pm` was built and measured against the binary **ahead of** either
 flat handler, so that ENV and INI could not build the same wire format twice and
-drift (karr #75, ADR 0022). That bet paid: both now load it, one with
+drift (k75, ADR 0022). That bet paid: both now load it, one with
 `prefix => 'sops_'` and one with `prefix => ''`, which is the whole difference
 between a dotenv `sops` section and an INI `[sops]` one.
 

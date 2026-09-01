@@ -3,8 +3,8 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: float, json, wire-format, guards, interop
-- Resolves karr #78, and **replaces the refusal that 89ed194 shipped for it**
-- Answers karr #85 in "Why a contradicting float string half is repaired, where
+- Resolves k78, and **replaces the refusal that 89ed194 shipped for it**
+- Answers k85 in "Why a contradicting float string half is repaired, where
   an integer's is refused"; ADR 0012 states the same boundary from the integer
   side
 - Depends on ADR 0006 (the `roundtrips`/`carrier` pair, and the
@@ -21,7 +21,7 @@ that carries its own string form — a `Scalar::Util::dualvar` — therefore
 reached the document as a **string** where the caller passed a number, and
 `File::SOPS::Format::JSON::_float_roundtrips` could not see it: it reparsed the
 quoted text, `value_to_bytes` re-derived that same text from it, and the two
-compared equal. karr #78, measured: `"ratio_unencrypted" : "0.30000000000000004"`,
+compared equal. k78, measured: `"ratio_unencrypted" : "0.30000000000000004"`,
 `sops -d` exit 0, value read back **as a string**.
 
 89ed194 closed that by asking the round-trip check one more question — is the
@@ -65,7 +65,7 @@ The `Math::BigFloat` carrier then writes the canonical decimal from
 `value_to_bytes` — the same text the MAC digest covers — as a bare JSON
 number, which is what the same leaf has always produced on the YAML side.
 
-This follows karr #62 / ADR 0006: **where a representation exists, the emitter
+This follows k62 / ADR 0006: **where a representation exists, the emitter
 writes it; a refusal is for a leaf that has none.** It also removes the
 JSON/YAML asymmetry the refusal introduced, and it makes the most obvious
 caller path — `my $v = extract(...); encrypt(data => { x => $v })` — produce a
@@ -81,7 +81,7 @@ out of a YAML parse, and the dualvar shapes) through
 - **20 rows move. All 20 are JSON, all 20 are this leaf class** — a float
   carrying a public PV. No YAML row moves, no ADR 0005 / ADR 0006 row moves, no
   int, string, boolean or `undef` row moves.
-- For the karr #78 case itself the resulting document is **byte-identical** to
+- For the k78 case itself the resulting document is **byte-identical** to
   the one a bare NV of the same value produces: both go through the carrier,
   both write `0.30000000000000004`.
 
@@ -108,7 +108,7 @@ and read back with `sops -d`:
 Only for a JSON leaf that is a float carrying its own public string form, and
 only relative to 89ed194 — which wrote no bytes at all for it, it died. Against
 the last release the same leaf changes from a **quoted string** to a **bare
-number**, which is the defect karr #78 reported.
+number**, which is the defect k78 reported.
 
 Nothing else moves: measured over the corpus above, and pinned by
 `t/24-float-precision.t` section 14, which byte-asserts the ADR 0005 / ADR 0006
@@ -135,10 +135,10 @@ carrier has done since ADR 0006 (measured, unchanged: the document holds `1.5`
 and `sops -d` exits 0), so the two handlers now agree, but the disagreement
 between the halves is resolved silently in favour of the number. For an
 **integer** leaf of the same shape the answer is the opposite — ADR 0012
-refuses it — and that asymmetry is deliberate, decided in karr #85 and argued
+refuses it — and that asymmetry is deliberate, decided in k85 and argued
 in full below.
 
-### Why a contradicting float string half is repaired, where an integer's is refused (karr #85)
+### Why a contradicting float string half is repaired, where an integer's is refused (k85)
 
 `dualvar(1.5, 'banana')` is written as `1.5`. `dualvar(5, 'five')` is refused
 (ADR 0012). Two leaves of one shape, two opposite answers, and the question the
@@ -217,7 +217,7 @@ carrier is already the one place where a canonical decimal becomes JSON bytes;
 measurement: telling the two apart means numifying the string half, and
 `dualvar(0, 'zero')` numifies to `0`, which is exactly the value it would be
 compared against. Pattern-matching a value's text is what ADR 0002 removed.
-Raised as karr #85 and **decided there against.** One test does not need
+Raised as k85 and **decided there against.** One test does not need
 numifying — comparing the PV against `value_to_bytes` as a string — but what it
 selects is every PV that is not already the canonical decimal, which is
 `banana` and `1.50` and `0.50` and `2.0` alike: a contradiction and three

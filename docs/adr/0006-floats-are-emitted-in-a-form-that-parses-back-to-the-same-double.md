@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-09
 - Tags: float, mac, interop, wire-format, json, yaml, dependencies
-- Resolves karr #58
+- Resolves k58
 - Depends on ADR 0001 (the MAC's decrypt side reads a reparse of the document,
   so what the emitter wrote is what gets verified), ADR 0002 (a value is a float
   because of its SV flags) and ADR 0005 (the JSON backend is named, which is the
@@ -119,9 +119,9 @@ same double.**
 - **`NaN`, `+Inf`, `-Inf` and `-0` are excluded** and keep exactly today's
   behaviour. They are a different defect with different answers per format —
   YAML `-0.0` has no representation that works, JSON has none for the
-  non-finite values at all — and they belong to karr #62.
+  non-finite values at all — and they belong to k62.
 
-  **Amended by karr #62 — `-0` is no longer excluded, because the premise
+  **Amended by k62 — `-0` is no longer excluded, because the premise
   above was wrong.** "YAML `-0.0` has no representation that works" was
   derived, not measured: the reasoning was that the canonical text `-0` is
   resolved by Go's yaml.v3 as an *integer*, digested as `0`, and so still
@@ -172,11 +172,11 @@ same double.**
   There is consequently no sops→us fixture for this value, and the test says
   so rather than inventing one.
 
-  `NaN`, `+Inf` and `-Inf` stay excluded, and karr #59 has since made them
+  `NaN`, `+Inf` and `-Inf` stay excluded, and k59 has since made them
   unreachable on the encrypt path anyway (`assert_representable` refuses
   them); only the plaintext emitters can still reach the walk with one.
 
-  **Amended by karr #72 — the READ side dropped the same sign, and no longer
+  **Amended by k72 — the READ side dropped the same sign, and no longer
   does.** The amendment above carried a negative zero *out* of the library;
   `File::SOPS::Encrypted::_deserialize_value` was still losing it on the way
   *in*. It converted a `type:float` plaintext with `$data + 0.0`, which is
@@ -252,7 +252,7 @@ produces a document sops accepts today, the bytes are unchanged.
   optional `reject` callback, and the JSON handler refuses both classes by name.
   Callers see a die where they saw a die before, with a message that says why.
 
-  **Amended by karr #68:** `reject` is called as `$reject->($leaf, $where)`.
+  **Amended by k68:** `reject` is called as `$reject->($leaf, $where)`.
   `$where` is that leaf's key path, built by the same recursion, colon-joined,
   or `(document root)` — the shape `File::SOPS::_at_path` already uses for the
   MAC walk's messages, with array indices carried because a diagnostic is not
@@ -265,7 +265,7 @@ produces a document sops accepts today, the bytes are unchanged.
 - **`decrypt_file` and `edit` stop losing precision as a side effect**, because
   both go through the same `emit`. That closes the silent-corruption path
   above. `extract` is untouched — it hands the caller an NV, and any
-  stringification of that still loses the digits; see karr #61.
+  stringification of that still loses the digits; see k61.
 - The two format handlers each grew a predicate and a carrier. They are not a
   duplicated conversion — the conversion is one call in one module — but they
   are two places that must both be updated if a third format handler appears.
@@ -281,7 +281,7 @@ A caller who was relying on File::SOPS writing `0.3` where sops writes
 `0.30000000000000004` was relying on a document neither implementation could
 read.
 
-Under the karr #72 amendment a caller that read an encrypted `-0` back out of
+Under the k72 amendment a caller that read an encrypted `-0` back out of
 `decrypt` gets `-0.0` where it used to get `+0.0`. `==`, `<` and `sprintf
 "%s"` cannot tell the two apart in Perl — `print -0.0` writes `0` — so this is
 visible only to code that asks for the sign explicitly (`POSIX::signbit`,
@@ -290,7 +290,7 @@ amendment is about.
 
 ## Rejected alternatives
 
-**Derive the digest from the document instead of from the tree** (karr #58
+**Derive the digest from the document instead of from the tree** (k58
 option b). This inverts ADR 0001, which states that the reparse "supplies order
 and nothing else… Nothing YAML::PP produces reaches the digest as data, so a
 divergence in how it *represents* a scalar cannot change a MAC". Option (b)

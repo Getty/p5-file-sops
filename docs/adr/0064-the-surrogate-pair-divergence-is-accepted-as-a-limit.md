@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #139
+- Resolves k139
 - Lane: format
 - Depends on **ADR 0001** (the MAC's order comes from a YAML::PP reparse,
   whose fail-safe property is exactly what makes this divergence
@@ -192,7 +192,7 @@ standalone surrogates.** Out of scope (the YAML handler is what
 also out of scope because the JSON handler delegates to it for
 `parse_in_document_order` precisely so the two formats share one
 order-preserving reader (ADR 0036, ADR 0001). Two copies of the order
-reader is the failure mode ADR 0001 records as the karr #32 defect
+reader is the failure mode ADR 0001 records as the k32 defect
 class.
 
 ## Consequences

@@ -3,19 +3,19 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: env, ini, types, mac, wire-format, interop
-- Resolves karr #77 (the per-format type policy), and decides karr #124 and
-  karr #125 with it
+- Resolves k77 (the per-format type policy), and decides k124 and
+  k125 with it
 - Depends on ADR 0002 (a value's type comes from the scalar — **extended here,
   not changed**), ADR 0008 (the general rule: a leaf the emitter cannot write
   as the text the digest covers), ADR 0022 (the flat encoding) and ADR 0030
   (the same discriminator, applied to the ENV escape)
 - Has no caller: `File::SOPS::Format::ENV` and `File::SOPS::Format::INI` do not
-  exist. This ADR records the decision so that karr #36 and karr #37 inherit it
+  exist. This ADR records the decision so that k36 and k37 inherit it
   rather than inventing it.
 
 ## Context
 
-karr #77 was split out of karr #36 with this premise, repeated in karr #37:
+k77 was split out of k36 with this premise, repeated in k37:
 
 > In the env store every value is `type:str`, `NUM=5` included, because the
 > store parses everything as a string. Our type comes from the scalar
@@ -121,8 +121,8 @@ document to verify is exactly
 and sops breaks it in three places, writing a display form where the digest
 covers the wire form:
 
-- **a boolean** — `true` written, `True` digested (karr #124);
-- **a null** — `<nil>` written, the empty string digested (karr #125), and in
+- **a boolean** — `true` written, `True` digested (k124);
+- **a null** — `<nil>` written, the empty string digested (k125), and in
   the *encrypted* slot a nil is not encrypted at all, so the bare `<nil>`
   reaches the file and sops stops at `Input string <nil> does not match sops'
   data format`, exit 25, before the MAC is even reached;
@@ -176,7 +176,7 @@ ADR 0002 is **extended, not changed**. No rung of the ladder moves, no format
 argument reaches `detect_type` or `value_to_bytes`, no wire byte moves for any
 caller, and `encrypt(data => {n => 5}, format => 'env')` writes `type:int`
 because that is what sops writes for the same tree. The `type:str`-on-
-everything that karr #77 was opened for is what an ENV or INI **parser**
+everything that k77 was opened for is what an ENV or INI **parser**
 produces on the way in, and it falls out of ADR 0002 with no format-specific
 code.
 
@@ -204,7 +204,7 @@ Five properties of that rule, all deliberate.
   `sops_mac` plaintext as the document sops writes for the same tree, row for
   row. The bytes that differ are only the ones sops's own MAC already
   contradicts.
-- **It closes karr #124 and karr #125 as one rule and in both slots.** A
+- **It closes k124 and k125 as one rule and in both slots.** A
   boolean is written `True`; an `undef` is not encrypted (invariant 7) and is
   written as the empty string in either slot, where sops writes `<nil>` and
   gets exit 51 or exit 25.
@@ -213,9 +213,9 @@ ADR 0030's ENV guard stays on top of this and is unaffected: after the bytes
 are chosen, a `str` whose bytes the newline escape cannot carry is still
 refused, and that guard already asks `value_to_bytes` for the same bytes.
 
-### The metadata half of karr #77, and where it belongs
+### The metadata half of k77, and where it belongs
 
-karr #75 folded a second typing question into this ticket:
+k75 folded a second typing question into this ticket:
 `Metadata::Flat->unflatten` returns every leaf as a **string**, so
 `sops_mac_only_encrypted=false` reaches `Metadata->from_hash` as the string
 `'false'`, which is **true** in Perl — and that option selects which values the
@@ -249,8 +249,8 @@ as to a flat one. So the coercion is **not** a flat-format concern:
   a handler today.
 
 `Metadata.pm` is the API lane's file, so this ADR records the decision and the
-measured specification and hands the change over (see karr #77's follow-up
-ticket). `Flat.pm`'s POD, which said the typing question was karr #77's and
+measured specification and hands the change over (see k77's follow-up
+ticket). `Flat.pm`'s POD, which said the typing question was k77's and
 undecided, now says what was decided and where it goes.
 
 ## Consequences
@@ -264,12 +264,12 @@ canonical form and no caller's type changes. The extension is one sentence —
 that in an untyped store the emitter, not the parser, is where the format
 speaks, and it speaks by writing the digest bytes verbatim.
 
-**karr #36 and karr #37 inherit a rule and not a question.** What they no
+**k36 and k37 inherit a rule and not a question.** What they no
 longer have to decide: what type label to write (ADR 0002's), what text an
-unencrypted leaf gets (this ADR's), what to do about a boolean (#124), what to
-do about a null (#125), and what to do about an integral or exponent-range
+unencrypted leaf gets (this ADR's), what to do about a boolean (k124), what to
+do about a null (k125), and what to do about an integral or exponent-range
 float (measured here, never ticketed). What is still theirs: the tree shape,
-key handling, `type:comment` (karr #76), the order-preserving parse (karr #74),
+key handling, `type:comment` (k76), the order-preserving parse (k74),
 and — INI only — values outside a section, duplicate sections, quoting and the
 `key = value` alignment padding.
 

@@ -2,11 +2,11 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #172
+- Resolves k172
 - Lane: wire
 - Depends on **ADR 0041** (a sops comment is a leaf of its own), **ADR 0047**
   (an INI comment lives in its section — the predicate `$COMMENT_BUCKET_KEY`
-  that this ADR widens), and **ADR 0056** (the karr #168 leaf guard this
+  that this ADR widens), and **ADR 0056** (the k168 leaf guard this
   decision narrows, deliberately). The Comment-object half of the predicate
   is unchanged; the wire half is what this ADR adds.
 - **Moves no wire bytes.** The fix preserves a comment line the previous
@@ -38,7 +38,7 @@ answered NO — its `_is_comment_leaf` half is gated on the data key, which
 `_encrypt_tree` has none of — so the bucket key ADDED a path component on
 the way back in. Two wrongs followed.
 
-1. The leaf guard (karr #168 / ADR 0056) fired at each item: the rule
+1. The leaf guard (k168 / ADR 0056) fired at each item: the rule
    excludes the bucket path (under `[db]`, with the default suffix), the
    item is a plain string, and the label is `comment`. The walk died with
    "a caller string whose text parses as an ENC[...,type:comment] token
@@ -50,7 +50,7 @@ the way back in. Two wrongs followed.
    and lost the `comment` label. The INI emitter then croaked at the
    `''` slot with "a plain scalar is not one" — a leaf the previous
    encrypt wrote is silently flattened and the document fails its own
-   emitter. This is the failure mode the karr #172 ticket names.
+   emitter. This is the failure mode the k172 ticket names.
 
 The reproducer, from the ticket body:
 
@@ -101,7 +101,7 @@ sub _is_comment_bucket {
 
 The ARRAY branch in `_encrypt_tree` returns the bucket list as-is when
 the list holds nothing but those wire-half items, so the walk does not
-descend into one and the karr #168 leaf guard never reaches a bucket
+descend into one and the k168 leaf guard never reaches a bucket
 item:
 
 ```perl
@@ -135,7 +135,7 @@ gated on `$data_key` because the read side uses it with the key to
 decrypt the leaf and recover plaintext. The encrypt side has no key to
 open the leaf with — and does not need one. The predicate only needs to
 ASK whether the text parses as `ENC[…,type:comment]`; that is the same
-predicate karr #168 added to the leaf guard (ADR 0056), with the same
+predicate k168 added to the leaf guard (ADR 0056), with the same
 `// ''` defence against an `undef` answer, and `File::SOPS::Encrypted->
 encrypted_type` is the one place that asks it. The gate is dropped
 because the gate is for the key, and the key is not needed.
@@ -168,9 +168,9 @@ the defect the rule exists to close.
   the walk encrypts it), and still reads back to Comment objects (because
   decrypt at a SELECTED path produces the same plaintext). The
   round-trip test pins this.
-- **The karr #168 leaf guard still fires.** A caller that hands a plain
+- **The k168 leaf guard still fires.** A caller that hands a plain
   `ENC[…,type:comment]` string at an excluded LEAF path is still refused
-  with the karr #168 message — the leaf guard's reach is narrowed by the
+  with the k168 message — the leaf guard's reach is narrowed by the
   ARRAY short-circuit, not by removing the guard. The two guards do not
   absorb each other; the bucket predicate and the leaf guard are two
   shapes for two slots.
@@ -181,7 +181,7 @@ the defect the rule exists to close.
   `[Comment, 'plain value']` does not — the `'plain value'` fails the
   wire half, is not blessed as a Comment, and the predicate returns 0.
   The walk descends; the leaf code path refuses the `'plain value'` at
-  the excluded path with the karr #168 message. This is intentional:
+  the excluded path with the k168 message. This is intentional:
   the bucket predicate is a structural test, not a content one.
 - **No MAC values move.** The guard short-circuits before any byte is
   written or re-encrypted. For every document that did not contain the
@@ -226,7 +226,7 @@ excludes": the leaf is the previous encrypt's literal, and the rule
 excludes the BUCKET, not the item. The leaf guard's predicate is the
 wrong shape for the bug; the bucket predicate is the right one. Widening
 the leaf guard would also keep firing on a wire bucket at a SELECTED
-section, where the karr #168 message is wrong — the rule does not
+section, where the k168 message is wrong — the rule does not
 exclude the section, only the bucket inside it (no, actually: it
 excludes the whole section; this shape, if it ever happened, would be
 encrypted again as `type:comment` at a SELECTED path inside the section).
@@ -252,10 +252,10 @@ items must pass" predicate is what makes the short-circuit apply to a
 wire bucket, not to a sequence that happens to carry a comment among
 its elements.
 
-**Refuse the bad shape at the leaf guard, where karr #168 already has a
+**Refuse the bad shape at the leaf guard, where k168 already has a
 hook.** Rejected because the leaf guard's predicate (`!ref $node &&
 encrypted_type eq 'comment'`) fires per leaf, and a wire bucket is a
-list — the leaf guard reaches each item and dies. The karr #172 ticket
+list — the leaf guard reaches each item and dies. The k172 ticket
 specifically widens the bucket predicate to recognise the wire half so
 the walk no longer reaches the leaf guard at all. The leaf guard stays
 in place (a caller string at an excluded LEAF is still refused); the
@@ -272,7 +272,7 @@ predicate and the misruled-INI rotate reproducer with the sops binary on
 PATH, and the INI emitter (where the second failure mode would have
 croaked) is reached through it. Before the fix, t/73's two RED
 subtests fail for the reason this ADR names — subtest 1's rotate dies
-with the karr #168 message at `db::` and subtest 2's predicate returns
+with the k168 message at `db::` and subtest 2's predicate returns
 0 for ENC-comment strings. After the fix, all 3 subtests pass.
 
 Two edits in `lib/File/SOPS.pm`: the `_is_comment_bucket` widening and
@@ -280,8 +280,8 @@ the ARRAY-branch short-circuit in `_encrypt_tree`. One test,
 `t/73-ini-comment-bucket-at-excluded-path.t`. The existing
 `t/72-caller-enc-comment-string-at-excluded-path-is-refused.t` subtest
 6 is updated to assert the new (correct) behaviour for the bucket-list
-case, which the karr #168 guard no longer reaches — documented inline as
-a deliberate narrowing of karr #168's reach. `Encrypted.pm`,
+case, which the k168 guard no longer reaches — documented inline as
+a deliberate narrowing of k168's reach. `Encrypted.pm`,
 `Metadata.pm`, `Backend/Age.pm` and every format handler are untouched.
 The line-3396 mapping-value Comment-object guard and the line-3480
 read-side type:comment guard are unchanged.

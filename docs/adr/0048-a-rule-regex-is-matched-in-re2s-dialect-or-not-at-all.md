@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-21
-- Resolves karr #161, which ADR 0046 filed rather than folded in
+- Resolves k161, which ADR 0046 filed rather than folded in
 - Depends on ADR 0003 (the UTF-8 flag is not read anywhere in this
   distribution — here the regex engine was reading it for us) and on ADR 0007
   (the `.sops.yaml` search, which is why the end-to-end measurement below runs
@@ -16,7 +16,7 @@
 the tree walk uses) with Perl, and in sops with Go's RE2. Those are not the
 same dialect, and the disagreement decides **which keys get encrypted**.
 
-karr #161 was opened out of the karr #150 measurement as the *reachability*
+k161 was opened out of the k150 measurement as the *reachability*
 half of that defect: the way an ordinary `.sops.yaml` gets a document into the
 state ADR 0046's guard refuses. The first thing measured here was whether it is
 only that.
@@ -178,8 +178,8 @@ saying what sops does instead.
 This is a **deliberate divergence** and not a reproduction. sops's own answer
 is reproducible: treat such a rule as matching nothing. It was rejected because
 the `encrypted_regex` half of that answer is *this library writing every secret
-in the document to disk in plaintext, at exit 0*, which is karr #18 and
-karr #150's failure mode with a new cause. Where we cannot do what was asked,
+in the document to disk in plaintext, at exit 0*, which is k18 and
+k150's failure mode with a new cause. Where we cannot do what was asked,
 this layer fails loudly rather than approximately — and the caller can always
 rewrite the pattern.
 
@@ -227,10 +227,10 @@ open. `encrypt`, `encrypt_file`, `encrypt_in_place`, `rotate` and `edit` stop.
   '5.010'`. That line has to move with this change; it is outside this lane's
   files and is handed over rather than edited.
 - `lib/File/SOPS.pm`'s POD for `rotate` still says this divergence "is open and
-  is karr #161". It is not, and that paragraph needs the update; `SOPS.pm` was
+  is k161". It is not, and that paragraph needs the update; `SOPS.pm` was
   being changed by another lane and is not touched here.
 - `File::SOPS::_re2_incompatible_construct` (for `.sops.yaml` `path_regex`,
-  karr #53) is the narrow ancestor of this scan — lookarounds and `\1` only.
+  k53) is the narrow ancestor of this scan — lookarounds and `\1` only.
   It should become one mechanism with `_re2_divergent_construct`, in `SOPS.pm`,
   which is likewise not this change's file.
 
@@ -264,7 +264,7 @@ a construct check:
 and it means `encrypted_regex: '(?=foo)'` writes every value of the document to
 disk in plaintext at exit 0 — this distribution's signature defect, on purpose.
 The line that decides it is the one this layer already had to learn twice
-(karr #18, karr #150): where we cannot do what was asked, fail loudly rather
+(k18, k150): where we cannot do what was asked, fail loudly rather
 than approximately.
 
 **Refuse only, and not fix the classes.** It would refuse `\w`, `\d`, `\s` and

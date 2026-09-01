@@ -2,8 +2,8 @@
 
 - Status: accepted
 - Date: 2026-08-21
-- Resolves karr #150; hands the structural half to karr #160 and the
-  regex-dialect half to karr #161
+- Resolves k150; hands the structural half to k160 and the
+  regex-dialect half to k161
 - Depends on ADR 0043, which closed the reference-shaped half of the same
   defect (`encrypted_regex: []`) and filed this one rather than folding it in
 - Uses the discriminator of ADR 0038 — *does sops read back what sops wrote?*
@@ -129,7 +129,7 @@ a bare leaf the rule selects — encrypts a value that was readable. Nothing goe
 to disk in plaintext, so what is wrong with it is a divergence and not a
 disclosure, and any check for it has to exclude the case sops itself produces:
 an empty string and a null stay bare whatever the rule says, and `sops -d`
-reads them at exit 0 (measured). It stays with karr #160.
+reads them at exit 0 (measured). It stays with k160.
 
 ## Consequences
 
@@ -138,16 +138,16 @@ reads them at exit 0 (measured). It stays with karr #160.
   is no document where it replaces a correct one, because a rule that excludes
   an encrypted leaf cannot have produced that leaf.
 - **This is a guard beside the problem, not the problem.** The problem is that
-  `_decrypt_tree` does not consult the rule. Fixing that is karr #160 and it is
+  `_decrypt_tree` does not consult the rule. Fixing that is k160 and it is
   the **wire lane's**: taking an excluded leaf literally puts the `ENC[...]`
   text into the digest, which moves what the MAC covers.
 - **The step is monotone.** Everything this refuses, a rule-driven
   `_decrypt_tree` refuses too — on the MAC, which is exactly where sops refuses
-  it — so the guard and its walker come out when karr #160 lands and nothing
+  it — so the guard and its walker come out when k160 lands and nothing
   reopens. One case survives the removal and has to be decided there rather
   than inherited: under `ignore_mac => 1` the MAC cannot refuse anything, and
   the guard still does.
-- **The regex dialect stays divergent** and is karr #161. The guard turns what
+- **The regex dialect stays divergent** and is k161. The guard turns what
   it costs from a leaked secret into a refusal, which is why it is filed rather
   than fixed here: `should_encrypt_path` lives in `Metadata.pm`.
 - `t/60-a-rule-that-excludes-an-encrypted-leaf-is-refused.t` pins the
@@ -160,20 +160,20 @@ reads them at exit 0 (measured). It stays with karr #160.
 right end state. Rejected for this change because it moves what the digest
 covers — an excluded `ENC[...]` leaf would go into the MAC as its own text —
 and that is the wire lane's to move, not the API lane's. Handed over with the
-measurement as karr #160, which is the pattern ADR 0024 → karr #76 and
-ADR 0034 → karr #122 used: close the exposure now, hand over the mechanism.
+measurement as k160, which is the pattern ADR 0024 → k76 and
+ADR 0034 → k122 used: close the exposure now, hand over the mechanism.
 
 **Refuse both directions.** Symmetric, and it states the rule more cleanly
 ("the rule must reproduce the document"). Rejected because the second direction
 writes no secret, because it doubles the surface on which a
 `should_encrypt_path` that disagrees with RE2 refuses a document sops accepts —
-with karr #161 open, that surface is known to be uneven — and because refusing
+with k161 open, that surface is known to be uneven — and because refusing
 it would leave a caller unable to rotate a file at all where today they get a
 document sops reads.
 
 **Refuse on the read side, in `decrypt`.** It is where sops refuses, and it
 would cover every caller rather than the two that write. Rejected because it
-*is* karr #160 by another name: the refusal only makes sense once the digest
+*is* k160 by another name: the refusal only makes sense once the digest
 sees what the rule says it should, and a read-side refusal without that would
 also break `ignore_mac`'s whole purpose, which is to get data out of a damaged
 file.
@@ -181,7 +181,7 @@ file.
 **Warn and carry on.** ADR 0018's shape, for a case where refusing would be
 wrong. It is wrong here: the thing being warned about has already been written
 by the time anyone reads the warning, and this distribution's own history —
-karr #18, karr #150 — is of exactly that failure mode.
+k18, k150 — is of exactly that failure mode.
 
 **Fix the regex dialect instead and call the hole closed.** It would close the
 no-hand-editing row of the second table and none of the first. The hand-edited

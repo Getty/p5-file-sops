@@ -3,14 +3,14 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: env, mac, wire-format, escaping, guards, interop
-- Resolves karr #109 (the wire half of the ENV handler, karr #36)
+- Resolves k109 (the wire half of the ENV handler, k36)
 - Depends on ADR 0022 (which established the escape and decided to reproduce it
   lossy for the *metadata* section), ADR 0008 (the rule this applies: a leaf
   the emitter cannot write as the text the digest covers is refused) and
   ADR 0002 (the digest bytes come from `Encrypted::value_to_bytes`, which is
   the single source of truth for a leaf's wire bytes)
 - Has no caller: `File::SOPS::Format::ENV` does not exist. This ADR records the
-  decision so that karr #36 inherits it rather than inventing it.
+  decision so that k36 inherits it rather than inventing it.
 
 ## Context
 
@@ -163,7 +163,7 @@ while the same file's `[sops]` section carries
 `age__list_0__map_enc = -----BEGIN AGE ENCRYPTED FILE-----\nYWdl…`. INI escapes
 its metadata and not its data, which is ADR 0022's argument for where the escape
 lives, confirmed here from the other direction. **The decision below is ENV-only
-and karr #37 needs no guard for it.**
+and k37 needs no guard for it.**
 
 ## Decision
 
@@ -171,7 +171,7 @@ and karr #37 needs no guard for it.**
 not survive the escape round trip, is refused when the document is written. The
 read path is untouched.**
 
-The rule, in the form karr #36 implements it:
+The rule, in the form k36 implements it:
 
 ```perl
 my $bytes = File::SOPS::Encrypted->value_to_bytes($leaf);
@@ -215,7 +215,7 @@ emitter, and only that emitter can answer it.
 no ENV handler. `File::SOPS::Metadata::Flat` is unchanged in behaviour — the
 only edit is POD recording the boundary below.
 
-**karr #36 writes a croak where sops writes a broken file.** The cost is stated
+**k36 writes a croak where sops writes a broken file.** The cost is stated
 rather than hidden: a caller who hands `encrypt` a value containing backslash-`n`
 and asks for `format => 'env'` gets an error naming the key path, where sops
 gives them a file and an exit 51 later, from a message that names no key at all.
@@ -230,28 +230,28 @@ for any practical purpose. Same rule as ADR 0008's guard.
 
 **Two neighbouring ENV defects are named and not fixed here.** Both were found
 by the same sweep and both are the same shape — sops writes a document with
-exit 0 and cannot read it back — and both belong to the type policy karr #77
+exit 0 and cannot read it back — and both belong to the type policy k77
 owns rather than to the escape:
 
 - An **unencrypted boolean**: sops writes `v_unencrypted=true` and its MAC
   covers `True` (SHA-512 `28A91492…`, which is the digest of the titlecase
   spelling, not of `true`). `sops -d` on its own file: **MAC mismatch, exit
   51**. The same document in YAML output round-trips at exit 0. Filed as karr
-  #124.
+  k124.
 - A **null**: sops writes `v_unencrypted=<nil>` and its MAC covers the empty
   string (`CF83E135…`). `sops -d`: **MAC mismatch, exit 51**. In an *encrypted*
   slot the nil is not encrypted either, so the file carries a bare `<nil>` and
   sops stops with `Input string <nil> does not match sops' data format`, **exit
-  25**. Filed as karr #125.
+  25**. Filed as k125.
 
   Both fall under the same general rule as this ADR — a leaf the ENV emitter
   cannot write as the text the digest covers — but what our ENV emitter *should*
-  write for a bool or a nil is karr #77's per-format type decision, and settling
+  write for a bool or a nil is k77's per-format type decision, and settling
   it inside an escape ADR would pre-empt it.
 
 **Keys are out of scope.** ENV keys are not in the MAC, and an ENV key
 containing a newline breaks the format outright rather than the digest. That is
-karr #36's parser problem.
+k36's parser problem.
 
 ### Question 3: are `escape_value` / `unescape_value` right for data values?
 
@@ -262,7 +262,7 @@ The sweep above put `escape_value`'s output next to the bytes sops wrote for a
 *data* value on sixteen inputs and they agree on every one, which is the same
 table ADR 0022 measured for metadata. There is one escape in the ENV format and
 `File::SOPS::Metadata::Flat` already holds it; building a second one for data
-values would reinstate precisely the duplication karr #75 was split out to
+values would reinstate precisely the duplication k75 was split out to
 prevent.
 
 What does **not** carry over is `escape_value`'s leaf handling. It maps a
@@ -275,7 +275,7 @@ produce `true`, which is the right thing to *write* into an ENV document and the
 wrong thing to *digest*, and the two would disagree — a MAC mismatch with no
 wrong byte anywhere to look at. `Flat.pm`'s POD now says so at the method.
 
-Nothing in `Flat.pm` changes behaviour; the boundary is recorded so #36 does not
+Nothing in `Flat.pm` changes behaviour; the boundary is recorded so k36 does not
 have to rediscover it.
 
 ### What changes for existing callers
@@ -321,11 +321,11 @@ the value is measurably safe, and on the verify side, where it would refuse to
 open files. ADR 0008 rejected the same placement for the same reasons and built
 the emitter-side hook that this uses instead.
 
-**Defer the decision to karr #36.** Considered seriously, since there is no
+**Defer the decision to k36.** Considered seriously, since there is no
 handler to wire it into and a wrongly-made decision is inherited. Rejected
 because the decision does not depend on the handler: the two questions are
 answered by the binary, the answers do not change with our implementation, and
-#36 will be writing a parser and an emitter with no reason to re-measure the
+k36 will be writing a parser and an emitter with no reason to re-measure the
 digest. Leaving it open is how the handler grows its own answer and this file
 becomes an archaeology exercise.
 

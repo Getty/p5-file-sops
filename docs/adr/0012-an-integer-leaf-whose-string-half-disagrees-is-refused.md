@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: int, mac, wire-format, guards, yaml, json, interop
-- Resolves karr #84, and states from the integer side the asymmetry karr #85
+- Resolves k84, and states from the integer side the asymmetry k85
   settled (the argument is in ADR 0011)
 - Depends on ADR 0002 (the type comes from the SV's public flags, which is why
   such a leaf is an `int` and its digest is the number), ADR 0008 (the rule
@@ -55,7 +55,7 @@ Two things that table settles, and neither was assumed:
   the emitter can say whether it survives; that is what `roundtrips` already
   measures for floats.
 
-The defect is strictly worse than karr #78's: there the document verified and
+The defect is strictly worse than k78's: there the document verified and
 only the value's *type* had changed. Here the file is unreadable to sops and to
 this library alike, and it is written silently.
 
@@ -80,7 +80,7 @@ if ($kind eq 'int' && _has_public_pv($node)
 - **The emitter answers, through the callback that already exists.**
   `Format::YAML::_float_roundtrips` compares `value_to_bytes` on both sides of
   a real `Dump`/`Load`; `Format::JSON::_float_roundtrips` does the same through
-  the real encoder and decoder, and its type check — added for karr #78 as a
+  the real encoder and decoder, and its type check — added for k78 as a
   hard-coded `eq 'float'` — becomes `eq detect_type($value)`, which is the same
   question for a float and the right one for an int. Nothing models what an
   emitter will do with a leaf.
@@ -150,7 +150,7 @@ is the line between the two answers, and it is the same line this distribution
 draws everywhere else: a guard may refuse a broken document, never a working
 one.
 
-Decided in karr #85, which asked whether the asymmetry was a defect. It is not,
+Decided in k85, which asked whether the asymmetry was a defect. It is not,
 and both ADRs now say so.
 
 ### What was measured
@@ -221,5 +221,5 @@ library reads and writes correctly today, including ones sops itself wrote.
 **Extend the check to `str` leaves too.** A string's `value_to_bytes` is its own
 text, so the document and the digest cannot disagree about it, and the check
 would cost an emit-and-reparse for every string in every document. The open
-question karr #84 raised — a `str` leaf whose emitted form differs from its PV
+question k84 raised — a `str` leaf whose emitted form differs from its PV
 — is a *type* change at worst, not a MAC break, and stays where it was filed.

@@ -3,8 +3,8 @@
 - Status: accepted
 - Date: 2026-08-22
 - Tags: env, ini, mac, types, interop, guards
-- Closes karr #124, karr #125 and karr #137 — the three tickets ADR 0035
-  decided the **write** half of, deferred to karr #36 and karr #37, and left
+- Closes k124, k125 and k137 — the three tickets ADR 0035
+  decided the **write** half of, deferred to k36 and k37, and left
   open on a question neither ticket body asked
 - Depends on ADR 0035 (an untyped store's unencrypted leaf is written as the
   bytes the digest covers — the write half, now implemented), ADR 0008 (a leaf
@@ -15,23 +15,23 @@
 
 ## Context
 
-karr #124, #125 and #137 are one defect in three values. In the **unencrypted**
+k124, k125 and k137 are one defect in three values. In the **unencrypted**
 slot of a dotenv or ini document — a slot with no type label, whose reader hands
 the digest the literal text of the line — sops writes a Go *display* form while
 its own MAC covers the *wire* form:
 
 | value | sops writes | `sops_mac` covers | ticket |
 |---|---|---|---|
-| `true` / `false` | `true` / `false` | `True` / `False` | #124 |
-| `null` | `<nil>` | *(empty)* | #125 |
-| `1.0`, `2.0`, `0.0`, `-0.0`, `018` | `1.0`, `2.0`, `0.0`, `-0.0`, `18.0` | `1`, `2`, `0`, `-0`, `18` | #137 |
-| `1e2`, `1e20` | `100.0`, `1E+20` | `100`, `100000000000000000000` | #137 |
+| `true` / `false` | `true` / `false` | `True` / `False` | k124 |
+| `null` | `<nil>` | *(empty)* | k125 |
+| `1.0`, `2.0`, `0.0`, `-0.0`, `018` | `1.0`, `2.0`, `0.0`, `-0.0`, `18.0` | `1`, `2`, `0`, `-0`, `18` | k137 |
+| `1e2`, `1e20` | `100.0`, `1E+20` | `100`, `100000000000000000000` | k137 |
 
 Every one of those is a file sops wrote at exit 0 and then refuses to read.
 
-All three ticket bodies end with the same line — *"bleibt offen bis #36/#37 die
-Regel im Emitter umsetzen"*. **Both handlers now exist** (karr #36 in 89d01ee,
-karr #37 in 610ec6c) and both implement ADR 0035's rule, so the sentence the
+All three ticket bodies end with the same line — *"bleibt offen bis k36/k37 die
+Regel im Emitter umsetzen"*. **Both handlers now exist** (k36 in 89d01ee,
+k37 in 610ec6c) and both implement ADR 0035's rule, so the sentence the
 tickets were parked on has come true. What none of the three bodies asks is the
 question that was actually still open, and it is the expensive one in this
 distribution:
@@ -39,7 +39,7 @@ distribution:
 > **Can we read what sops writes?**
 
 The write half is our emitter and we control it. The read half is a file
-somebody else produced, and karr #102, #105 and #108 are all the same shape — a
+somebody else produced, and k102, k105 and k108 are all the same shape — a
 document sops writes and this library refuses. That class is this project's
 most expensive defect type, so the tickets were re-measured against the read
 direction before being closed.
@@ -87,7 +87,7 @@ rejects. The read half already tracks the reference implementation exactly.
 
 Applied to ADR 0038's discriminator — *does sops read back what sops wrote?* —
 the broken rows answer **no**, and that is the branch where refusing is right.
-This is **not** karr #102/#105/#108's class. It only looked like it because the
+This is **not** k102/k105/k108's class. It only looked like it because the
 tickets were written from the write side.
 
 ### The finding that decides the shape of the fix
@@ -119,7 +119,7 @@ that has already failed.
 So mapping `<nil>` back to `undef` on read would silently corrupt the string
 `"<nil>"`, a value sops itself writes and reads at exit 0, in order to rescue a
 file sops cannot read at all. That trade is backwards, and it is the trade
-karr #125's body invites by naming the byte sequence.
+k125's body invites by naming the byte sequence.
 
 ### What `ignore_mac => 1` already gives
 
@@ -135,8 +135,8 @@ same value sops would have handed them, with the authentication caveat stated.
 **All three tickets are closed as done, and the read half stays exactly as it
 is. No code changes.**
 
-1. **The write half is ADR 0035's and is implemented.** karr #124, #125 and
-   #137 asked for an emitter rule; both handlers apply it; sops reads the
+1. **The write half is ADR 0035's and is implemented.** k124, k125 and
+   k137 asked for an emitter rule; both handlers apply it; sops reads the
    result at exit 0 in both formats. Verified above rather than inherited from
    the tickets.
 
@@ -151,7 +151,7 @@ is. No code changes.**
    `<nil>`, not for `true`, not for `1.0`. The text is ambiguous with a string
    both implementations read at exit 0, so any text-directed repair trades a
    working value for a broken one. This is recorded as a decision rather than
-   left implicit precisely because the byte sequence is named in karr #125 and
+   left implicit precisely because the byte sequence is named in k125 and
    invites the fix.
 
 4. **The null in the encrypted slot keeps ADR 0049's structural refusal.** The
@@ -191,7 +191,7 @@ reading, and no document that is refused today starts being accepted.
 ## Rejected alternatives
 
 **Map the display form back on read** — `<nil>` to `undef`, `true` to a
-boolean, `1.0` to `1`. The fix karr #125's body points at by naming the bytes.
+boolean, `1.0` to `1`. The fix k125's body points at by naming the bytes.
 Refuted by measurement, not by taste: the identical line is a legitimate string
 in a document sops reads at exit 0, so the mapping corrupts a working value to
 rescue an unreadable one. It would also be a second value→bytes conversion, in

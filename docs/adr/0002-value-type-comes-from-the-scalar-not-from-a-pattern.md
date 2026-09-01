@@ -153,7 +153,7 @@ Four things about this are deliberate:
   exact bytes under this label", which is what `t/07-mac.t`'s hand-built
   fixtures need in order to test the decrypt side without a binary.
 
-**Amended by karr #89 — the ladder gains its one exception, and the rule above
+**Amended by k89 — the ladder gains its one exception, and the rule above
 is what decides it.** Perl caches an `IV` on an `NV` whenever the cast
 round-trips and sets the **public** `IOK` when it does, so a **negative zero**
 reached the `int` rung and the sign was gone from the wire and from the digest.
@@ -162,7 +162,7 @@ is a negative zero — the one value whose cached integer is a different number.
 Still the scalar deciding and not its text, still one ladder: one value, one
 rung, one extra question. See ADR 0015.
 
-**Amended by karr #90 — Perl's own boolean SV is a `bool`, and it is asked
+**Amended by k90 — Perl's own boolean SV is a `bool`, and it is asked
 above `int`.** Since 5.36, `!!1`, `!!0` and every comparison's result carry
 `SvIsBOOL`, which publishes `IOK`, so the `int` rung claimed them: the digest
 covered `1`/`0` while both emitters wrote a bare `true`/`false`, and the
@@ -276,7 +276,7 @@ type rather than a document's, and it is the price of alternative 3 not being
 taken. Callers who need certainty should pass the value through
 `File::SOPS::Encrypted->encrypt_value` with an explicit `type`, or avoid using
 the structure numerically before encrypting it. `File::SOPS->encrypt` has no
-per-leaf type override today; that is a gap, not a decision (karr #30).
+per-leaf type override today; that is a gap, not a decision (k30).
 
 ### Type detection now depends on the parser, so parsers can disagree
 
@@ -286,7 +286,7 @@ pattern match. Measured: sops types `0x10` and `1_000` as `int` (16 and 1000);
 YAML::XS does not resolve either, so File::SOPS types them `str`. This is a
 parser divergence, not a rule divergence, and it is out of scope here — it
 changes what a value comes back as, never whether the file verifies. Recorded
-as karr #29.
+as k29.
 
 ### Two numeric limits this does not reach
 
@@ -295,7 +295,7 @@ deserialized with `int()`, which routes an integer past the IV range through a
 double: sops writes `12345678901234567890` and File::SOPS reads back
 `12345678901234567000`, then writes a plaintext Go refuses outright
 (`strconv.Atoi: value out of range`). That is a pre-existing defect on the
-deserialization side, untouched here and recorded as karr #28. And
+deserialization side, untouched here and recorded as k28. And
 `_float_bytes` is `float64` arithmetic throughout, so it inherits every limit
 `strconv.FormatFloat` has and none it does not — which is the point, since Go
 is doing the same arithmetic on the other side.

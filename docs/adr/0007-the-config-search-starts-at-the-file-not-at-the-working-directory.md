@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-09
 - Tags: api, interop, config, policy
-- Resolves karr #55 (the confirmation; the implementation shipped under karr #38)
+- Resolves k55 (the confirmation; the implementation shipped under k38)
 
 ## Context
 

@@ -3,14 +3,14 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: bool, types, mac, wire-format, yaml, json, interop
-- Resolves karr #90
+- Resolves k90
 - Amends ADR 0002 (the type ladder gains a rung for Perl's own boolean SV; its
   rule is untouched — the type comes from the scalar's public flags, which is
   why such a leaf was an `int` — and the ladder stays single)
 - Depends on ADR 0008 and ADR 0012 (the rule that a leaf an emitter cannot
   write as the text the digest covers must not be written silently — the same
   disagreement, here **repaired** rather than refused) and ADR 0013 (the karr
-  #86 guard, which cannot see this leaf and is measured again below)
+  k86 guard, which cannot see this leaf and is measured again below)
 
 ## Context
 
@@ -58,7 +58,7 @@ Ten such leaves (`!!1`, `!!0`, `$x > 3`, `$x > 9`, `'a' eq 'a'`, `defined $x`,
 `YAML::XS::Load`) across two slots and two handlers is **40 document rows: 12
 exit 0 with the wrong value, 20 exit 51, 8 refused.**
 
-Three of those four rows were not in karr #90's ticket, and two contradict it:
+Three of those four rows were not in k90's ticket, and two contradict it:
 
 - **The false sentinel in an *encrypted* slot is a MAC break of its own, and a
   second mechanism.** `_encrypt_tree` skips a leaf that is an empty string, and
@@ -185,8 +185,8 @@ separates a spelling from a contradiction**. Neither clause holds here.
   ordinary Perl with an unambiguous meaning, and it would have to refuse the
   one row `sops -d` accepts today along with the three it rejects.
 
-This is the same line the distribution draws in ADR 0011, #62, #78, #88 and
-#89: repair where a representation exists, refuse where none does or where the
+This is the same line the distribution draws in ADR 0011, k62, k78, k88 and
+k89: repair where a representation exists, refuse where none does or where the
 halves contradict each other.
 
 ### Alternatives rejected
@@ -251,7 +251,7 @@ wrote, or an older File::SOPS document, is read back exactly as before —
 including a 0.003 file carrying `type:int` plaintext `1` for what was a
 sentinel, which still reads back as the integer 1 it says it is.
 
-### The karr #86 guard becomes consistent, and is measured saying so
+### The k86 guard becomes consistent, and is measured saying so
 
 ADR 0013's guard compares Go's resolution of the leaf's *stringification*
 against the digest text and returns early when they agree. For a true sentinel
@@ -285,7 +285,7 @@ no leaf class is known where the proxy is wrong *and* the answer is.
 - The two boolean routes compared byte for byte: `{ v => !!1 }` and
   `{ v => JSON->true }` produce **identical** documents in both formats and
   both slots, and likewise for false.
-- The karr #88 trap: the same tree emitted five times in one process, and the
+- The k88 trap: the same tree emitted five times in one process, and the
   sentinels re-read after every round. The mark survives, the type stays
   `bool`, and the five documents are identical.
 

@@ -12,8 +12,8 @@ Revision history for File-SOPS
     which document a not-found path was searched in. Converting a stream to a
     format that has no document stream (JSON, ENV, INI) is refused, naming the
     count and the target, rather than silently dropping documents as sops does.
-    edit on a stream is deliberately not enabled yet (karr #41). Single-document
-    files are byte-identical. (docs/adr/0033, karr #31)
+    edit on a stream is deliberately not enabled yet (k41). Single-document
+    files are byte-identical. (docs/adr/0033, k31)
   - Nine divergent string leaves that this distribution used to warn about or
     refuse are now WRITTEN, double-quoted, exactly as sops writes them: a "True"
     or "False" string (which was written bare and read back by Go as a boolean --
@@ -23,25 +23,25 @@ Revision history for File-SOPS
     cannot be verified, the leaf falls back to the previous warn/refusal rather
     than shipping an altered file, and no other leaf's bytes move. The sixteen
     remaining ambiguous spellings (1_000, dates, 0x/0o/0b, Null/NULL/TRUE/FALSE,
-    0xffffffffffffffff) stay refused, pending a full karr #127. (docs/adr/0070,
-    karr #99)
+    0xffffffffffffffff) stay refused, pending a full k127. (docs/adr/0070,
+    k99)
   - ARBITRATION: a caller-supplied integer SV in the int64..uint64 window (a
     Perl UV literal, a computed integer, or a scalar out of a YAML parse -- not
     one read through Format::JSON::parse, which docs/adr/0021 fixed) is refused
     by assert_representable; accepted as a limit rather than closed by loosening
     a MAC-path guard. The croak already names both workarounds (store it as a
     string, or as a float). No code change. (docs/adr/0069, docs/adr/0021, karr
-    #104)
+    k104)
   - decrypt now carps when a plaintext comment stands in a slot the encryption
     rule marks as encrypted, matching sops' "Found possibly unencrypted comment
     in file" warning. Advisory only: the comment is kept, the MAC and value do
     not move, and the comment text is never quoted. Reaches dotenv and ini;
     yaml cannot reach it (YAML::XS discards plaintext comments before parse).
-    (docs/adr/0067, karr #173)
+    (docs/adr/0067, k173)
   - File::SOPS::Comment is now a Moo class like every other class here,
     reversing ADR 0041's hand-written bless. Its three constructor refusals
     (missing text, a reference, an empty string) are unchanged, and no wire
-    byte moves. (docs/adr/0068, karr #154)
+    byte moves. (docs/adr/0068, k154)
   - SECURITY FIX and BEHAVIOUR CHANGE: unencrypted_regex, encrypted_regex and
     a .sops.yaml path_regex are matched in Go RE2's dialect (compiled /a), not
     Perl's, so a rule selects the same keys here as at sops -- Perl's
@@ -51,21 +51,21 @@ Revision history for File-SOPS
     pattern RE2 cannot compile matches nothing on the READ path as sops does,
     and is refused only for writing. An ASCII rule over ASCII keys does not
     move. decrypt and extract are unaffected by a write-side refusal. (docs/adr/0048,
-    docs/adr/0051, karr #161, #164, #166, #171)
+    docs/adr/0051, k161, k164, k166, k171)
   - ARBITRATION: the residual RE2/Perl regex divergences are accepted as limits
     rather than closed -- Perl full case folding (`(?i)^ss$` over U+00DF), `$`
     before a trailing newline, `\p{Word}`, and a pattern neither dialect can
     compile (`fo(`, read by sops at exit 0, refused here). None is reachable by
     an ASCII rule over ASCII keys, and each fails loudly. No code change.
-    (docs/adr/0065, docs/adr/0066, karr #165, #176)
+    (docs/adr/0065, docs/adr/0066, k165, k176)
   - PERFORMANCE: should_encrypt_path reads each rule attribute once and caches
     the suffix matcher, about 10% off the common single-suffix call. No
-    behaviour change. (karr #142)
+    behaviour change. (k142)
   - ARBITRATION: the JSON surrogate-pair divergence (Cpanel::JSON::XS combines
     the pair, YAML::PP keeps the two lone surrogates) is accepted as a limit;
     the JSON reparse already refuses such a leaf loudly, naming its path, and
     only a hand-written or third-party JSON document reaches it. No wire byte
-    moves. (docs/adr/0064, karr #139)
+    moves. (docs/adr/0064, k139)
   - NEW DIAGNOSTIC: a MAC verification failure now appends a hedged hint for two
     shapes sops writes but then cannot read back -- a bare `-0`/`-0.0` token in a
     YAML/JSON unencrypted slot (a float that underflowed to negative zero), and
@@ -73,17 +73,17 @@ Revision history for File-SOPS
     `N.0`/exponent). The hint names the leaf and points at ignore_mac; it fires
     only on MAC failure, is phrased "consistent with" rather than as a confirmed
     cause, and never leaks a value. The MAC bytes do not move. (docs/adr/0063,
-    docs/adr/0052, karr #121, #174)
+    docs/adr/0052, k121, k174)
   - DOCS: the two positions a sops comment can occupy are recorded as a
     deliberate asymmetry -- a sequence-element comment is refused by
     decrypt_file/edit (YAML::XS cannot emit it), a mapping-position comment is
     dropped silently (YAML::XS discards it before parse). Both verify at sops.
-    No code change. (docs/adr/0060, karr #169)
+    No code change. (docs/adr/0060, k169)
   - BEHAVIOUR CHANGE: a top-level `sops` data key is refused only for YAML and
     JSON, which reserve that name as their metadata root; ENV's `sops_*` keys
     and INI's `[sops]` section do not collide, so a sops-written env file
     carrying `sops=1` now round-trips end to end. No wire byte moves. (docs/adr/0061,
-    karr #157)
+    k157)
   - BEHAVIOUR CHANGE: non-finite floats (.inf/-.inf/.nan) now round-trip against
     sops. In an ENCRYPTED slot they are written as type:float with plaintext
     +Inf/-Inf/NaN in both formats, as sops writes them. In an UNENCRYPTED YAML
@@ -95,36 +95,36 @@ Revision history for File-SOPS
     both slots, and a bare non-finite float in an encrypted slot is derived from
     the number. edit of such a YAML document now saves instead of corrupting.
     (docs/adr/0023, docs/adr/0026, docs/adr/0031, docs/adr/0034, docs/adr/0037,
-    docs/adr/0040, docs/adr/0062, karr #102, #105, #113, #114, #122, #123, #134,
-    #141)
+    docs/adr/0040, docs/adr/0062, k102, k105, k113, k114, k122, k123, k134,
+    k141)
   - BUG FIX and NEW GUARD: a document nested deeper than $File::SOPS::MAX_DEPTH
     (10000 containers, sops's own limit, writable) is refused in every walk and
     both directions; deep documents no longer flood STDERR with "Deep recursion"
     warnings and are much cheaper (push/pop key path instead of a per-level
-    copy). (docs/adr/0029, karr #117)
+    copy). (docs/adr/0029, k117)
   - The remaining recursive walks (Encrypted.pm, Format/YAML.pm) are silenced of
     the residual deep-recursion warnings; no wire byte moves. (docs/adr/0057,
-    karr #120, #179)
+    k120, k179)
   - DOCS: policy_args records a divergence from sops on `sops.version` -- sops
     preserves a document's version across a rotate, this library stamps its own
     3.7.3. The field is unobserved here (nothing, including the MAC, reads it).
-    No code change. (docs/adr/0058, karr #151)
+    No code change. (docs/adr/0058, k151)
   - BEHAVIOUR CHANGE: a list of `ENC[...,type:comment]` strings under an empty
     key in an INI section the rule EXCLUDES is recognised as a comment bucket
     and preserved verbatim on re-encryption, instead of being re-encrypted as
-    type:str. (docs/adr/0059, karr #172)
+    type:str. (docs/adr/0059, k172)
   - BEHAVIOUR CHANGE: a caller string that spells `ENC[...,type:comment]` at a
     path the rule EXCLUDES is refused at write time, so this library can no
-    longer produce a file it cannot read back. (docs/adr/0056, karr #168)
+    longer produce a file it cannot read back. (docs/adr/0056, k168)
   - BEHAVIOUR CHANGE: `_path_to_aad` answers `:` for the document ROOT (an
     empty path), matching Go's `strings.Join`; no live caller reaches the empty
-    case and no file's MAC moves. (docs/adr/0055, karr #156)
+    case and no file's MAC moves. (docs/adr/0055, k156)
   - DOCS: a `type:bytes` cell this library writes crashes sops 3.13.3 (panic,
     exit 2) in every format -- a sops-side bug the library can only warn about;
-    the read path is unaffected. POD warnings added. (docs/adr/0003, karr #136)
+    the read path is unaffected. POD warnings added. (docs/adr/0003, k136)
   - BEHAVIOUR CHANGE: a bare leading-zero YAML integer is repaired to Go's octal
     resolution on the parse path, so `0755` reads back as 493 and not 755; the
-    encrypted digest does not move. (docs/adr/0054, karr #127)
+    encrypted digest does not move. (docs/adr/0054, k127)
   - BEHAVIOUR CHANGE: a value is decrypted because the document's encryption
     RULE says so, not because it looks encrypted -- decrypt asks
     should_encrypt_path about every leaf on the way out, as encrypt does on the
@@ -136,14 +136,14 @@ Revision history for File-SOPS
     This REPLACES the interim guard 0.003 added for the same defect (docs/adr/0046):
     rotate and edit no longer raise "Refusing to rotate", because an excluded
     leaf is never decrypted and there is no plaintext to leak. (docs/adr/0049,
-    docs/adr/0046, karr #160, #150)
+    docs/adr/0046, k160, k150)
   - NEW FORMAT: the INI handler (`format => 'ini'`, and any `.ini` file), a
     full round-trip against sops 3.13.3 in both directions, comments and all.
     Two-level tree (section, key), values outside a section in `DEFAULT`, Go's
     ini grammar reproduced rather than approximated. A section's comments live
     under its empty key. Four value shapes sops writes but cannot read back are
     refused, as are a nested document, a duplicate section or key, and a section
-    named `sops`. (docs/adr/0047, karr #37)
+    named `sops`. (docs/adr/0047, k37)
   - BEHAVIOUR CHANGE, narrow: a mapping key `''` holding nothing but sops
     comments, below the top level, is authenticated under its PARENT's path
     rather than `parent::` -- a deliberate trade that makes the INI handler
@@ -153,108 +153,108 @@ Revision history for File-SOPS
     re-formats (RFC3339), not the document's literal text, so a document
     spelling the same instant another legal way now verifies where it was
     refused. Nothing moves for a document either implementation writes (all
-    carry the `Z` form). (docs/adr/0044, karr #144)
+    carry the `Z` form). (docs/adr/0044, k144)
   - NEW DIAGNOSTIC: reading a YAML document whose sops `lastmodified` is a PLAIN
     (unquoted) scalar now warns -- such a file is one no sops can open. Not a
-    refusal, because every write path here repairs it. (docs/adr/0050, karr #159)
+    refusal, because every write path here repairs it. (docs/adr/0050, k159)
   - BEHAVIOUR CHANGE and BUG FIX: a sops comment written as a sequence element
     (`- ENC[...,type:comment]`, in YAML and in JSON) is preserved as a
     File::SOPS::Comment leaf instead of read as an ordinary value; encrypt and
     rotate write it back. A comment is not in the MAC, in any format. Still
     refused, naming the path: a comment in a mapping-value slot, and writing a
     comment into plaintext (decrypt_file, edit). Supersedes docs/adr/0024.
-    (docs/adr/0041, karr #108)
+    (docs/adr/0041, k108)
   - BUG FIX and BEHAVIOUR CHANGE: from_hash reads the non-string sops-section
     fields the way sops reads them -- `mac_only_encrypted` and `shamir_threshold`
     are decoded out of text (strconv.ParseBool / ParseInt), so a quoted
     `"false"` is boolean false (it selects the digest) and not a true Perl
     string. Unparseable spellings are refused, naming the field. Nothing moves
-    for a document sops itself wrote. (docs/adr/0042, karr #138)
+    for a document sops itself wrote. (docs/adr/0042, k138)
   - BUG FIX: from_hash refuses a LIST or a MAP in a sops-section field that
     holds a string (all nine), instead of carrying the reference into the object
     -- where an `encrypted_regex: []` made rotate write every value in plaintext,
     and a reference in `lastmodified` became the AAD. A non-string scalar and an
     unmodelled field are still passed through, now documented. (docs/adr/0043,
-    karr #145, #146)
+    k145, k146)
   - BUG FIX: the refusal for a YAML leaf Go resolves differently no longer
     offers an int leaf's remedy for a STRING leaf; it names the two remedies
     that work for a string (encrypt it, or write the document as JSON).
-    (docs/adr/0039, karr #135)
+    (docs/adr/0039, k135)
   - The order-preserving reparse that gives MAC verification its key order is
     now a format-handler class method (`parse_in_document_order`), so a future
     ENV/INI format recovers document order instead of silently falling back to
     sorted keys; a handler that cannot recover order is a loud error. No digest
-    moves. (docs/adr/0036, karr #74)
+    moves. (docs/adr/0036, k74)
   - BUG FIX and BEHAVIOUR CHANGE: rotate/encrypt of a JSON document with a bare
     integer between 2^63 and 2^64-1 works again -- the JSON parser hands back the
     float64 Go reads (with the digits as its string half), as sops writes
     type:float there. YAML still refuses the window (sops cannot write it
-    either). (docs/adr/0021, karr #101)
+    either). (docs/adr/0021, k101)
   - BEHAVIOUR CHANGE: a bare JSON integer too wide for a Perl integer is read as
     a float carrying its source spelling (sops writes type:float there), not as
     a string; a literal that overflows a double is refused on every write path.
-    A quoted one is unaffected. (docs/adr/0020, karr #63)
+    A quoted one is unaffected. (docs/adr/0020, k63)
   - BEHAVIOUR CHANGE: extract() returns a float that prints all its digits (a
     dualvar of the double and the wire's canonical decimal), so `"$value"` shows
     0.30000000000000004 where it showed 0.3. Only the extracted leaf is wrapped,
-    and decrypt_file no longer loses those digits. (docs/adr/0010, karr #61, #79)
+    and decrypt_file no longer loses those digits. (docs/adr/0010, k61, k79)
   - BEHAVIOUR CHANGE: the type:float label is kept on an encrypted whole number
     -- the read path converts with `unpack('d',pack('d',...))` instead of `+0.0`,
     so a rotate no longer relabels sops's type:float as type:int. (docs/adr/0009,
-    karr #73)
+    k73)
   - BUG FIX: an unencrypted float needing 16-17 significant digits was written
     with 15, so the document stated one number and the MAC covered another; both
     emitters now write Go's shortest round-tripping decimal. New prerequisite
-    Math::BigFloat. (docs/adr/0006, karr #58)
+    Math::BigFloat. (docs/adr/0006, k58)
   - BUG FIX: a negative zero keeps its sign -- an unencrypted YAML `-0.0` is
     written `-0.0` (the spelling both implementations read as the double), an
     encrypted `-0` keeps its sign on the read path, and a YAML negative zero
     written as JSON is carried by the double. (docs/adr/0006, docs/adr/0014,
-    karr #62, #72, #88)
+    k62, k72, k88)
   - BEHAVIOUR CHANGE: an integer leaf carrying a different string half (a
     dualvar, or a YAML source spelling) is refused at emit time in both formats,
-    instead of writing a document that fails its own MAC. (docs/adr/0012, karr #84)
+    instead of writing a document that fails its own MAC. (docs/adr/0012, k84)
   - BEHAVIOUR CHANGE and fix: a float leaf carrying its own string form reached
     a JSON document as a quoted string; it is now written as the canonical
-    decimal bare number, as YAML always did. (docs/adr/0011, karr #78)
+    decimal bare number, as YAML always did. (docs/adr/0011, k78)
   - BEHAVIOUR CHANGE: Perl's native boolean SV (`builtin::is_bool` -- `!!1`, a
     comparison, `defined`, ...) is written as type:bool True/False, as sops
     writes a boolean, instead of as the integer 1/0. Wire bytes move for a
     previously-written encrypted `!!1`; the read path is unchanged. (docs/adr/0016,
-    karr #90)
+    k90)
   - BEHAVIOUR CHANGE: a negative zero on which Perl cached an integer is written
     type:float `-0` (what sops writes), decided on the NV's bit pattern, instead
-    of the integer 0. (docs/adr/0015, karr #89)
+    of the integer 0. (docs/adr/0015, k89)
   - BEHAVIOUR CHANGE: a YAML leaf whose spelling Go resolves differently from
     libyaml (`0755`, `010`, `0x1f`, `1_000`, `.inf`, a bare timestamp, ...) is
     refused when a MAC-carrying document is written, naming the key path -- the
     file used to be written silently and rejected later with a MAC mismatch.
     Encrypted slots, JSON and the plaintext emitters are untouched. (docs/adr/0013,
-    karr #86)
+    k86)
   - internal: the YAML foreign-resolution guard takes its verdict from the token
     the emitter writes, fixing the one leaf class (a boolean) where the leaf's
     stringification and the emitted token differ. No document moves. (docs/adr/0017,
-    karr #91)
+    k91)
   - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document with a `True`
     or `False` STRING in an unencrypted slot warns -- libyaml writes it bare and
     Go reads a boolean, a type divergence a sops write-back would make permanent.
-    No document stops being written. (docs/adr/0019, karr #92)
+    No document stops being written. (docs/adr/0019, k92)
   - BEHAVIOUR CHANGE, diagnostics only: encrypting a YAML document with
     mac_only_encrypted set warns about an unencrypted leaf whose spelling sops
     resolves differently (e.g. `0755` -> 493). No document moves. (docs/adr/0018,
-    karr #87)
+    k87)
   - BEHAVIOUR CHANGE: a YAML or JSON document with a REFERENCE as a leaf value
     is refused instead of written -- a blessed or unblessed ref digests as its
     stringification while the emitter writes a Perl-specific tag or a heap
     address, so the file was unreadable. An exact JSON::PP::Boolean is still
     written as bare true/false; encrypted slots are unaffected. An unblessed ref
     in an encrypted slot is refused too, rather than stored as a heap address.
-    (docs/adr/0008, karr #65, #66, #67)
+    (docs/adr/0008, k65, k66, k67)
   - SECURITY: the random data key (Backend::Age) and the generated data key and
     per-value GCM nonce (Encrypted) are checked for length where they are
     produced, and there is one generator left; a short return (a valid but wrong
     AES key, or a repeatable nonce) now dies instead of reaching the cipher. No
-    correctly generated document is affected. (karr #52)
+    correctly generated document is affected. (k52)
   - BEHAVIOUR CHANGE: a value's type comes from the value, not from a pattern
     match on its text -- a quoted "false"/"1"/"007" is type:str, a bare false is
     type:bool, and a Perl number is written in Go's canonical form. type:bool now
@@ -355,7 +355,7 @@ Revision history for File-SOPS
     parse error, or a top-level sops entry. Two deliberate differences from sops
     edit: no editor fallback when EDITOR is unset, and re-encryption under a NEW
     data key (so edit refuses the same files rotate does). A reserved-key entry
-    and an unparseable document are reported apart. (karr #41)
+    and an unparseable document are reported apart. (k41)
   - New method creation_rules_for: reads the .sops.yaml governing a file and
     returns the encrypt arguments its first matching creation rule asks for, so
     encrypt_in_place can encrypt a file the way its repository has decided.
@@ -363,14 +363,14 @@ Revision history for File-SOPS
     DELIBERATE DIFFERENCE: the search walks up from the FILE, not the working
     directory, and $SOPS_CONFIG is not read from the environment. A rule naming
     key material this distribution cannot produce is refused rather than
-    half-applied. (karr #45, #53, #54)
+    half-applied. (k45, k53, k54)
   - DATA LOSS: encrypt_file, decrypt_file and rotate write their output
     atomically, as encrypt_in_place and edit already did -- all three used `>`,
     which truncated the target before writing and checked neither print nor
     close, so a failed write left an EMPTY file and still returned true. A
     consequence: a written file comes back with a NEW INODE (hard links keep the
     old content), and replacing a file needs write permission on its directory.
-    (docs/adr for file writing; karr #46)
+    (docs/adr for file writing; k46)
   - New method emit on both format handlers, so decrypt_file and edit write
     their plaintext through the same code serialize does -- the second emitter
     they each carried had to stay byte-identical by hand and nothing checked it.
@@ -389,24 +389,24 @@ Revision history for File-SOPS
     the cycle closes, instead of hanging the process; a merely reused anchor is
     unaffected. An acyclic but exponentially-shared document is refused
     separately, at go-yaml's own aliasing budget. (docs/adr/0025, docs/adr/0027,
-    karr #110, #112)
+    k110, k112)
   - NEW: a plaintext YAML tagging a scalar `!!bool true`/`false` is encrypted
     instead of refused (that tag carries no type and is dropped before parsing);
     every other yaml.org scalar tag carries a TYPE and is refused by name, with
     a message about the document rather than about libyaml. sops's own message
-    for the unopenable file is replaced. (docs/adr/0032, karr #118)
+    for the unopenable file is replaced. (docs/adr/0032, k118)
   - DECISION, no behaviour change: the per-format type policy the ENV and INI
     handlers were waiting on is settled -- our emitters write value_to_bytes
     verbatim into an unencrypted flat slot, so the digest does not move and each
     line is one sops itself writes; the metadata half is decoded weakly in
-    from_hash. docs/adr/0002 is extended, not changed. (docs/adr/0035, karr #77)
+    from_hash. docs/adr/0002 is extended, not changed. (docs/adr/0035, k77)
   - NEW FORMAT: `format => 'env'` (dotenv), a `.env` document through every
     method, auto-detected, proved both ways against sops 3.13.3. A comment lives
     under the EMPTY KEY as a list of File::SOPS::Comment objects (measured: every
     comment authenticates under the AAD `:`), so a .env keeps its comments
     through decrypt_file and edit. Keys are written sorted (the MAC's encrypt
     side hashes sort keys); reading takes document order from the reparse. Ten
-    shapes are refused, each naming the line or key. (docs/adr/0045, karr #36)
+    shapes are refused, each naming the line or key. (docs/adr/0045, k36)
 
   IMPORTANT -- if you encrypted data with 0.001 or 0.002, read this. The defects
   below could corrupt or misrepresent stored values, and some are not repairable

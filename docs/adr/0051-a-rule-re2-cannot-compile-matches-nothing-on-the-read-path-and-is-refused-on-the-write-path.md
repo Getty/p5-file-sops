@@ -2,8 +2,8 @@
 
 - Status: accepted
 - Date: 2026-08-22
-- Resolves karr #171 (the read regression), karr #166 (the refusal reported
-  under a leaf path) and karr #163 (the `rotate` POD) — one decision, because
+- Resolves k171 (the read regression), k166 (the refusal reported
+  under a leaf path) and k163 (the `rotate` POD) — one decision, because
   all three are the same question about *where* ADR 0048's refusal belongs
 - Depends on ADR 0048 (which chose the refusal and put it at the point of
   match) and ADR 0049 (which made the read path ask the rule, and so gave the
@@ -30,13 +30,13 @@ and it took the refusal onto the read path without anybody choosing that. ADR
 Two smaller defects sit in the same two files and turn out to be the same
 question:
 
-- **karr #166.** `encrypt` reaches the rule from inside `_assert_leaves_representable`,
+- **k166.** `encrypt` reaches the rule from inside `_assert_leaves_representable`,
   which wraps the exception with `_at_path`. The refusal therefore arrives
   under whichever leaf the walk reached first — `bar: Cannot use '(?=f)foo' as
   the unencrypted_regex ...` — where `bar` has nothing to do with the rule and
   reads as though the key were at fault.
-- **karr #163.** The `rotate` POD said the RE2 divergence "is open and is karr
-  #161". It is not; and by the time this was picked up, commit 085773e had
+- **k163.** The `rotate` POD said the RE2 divergence "is open and is karr
+  k161". It is not; and by the time this was picked up, commit 085773e had
   already rewritten that whole section for ADR 0049, so the paragraph the
   ticket quotes no longer exists in any form.
 
@@ -102,7 +102,7 @@ ADR 0048 says, of the other direction: *"what RE2 accepts and Perl rejects:
 `(?U)` is the **only** measured pattern that RE2 compiles and Perl does not.
 The other three are rejected by both, which puts them in the lenient half, not
 beside `(?U)`. ADR 0048's list is wrong there and is corrected in the POD;
-karr #175 carries the fix to the ADR itself.
+k175 carries the fix to the ADR itself.
 
 (A lone `\E` is also RE2-rejected — `\Q..\E` compiles as a pair. It stays
 refused regardless, as a `different` construct.)
@@ -165,7 +165,7 @@ refusal for any of the three kinds. It is called from:
   would arrive at the bottom — for `edit`, after the editor had opened and the
   user had typed.
 
-That closes karr #166 as a side effect and not as a patch: the rule is checked
+That closes k166 as a side effect and not as a patch: the rule is checked
 once, where the rule is, so there is no leaf path for the message to be
 reported under. The message text is unchanged.
 
@@ -175,7 +175,7 @@ Refusing to **write** under such a rule is still right, and for ADR 0048's own
 reason: a caller who asks for `encrypted_regex => '(?=foo)'` and is silently
 given "matches nothing" gets every secret in the document written to disk in
 plaintext, at exit 0, under a `sops` section that makes the file look
-encrypted. That is karr #18 and karr #150's failure mode. Reading a document
+encrypted. That is k18 and k150's failure mode. Reading a document
 that already exists is a different question — nothing is being decided on the
 caller's behalf, the document already is what it is — and there the reference
 implementation's answer is the correct one.
@@ -209,7 +209,7 @@ implementation's answer is the correct one.
   available to this side tells it apart from `(?U)fo+`, which RE2 *does*
   compile and which must not be guessed at. Recording it rather than closing
   it: an unbalanced-paren check would be a second, narrower regex parser whose
-  false positives would refuse rules sops takes. karr #176.
+  false positives would refuse rules sops takes. k176.
 - **The three disagreements ADR 0048 lists as limits are untouched** — full
   case folding of U+00DF, `$` before a trailing newline, and `\p{NAME}` with a
   name Go does not have.
@@ -221,7 +221,7 @@ implementation's answer is the correct one.
 ## Rejected alternatives
 
 **A lenient mode on `should_encrypt_path` for the read path only** — karr
-#171's option (a), and ADR 0049's. It works, and it puts a second answer inside
+k171's option (a), and ADR 0049's. It works, and it puts a second answer inside
 the one predicate four call sites share, on the most load-bearing change in
 this layer. Moving the refusal out instead leaves the predicate with one answer
 and costs a method.
@@ -242,7 +242,7 @@ have to undo before writing it back into the document.
 
 **Validate in `BUILD` or `from_hash`.** Rejected here for the reason ADR 0048
 rejected it: it would refuse to *read* a document carrying such a rule, which
-is the whole defect this ADR exists to remove. It is also what karr #166
+is the whole defect this ADR exists to remove. It is also what k166
 explicitly ruled out.
 
 ## Notes

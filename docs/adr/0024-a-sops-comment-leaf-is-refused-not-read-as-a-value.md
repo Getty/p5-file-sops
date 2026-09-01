@@ -3,8 +3,8 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: yaml, mac, wire-format, guards, interop
-- Resolves karr #108
-- Splits off the read half of karr #76; the write half (preserving comments)
+- Resolves k108
+- Splits off the read half of k76; the write half (preserving comments)
   stays there
 - Depends on ADR 0008 (a leaf the emitter cannot write as what the digest covers
   is refused — this is the same rule for a leaf the emitter cannot write at all)
@@ -91,7 +91,7 @@ it, so nothing contradicted the comment either.
 
 ### Comments are not in the MAC
 
-This is the measurement the fix turns on, and karr #76's body asserted the
+This is the measurement the fix turns on, and k76's body asserted the
 opposite ("steht IM DIGEST"). Four independent measurements against sops 3.13.3:
 
 1. **Delete a comment leaf** from an encrypted file, then `sops -d`: exit 0, in
@@ -182,7 +182,7 @@ these documents is achievable, in about six lines, across two files.
   old ones.
 - Mapping-position comments keep behaving exactly as they do today: silently
   dropped on read (by `YAML::XS`, before this guard runs) and absent from any
-  document this library writes back. That is unchanged, it is karr #76's
+  document this library writes back. That is unchanged, it is k76's
   subject, and it is not made better or worse here.
 
 ### What changes for existing callers
@@ -207,7 +207,7 @@ with no diagnostic anywhere. That is the same class of defect as the one being
 fixed, one notch quieter: a loud wrong read traded for a silent lossy write. The
 usual defence is that this distribution already destroys mapping-position
 comments on every write, so nothing new would be lost — but that is an argument
-that an existing gap should be widened, and the gap is what karr #76 exists to
+that an existing gap should be widened, and the gap is what k76 exists to
 close. Refusing now and preserving later is monotone; dropping now would have to
 be reversed by the same ticket that fixes it.
 
@@ -231,9 +231,9 @@ tree.
 **Preserve the comment through the tree and restore it on emit** — the lossless
 answer, and the right end state. It needs a place in the tree model for a leaf
 that is not a value, an emitter on each side that can put it back on the node it
-belonged to, and the digest exclusion above. That is karr #76's data-model
+belonged to, and the digest exclusion above. That is k76's data-model
 change, it reaches both format handlers and both MAC walks, and it is a great
-deal more than the read defect karr #108 describes. Filed there rather than
+deal more than the read defect k108 describes. Filed there rather than
 folded in, and this decision is deliberately shaped so that it becomes a
 straight removal of the guard: refuse → preserve, with nothing to undo in
 between.
@@ -242,6 +242,6 @@ between.
 on `decrypt`, which is the public API's surface and not this lane's. It is also
 premature: it would be an option to receive a tree containing a value the file
 does not contain, which is not something a caller can currently be told how to
-use safely. If it turns out to be wanted, it belongs on top of karr #76's
+use safely. If it turns out to be wanted, it belongs on top of k76's
 preservation, where the flag would select what to do with a comment rather than
 whether to invent a value.

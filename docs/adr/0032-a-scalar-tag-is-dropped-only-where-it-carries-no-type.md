@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: yaml, parser, interop, format, types
-- Resolves karr #118
+- Resolves k118
 - Extends ADR 0028 (the `!!merge` repair — same mechanism, same reconciliation,
   and this is the second and last token that qualifies for it). ADR 0028's
   "Limits" section deferred exactly this question and its measurement table is
@@ -29,7 +29,7 @@ That is a message about a foreign library, not about the document. sops accepts
 all of them, resolves them, and writes the resolved value with the tag gone. So
 a hand-written plaintext that `sops -e` encrypts at exit 0 could not be
 **opened** here at all — the fifth document class in this position after karr
-#102, #105, #108 and #116, and the first that is purely on the **encrypt** path:
+k102, k105, k108 and k116, and the first that is purely on the **encrypt** path:
 sops writes none of these tags into an encrypted document. `!!merge` was the
 only one it writes, and that is ADR 0028.
 
@@ -100,7 +100,7 @@ the tag is redundant by construction.
 
 ### The silent divergence hunt, and what it found
 
-karr #118 asked, before anything else, whether the tags `YAML::XS` *accepts*
+k118 asked, before anything else, whether the tags `YAML::XS` *accepts*
 hide a worse defect: a document we open and type differently from sops. The
 answer is **yes, one — and it is not caused by a tag.**
 
@@ -108,7 +108,7 @@ answer is **yes, one — and it is not caused by a tag.**
 755 here**: go-yaml reads a leading zero as octal, libyaml as decimal. The tag
 changes nothing about it — the untagged `0755` diverges identically, and
 measured, the two documents' MACs are the same on each side. So this is karr
-#29's parser divergence, not this ticket's, and its dangerous half is **already
+k29's parser divergence, not this ticket's, and its dangerous half is **already
 closed**: the foreign-resolution guard (ADR 0013 / ADR 0017) refuses to *write*
 such a leaf unencrypted, with a message naming the octal, which is what would
 otherwise fail the document's own MAC. What remains is an encrypted leaf whose
@@ -160,7 +160,7 @@ unchanged.
 `YAML::XS` reads; the fourth is ADR 0028's repair. A document that fails on one
 of them — `!!int 0x10`, `!!int 1_000`, `!!float .inf`, all of which sops
 resolves and libyaml refuses as *content* rather than as a bad tag — keeps
-libyaml's message, because that is karr #29 and not this decision.
+libyaml's message, because that is k29 and not this decision.
 
 ## Why `!!binary` is not decoded here
 
@@ -246,7 +246,7 @@ Handed to the wire lane as a question rather than answered here; note that the
   does not remove it, so the counts disagree and nothing is retried. sops writes
   neither.
 - **`!!int 0755` on an encrypted leaf** stays a fidelity gap: `493` to sops,
-  `755` here, both self-consistent, karr #29's class. Its unencrypted twin is
+  `755` here, both self-consistent, k29's class. Its unencrypted twin is
   already refused by the foreign-resolution guard.
 - **`!!float 1` is still `type:int` here.** The digest agrees and the file
   verifies in both directions, so this is a label difference with no wire

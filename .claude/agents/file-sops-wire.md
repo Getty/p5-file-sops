@@ -48,7 +48,7 @@ and do not recreate it:
 
 - **A scalar's SV flags decide its type** (ADR 0002). That makes every numeric read of a
   user's scalar a potential retyping — Perl marks a string numeric *in place*. This is
-  not theoretical: karr #32 is a wrong value handed to a caller, non-deterministically,
+  not theoretical: k32 is a wrong value handed to a caller, non-deterministically,
   from exactly this mechanism. When you touch anything that reads a value, ask what it
   does to the flags.
 

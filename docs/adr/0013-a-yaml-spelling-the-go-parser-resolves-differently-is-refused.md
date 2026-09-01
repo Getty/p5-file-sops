@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: yaml, mac, wire-format, guards, interop
-- Resolves karr #86
+- Resolves k86
 - Depends on ADR 0001 (the digest and the document are one mechanism: what the
   emitter wrote is what a reader re-derives the MAC from), ADR 0002 (the type
   comes from the SV — this ADR does **not** touch that, see "Why this is not a
@@ -15,7 +15,7 @@
 
 `File::SOPS::Encrypted::detect_type` and `value_to_bytes` decide what the MAC
 digest covers. `YAML::XS` decides what the document says. Both agree with each
-other for every leaf in this ADR — which is why karr #84's guard, which asks
+other for every leaf in this ADR — which is why k84's guard, which asks
 this emitter to reparse its own output, cannot see any of it.
 
 The disagreement is with **Go**. `YAML::XS` is libyaml, whose resolver is
@@ -111,7 +111,7 @@ because sops normalised it away. Measured, a sops-written `mode_unencrypted:
   `0755` document is `sops -d` exit 0 with the flag set. What remains is that
   sops reads `493` from it where this library reads `755` — a real divergence
   about a value, not about the MAC, and refusing it would refuse a document that
-  works today. Filed as karr #87, and **since ADR 0018 the same check runs there
+  works today. Filed as k87, and **since ADR 0018 the same check runs there
   and warns** — still refusing nothing, still writing the same bytes.
 
 ## Decision
@@ -184,16 +184,16 @@ decide, it says so and the leaf is refused: `9223372036854775808` and
 refuses to write at all (`Error walking tree: Cannot walk value, unknown type:
 uint64`, exit 23) — measured, so refusing is not a guess.
 
-**Amended by karr #91 — steps 2 and 4 above have become one step, and it is the
+**Amended by k91 — steps 2 and 4 above have become one step, and it is the
 one that asks the emitter.** The leaf's stringification was a proxy for the
 token in both the gate and the verdict, and it is the same string for every leaf
 class but a boolean, whose token is `true`/`false` while it stringifies to `1`
-or to nothing. karr #90 came through the verdict half by exactly that route. The
+or to nothing. k90 came through the verdict half by exactly that route. The
 gate survives — the cost measurement above is why — with one clause for the leaf
 class whose token is not its stringification; the verdict is now taken from the
 token alone. Measured: 0 of 900 corpus rows move. See ADR 0017.
 
-**Amended by karr #89 — the model shared a conversion with the code it was
+**Amended by k89 — the model shared a conversion with the code it was
 checking, and lost the same sign.** `_go_float` derived its float with
 `value_to_bytes($p * 1.0)`, the arithmetic copy ADR 0014 measured and rejected
 one level down. For a negative zero **written with an exponent** — `-0.0e0`,
@@ -295,7 +295,7 @@ instead of a file that sops rejects with `MAC mismatch`.
 
 ## Rejected alternatives
 
-**Quote the leaf on the way out** — karr #86's candidate (b). It is the fix
+**Quote the leaf on the way out** — k86's candidate (b). It is the fix
 `_quote_sops_timestamp` uses for `lastmodified` and it produces a document both
 implementations read the same way. It changes the leaf's **type**: `mode: 0755`
 becomes `mode: "0755"`, a string where the caller's parser said integer and
@@ -310,7 +310,7 @@ documents this library writes correctly today. It is also blind to `0o10`,
 `0x1f`, `.inf`, `Null` and `2015-01-01`, which are the same defect with the same
 consequence.
 
-**Refuse only the rows in karr #86** (`0755`, `010`, `017`, `0o10`). It is the
+**Refuse only the rows in k86** (`0755`, `010`, `017`, `0o10`). It is the
 ticket's literal scope, and the mechanism is one mechanism: the same walk, the
 same emitter, the same reader. Half a guard here would have to be widened by
 rewriting it, and would leave eleven measured spellings silently broken next to

@@ -2,11 +2,11 @@
 
 - Status: **accepted** — decided and implemented together, in this commit. Every
   table below was measured here against sops 3.13.3 at `/tmp/sops`, with the
-  karr #59 guard bypassed **in a scratch copy of `lib/`** and no code in the
+  k59 guard bypassed **in a scratch copy of `lib/`** and no code in the
   repository changed until the tables existed.
 - Date: 2026-08-21
 - Tags: float, yaml, json, wire-format, interop, guards, mac
-- Resolves karr #113. Files karr #122 (the encrypted slot) and karr #123
+- Resolves k113. Files k122 (the encrypted slot) and k123
   (`edit`) for what it deliberately leaves alone.
 - Depends on ADR 0013 (the foreign-resolution guard, whose model of `resolve.go`
   is the **verdict** this decision defers to), ADR 0017 (that guard answers from
@@ -30,7 +30,7 @@ document per row, sops 3.13.3:
 | `File::SOPS->decrypt` | reads it | reads it | reads it |
 | `File::SOPS->rotate` | **croak** | **croak** | **croak** |
 
-The croak is karr #59's non-finite guard in `Encrypted::assert_representable`,
+The croak is k59's non-finite guard in `Encrypted::assert_representable`,
 reached through `_compute_mac`'s leaf sweep. So the library had a document class
 it could read and not write — and the advice in the message ("store the value as
 a string") leads straight back to ADR 0013's refusal, because the string `.inf`
@@ -38,7 +38,7 @@ is written bare in YAML and Go reads a float out of it.
 
 ### The guard's premise, and where it stops holding
 
-karr #59 refuses every non-finite float on the encrypt path because
+k59 refuses every non-finite float on the encrypt path because
 `value_to_bytes` writes `+Inf` / `-Inf` / `NaN` — Go's `strconv.FormatFloat`
 text, and what the digest covers — while the emitters write something else for
 the same double. Re-measured here, unencrypted YAML slot, one document per row:
@@ -76,7 +76,7 @@ spellings sops writes**, with the wire byte-identical to what sops put there.
 unencrypted included) and from `Encrypted::encrypt_value` (encrypted leaves).
 Neither knows the format, and neither can: the format is known in `File::SOPS`
 and nowhere below it. A format-blind exemption opens **both** JSON cells at
-once, and karr #62 is this distribution's own record of what that costs — a fix measured
+once, and k62 is this distribution's own record of what that costs — a fix measured
 for YAML that would have taken JSON with it.
 
 The JSON unencrypted cell is the dangerous one: the file is written **silently**
@@ -118,7 +118,7 @@ foreign-resolution guard.** Three parts, all in
    as a side effect of the gate. The token is not on the wire there at all —
    the slot carries `type:float` and the plaintext `+Inf` — so the gate says
    nothing about that document, and the two formats disagree about it (YAML exit
-   0, JSON exit 4) where this method cannot tell them apart. Filed as karr #122.
+   0, JSON exit 4) where this method cannot tell them apart. Filed as k122.
 
 ### Why the gate has to be tight, and why it is not the verdict
 
@@ -147,7 +147,7 @@ in an unencrypted YAML slot is `sops -d` exit 51.
 second copy of Go's resolution model beside `_go_scalar_bytes`, which is this
 distribution's signature defect, and it would answer about the leaf's PV rather
 than about the bytes `YAML::XS` writes for it, which is the distinction ADR 0017
-exists to keep (karr #90 came through exactly that gap).
+exists to keep (k90 came through exactly that gap).
 
 So the gate states twelve rows of Go's `resolveMap` a second time, and that is a
 deliberate, bounded duplication with an argument attached: **both drift
@@ -249,9 +249,9 @@ differently.
 | the same value in a **JSON** document, either slot | croak, the non-finite guard | croak — the unencrypted slot now from the walk, naming the key path and saying JSON has no spelling |
 | a **bare** `9**9**9`, a computed overflow, a JSON `1e400` | croak | **unchanged**, same guard, message extended with the second answer |
 | `dualvar(+Inf, '-.inf')`, `dualvar(-Inf, '.inf')`, `dualvar(+Inf, '.INf')`, `dualvar(+Inf, 'banana')` | croak | **unchanged** — refused by the gate, and the first three again by ADR 0013's guard if they ever reach it |
-| a non-finite float in an **encrypted** slot, either format | croak | **unchanged** — refused by `encrypt_value` now, with a message that says a YAML document can carry it unencrypted (karr #122) |
+| a non-finite float in an **encrypted** slot, either format | croak | **unchanged** — refused by `encrypt_value` now, with a message that says a YAML document can carry it unencrypted (k122) |
 | `decrypt_file` of a document with a repaired `.inf` | writes `v_unencrypted: .inf` | **unchanged** |
-| `edit` of such a document, with a real change | croak, ADR 0013's guard | **unchanged** — the leaf loses its float-ness in the plaintext round trip through the editor, which is a different defect (karr #123) |
+| `edit` of such a document, with a real change | croak, ADR 0013's guard | **unchanged** — the leaf loses its float-ness in the plaintext round trip through the editor, which is a different defect (k123) |
 | everything else | | untouched: the 1062 assertions at 5536313 all still pass |
 
 ### What this leaves broken, and why it is filed rather than fixed
@@ -260,10 +260,10 @@ differently.
   document and reparses what the editor hands back, and ADR 0026's repair walk
   deliberately does not run on a plaintext document, so the leaf returns as the
   string `.inf` and ADR 0013's guard refuses it — correctly, for what it sees.
-  Measured identical with this change and without it. karr #123, format lane.
+  Measured identical with this change and without it. k123, format lane.
 - **The encrypted slot stays refused in YAML**, where measured it would have
   worked in all twelve rows. It needs the format at the leaf, which reaches
-  neither `encrypt_value` nor `assert_representable`. karr #122.
+  neither `encrypt_value` nor `assert_representable`. k122.
 - **JSON has no scalar-level guard of its own.** The refusal this adds lives in
   the format-blind walk and speaks for it; the place it belongs is a
   `reject_scalar` in `Format::JSON`, which is another lane's file and was
@@ -277,7 +277,7 @@ document class this library reads and cannot write, for a distribution whose
 whole claim is byte compatibility — and the document in question is one sops
 writes by default from a plaintext `.inf`.
 
-**Put the check in `Format::YAML`, beside ADR 0013's** — karr #113's own
+**Put the check in `Format::YAML`, beside ADR 0013's** — k113's own
 suggestion, and where the *verdict* does live. It cannot be the whole answer:
 `assert_representable` runs first, from `_compute_mac`'s sweep, and refuses the
 leaf before any emitter sees it. Something in the format-blind layer has to stop
@@ -292,7 +292,7 @@ is `sops -d` exit 51. The gate has to name the tokens.
 
 **Let the float carrier deal with it** — remove the `NO_AGREED_FORM`
 short-circuit and send the leaf down the ordinary `roundtrips` → `carrier` path,
-the way karr #62 solved the negative zero. Measured, and it is the trap it looks
+the way k62 solved the negative zero. Measured, and it is the trap it looks
 like: `roundtrips` reparses with **libyaml**, which reads `.inf` back as a
 string, so it answers "no" for a leaf that is perfectly writable; the YAML
 carrier then replaces the document's own `.inf` with `dualvar(+Inf, '+Inf')`,

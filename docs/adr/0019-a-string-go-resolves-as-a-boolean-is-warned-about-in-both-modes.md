@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: yaml, wire-format, guards, interop, diagnostics
-- Resolves karr #92
+- Resolves k92
 - Amends ADR 0013 (its "rows that agree" table lists `True` / `False` as agreeing,
   and by the measure that guard uses they do — the digest bytes are the same. The
   refusal rule is unchanged and no document moves)
@@ -32,7 +32,7 @@ Measured, sops 3.13.3, YAML, leaf in an unencrypted slot:
 | `x_unencrypted: True` | `str "True"` | `bool true` | exit 0 |
 | `x_unencrypted: False` | `str "False"` | `bool false` | exit 0 |
 
-### The question karr #92 asks: does the value survive a sops write-back
+### The question k92 asks: does the value survive a sops write-back
 
 It does not. Measured, one document per row, the same document handed to three
 sops subcommands that rewrite it:
@@ -170,7 +170,7 @@ warnings ADR 0018 introduced.
 ## Rejected alternatives
 
 **Refuse it, as ADR 0013 refuses the bytes class.** The literal reading of
-karr #92 ("the same class as karr #86, so it belongs in the same guard"), and the
+k92 ("the same class as k86, so it belongs in the same guard"), and the
 measurement is what argues against it: those documents work today — `sops -d`
 exit 0, MAC valid, 4 of 364 corpus rows — and refusing them would be the first
 refusal in this guard that breaks something that works. ADR 0018 drew that line
@@ -216,7 +216,7 @@ as a *plain* scalar — so the only way to get a quoted scalar out of this emitt
 is text surgery on the finished document, which `_quote_sops_timestamp` can do
 safely only because it targets one known key in one known block. Doing it for an
 arbitrary key path at arbitrary nesting is a new mechanism with a corruption
-failure mode worse than the divergence it fixes. Recorded as karr #99 with this
+failure mode worse than the divergence it fixes. Recorded as k99 with this
 measurement, for the maintainer to decide against a real emitter rather than in
 passing.
 

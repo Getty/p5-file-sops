@@ -2,12 +2,12 @@
 
 - Status: **accepted** — implemented across f286764 (parser), bf336ac and
   52aa468 (POD) and 66e0c5b (t/36). Written first as a form decision before
-  any code, as karr #63 asks; the implementing lanes then contradicted it in
+  any code, as k63 asks; the implementing lanes then contradicted it in
   three places, and those corrections are marked where they sit rather than
   smoothed over.
 - Date: 2026-08-20
 - Tags: int, float, json, yaml, wire-format, interop, parser
-- Resolves karr #63
+- Resolves k63
 - Depends on ADR 0002 (the type comes from the SV's public flags — which is
   exactly why the JSON parser has to hand back a different SV, not a different
   label), ADR 0005 (the JSON backend is named, so its decoder's options are
@@ -15,14 +15,14 @@
   `Math::BigFloat` carrier that writes a canonical decimal into JSON as a bare
   number) and ADR 0011 (a float leaf carrying its own string form is
   **repaired**, which is the path this leaf then takes)
-- Neighbour, deliberately **not** resolved here: karr #101, the same
+- Neighbour, deliberately **not** resolved here: k101, the same
   magnitude window one step lower, where `assert_representable` refuses a
   document sops itself wrote
 
 ## Context
 
 `File::SOPS` rewrites a JSON number wider than Perl's integers as a JSON
-**string**. Reproduced against sops 3.13.3, exactly as karr #63 filed it:
+**string**. Reproduced against sops 3.13.3, exactly as k63 filed it:
 
     sops -e writes    "big_unencrypted": 100000000000000000000
     File::SOPS rotate rewrites it as    "100000000000000000000"
@@ -43,7 +43,7 @@ two measurements below are why.
 
 ### What sops itself does with such a number — which the ticket never asked
 
-karr #63 measured only the unencrypted slot, where the digest text is all that
+k63 measured only the unencrypted slot, where the digest text is all that
 matters. Put the same digits in an **encrypted** slot and the reference answers
 the type question outright. Measured, sops 3.13.3, one `sops -e` per row:
 
@@ -160,7 +160,7 @@ fractions, `1e309`, `1E+20`, 30 ones) were checked for a third case: **there is
 none.** Every plain-PV leaf is 2 or 4. A quoted `"100000000000000000000"` stays
 4, and no quoted string is ever called a number.
 
-karr #63's point 6 dismissed this mechanism because `encode($data, $type)`
+k63's point 6 dismissed this mechanism because `encode($data, $type)`
 rewrites this value as `18446744073709551615`. That is true and it is on the
 **encode** side. The map is read here and never handed back to an encoder;
 nothing in the document path gains a second serialiser.
@@ -353,7 +353,7 @@ has always handed back the same `NOK+POK` leaf for those digits, so its
 plaintext emit was bare before this change as well (measured, `decrypt_file` of
 a `sops -e` YAML file, identical at `f286764^`). What that document runs into on
 the way in — `assert_representable` refusing a value `sops -e` writes, and a MAC
-neither implementation computes the same way — is karr #102 and predates this
+neither implementation computes the same way — is k102 and predates this
 decision.
 
 That leaves a document that barely exists. `sops -e` refuses such a JSON
@@ -373,12 +373,12 @@ second reader that has to agree with one, which is why `canonical_float_tree`
 passes the leaf through instead of choosing a form for it.
 
 If the quoted form is ever wanted back, the lever is the **parse-time** question
-karr #102 asks — whether a literal that overflows a double should resolve as a
+k102 asks — whether a literal that overflows a double should resolve as a
 `str`, the way go-yaml appears to resolve it — answered for both parsers at
 once. Not the emitter, which would have to read a value's text to tell this
 float from any other, and that is the pattern-matching ADR 0002 removed; and in
 no case the non-finite guard, which is right about every value it was written
-for. Measured and closed as karr #103.
+for. Measured and closed as k103.
 
 ### Cost
 
@@ -429,20 +429,20 @@ They touch the same three files and must run one after another.
 
 ## Rejected alternatives
 
-**Document the drift** (karr #63 option a) and **refuse the document**
+**Document the drift** (k63 option a) and **refuse the document**
 (option c). Both were taken off the table by the maintainer on 2026-08-20 and
 are not re-argued. For the record, the measurement supports that: (a) would
 document this library as the only implementation that turns a number into a
 string, and (c) would refuse documents `sops -e` writes and `sops -d` reads.
 
-**`allow_bignum` as the oracle**, the shape karr #63's plan proposed. It works
+**`allow_bignum` as the oracle**, the shape k63's plan proposed. It works
 and it is exact — measured, `Math::BigInt` for every bare wide literal, plain PV
 for every quoted one. It costs 55 to 84 times the plain decode, because it
 constructs a `Math::BigFloat` for every float in the document to answer a
 question asked only about strings. The type map answers the same question for
 +51%. Rejected on cost, not on correctness.
 
-**`allow_bignum` on the document decoder.** Re-confirmed as karr #63 recorded:
+**`allow_bignum` on the document decoder.** Re-confirmed as k63 recorded:
 `0.30000000000000004` decodes to a `Math::BigFloat`, `detect_type` calls a
 blessed leaf `str`, and every float in every document changes type and digest.
 The comment in `Format::JSON` already says so.
@@ -460,7 +460,7 @@ stringification while Cpanel writes a bare number. Exempting it would reinstate
 the defect ADR 0006 and ADR 0008 closed. The `dualvar` needs no exemption from
 anything.
 
-**A new carrier class of our own**, which is what karr #63 concluded was needed.
+**A new carrier class of our own**, which is what k63 concluded was needed.
 It would need an exemption from both emit guards, a `detect_type` rung, a
 `value_to_bytes` branch and a decision about what `decrypt` hands back — four
 new places where a second type ladder could grow, for a leaf shape the

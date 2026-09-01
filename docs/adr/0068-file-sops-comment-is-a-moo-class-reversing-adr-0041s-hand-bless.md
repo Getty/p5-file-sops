@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-01
-- Resolves karr #154
+- Resolves k154
 - Reverses the implementation choice in ADR 0041 (a hand-written `bless` with
   `sub new` / `sub text`), not its decision (a comment is a leaf of its own).
 - **Moves no bytes.** No wire, MAC, AAD, type-ladder or encoding change.
@@ -14,11 +14,11 @@ Every other class in this distribution is `Moo` + `namespace::clean`.
 `File::SOPS::Comment` was the one exception: a nine-line hand-written `bless`
 with its own `sub new` and `sub text`. That is how ADR 0041 first wrote it, when
 it lived inside `File::SOPS::Encrypted` as a leaf small enough that the ladder
-could load it without a dependency cycle. karr #147 moved it into
+could load it without a dependency cycle. k147 moved it into
 `lib/File/SOPS/Comment.pm` unchanged — a move must not move behaviour.
 
 The divergence from the house rule "one object system per distribution" was
-therefore visible in a file of its own, which is what karr #154 raised as a
+therefore visible in a file of its own, which is what k154 raised as a
 question for the maintainer. The maintainer decided: convert (conformance over
 taste).
 
@@ -53,7 +53,7 @@ both. So `t/56` is unchanged.
 ## Consequences
 
 - The class now matches the house pattern; the one-object-system divergence
-  karr #154 named is gone.
+  k154 named is gone.
 - The missing-`text` message text changed (`text required` →
   `Missing required arguments: text`). No test asserted the old wording, and the
   refusal is unchanged in kind — a `new` with no `text` still dies. Callers that
@@ -65,7 +65,7 @@ both. So `t/56` is unchanged.
 ## Rejected alternatives
 
 - **Leave it as a hand-written `bless`.** The other defensible answer in
-  karr #154: the class is small and self-contained and the hand-bless works.
+  k154: the class is small and self-contained and the hand-bless works.
   Rejected by the maintainer in favour of conformance — the divergence was the
   only one of its kind and cost a reader a second mental model for no gain.
 - **Add an `isa => Str` type constraint for the reference refusal.** Would fold

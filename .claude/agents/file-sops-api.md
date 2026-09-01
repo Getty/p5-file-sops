@@ -84,7 +84,7 @@ caller is led to produce it is ours.
 
 Any method that replaces an existing file writes to a temp file in the same directory,
 carries the original's mode over, and renames. A half-written secrets file is a
-destroyed secrets file, and the failure modes here are real: karr #18 exists because
+destroyed secrets file, and the failure modes here are real: k18 exists because
 re-encrypting in place made values unrecoverable. Do not open the target with `>` and
 hope — that is how the third and fourth non-atomic write path got added.
 

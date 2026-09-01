@@ -6,8 +6,8 @@
   anything in the repository changed.
 - Date: 2026-08-21
 - Tags: yaml, float, editor, parser, interop, mac
-- Resolves karr #123. Files karr #134 (the encrypted slot's plaintext spelling)
-  and karr #135 (a string leaf libyaml leaves bare) for what it deliberately
+- Resolves k123. Files k134 (the encrypted slot's plaintext spelling)
+  and k135 (a string leaf libyaml leaves bare) for what it deliberately
   leaves alone.
 - **Supersedes one decision in ADR 0026** — its "Run the walk on plaintext
   documents too, for symmetry" rejection — and nothing else in it. The repair
@@ -51,7 +51,7 @@ foreign-resolution refusal, which named the key path and advised passing a
 decimal or encrypting the leaf. Neither is the answer: the answer is that the
 document already says what it means.
 
-### What karr #123 measured: `edit`
+### What k123 measured: `edit`
 
 `edit` decrypts to a plaintext, hands it to an editor, and reparses what comes
 back. With the gate on, the leaf came back as the string `.inf` and ADR 0013's
@@ -84,7 +84,7 @@ writes is the same either way.
 
 ### What the ticket proposed, and why it is not what shipped
 
-karr #123 suggests the plaintext `edit` reparses "is one this library WROTE
+k123 suggests the plaintext `edit` reparses "is one this library WROTE
 from a document it had already resolved, which is a different case and may
 deserve a different answer — possibly a marker on the way out rather than a
 re-guess on the way in".
@@ -152,7 +152,7 @@ The old row is a working file whose value has silently stopped being a number:
 rather than with the user. This layer's rule is that where we cannot do what
 was asked we fail loudly rather than approximately, and `encrypt_value` cannot
 do what was asked — it cannot see which format it is writing for, and the two
-disagree (YAML `sops -d` exit 0, JSON exit 4). That is karr #122, which is
+disagree (YAML `sops -d` exit 0, JSON exit 4). That is k122, which is
 where the encrypted slot gets the format it needs; when it lands, this row
 becomes a `type:float` and the refusal goes away.
 
@@ -203,7 +203,7 @@ value in an unencrypted slot.
   run against the unpatched 0da0170 with `perl -I` and no `use lib` in the file
   — **9 of its 16 subtests and 115 assertions fail**, and every one of the seven
   that pass is a must-not-move section (the quoted tokens, the near misses, the
-  contained bytes, ADR 0023's leaves, the finite numbers, JSON, and karr #134).
+  contained bytes, ADR 0023's leaves, the finite numbers, JSON, and k134).
 
 ### The two claims this replaces
 
@@ -274,7 +274,7 @@ differently, and no encrypted slot's bytes change in any row.
 | `edit` of a sops-written YAML document with a bare `.inf` / `-.inf` / `.nan` in an **unencrypted** slot, editing any key | croak, ADR 0013's guard, **the edit destroyed** | **written**, `sops -d` exit 0, the leaf byte-identical |
 | `encrypt_file` / `encrypt_in_place` of a **plaintext** holding the same, any of the twelve spellings | croak | **written**, `sops -d` exit 0 |
 | `decrypt_file` → `encrypt_file` of this library's own output for such a document | croak | **round-trips** |
-| the same token in an **encrypted** slot of a plaintext | written as `type:str` holding the token | **croak**, naming the key path (karr #122) |
+| the same token in an **encrypted** slot of a plaintext | written as `type:str` holding the token | **croak**, naming the key path (k122) |
 | a **quoted** `".inf"` / `'.inf'` anywhere | the string, both slots | **unchanged** |
 | `.INf` `.iNF` `+.nan` `.infinity` `Inf` `NaN` and the rest of the near misses | a string | **unchanged** |
 | `config.info`, `.infrastructure`, `1e400`, `007`, `-0.0` | as they were | **unchanged** |
@@ -297,7 +297,7 @@ differently, and no encrypted slot's bytes change in any row.
   `_canonical_floats` short-circuits a non-finite leaf with `return $node`
   before any handler hook is reached, so the YAML handler's `carrier` never
   sees it, and putting the decision in the handler would be a second copy of
-  `NO_AGREED_FORM`. karr #134, wire lane. The same defect makes `decrypt_file`
+  `NO_AGREED_FORM`. k134, wire lane. The same defect makes `decrypt_file`
   diverge from `sops -d` for that document, with no editor involved.
 - **A string leaf whose spelling libyaml leaves bare is still refused where
   sops quotes it.** Measured, plaintext `v_unencrypted: ".inf"` — a string to
@@ -306,7 +306,7 @@ differently, and no encrypted slot's bytes change in any row.
   `"1_000"`, `"2015-01-01"` and `"0o10"`. ADR 0013 rejected quoting on the
   grounds that it retypes the leaf, which is true of `mode: 0755` and false of
   a leaf that is already a string. Pre-existing, unmoved by this change, and
-  filed as karr #135.
+  filed as k135.
 - **`edit` destroys the edit whenever the re-encryption refuses**, whatever the
   reason. This change removes one cause; the loss itself is untouched, and it is
   a real decision rather than a bug fix — the temporary file is deliberately
@@ -334,7 +334,7 @@ write, which is a byte-identity ADR 0026 established on purpose; it shows the
 user a document sops would not have written; and it does not survive the editor,
 which is the one thing the document is handed over for.
 
-**Refuse with a better message.** karr #123's option (c), and it is honest about
+**Refuse with a better message.** k123's option (c), and it is honest about
 today rather than useful: the user still loses the edit, and the document is one
 this library can now write. A better message for a refusal that no longer has to
 happen.

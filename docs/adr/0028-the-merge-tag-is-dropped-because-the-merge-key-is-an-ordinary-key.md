@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: yaml, parser, interop, format
-- Resolves karr #116
+- Resolves k116
 - Related: ADR 0001 (the emitter and the MAC are one mechanism — this change is
   measured against that rule and moves neither), ADR 0019 (which rejected text
   surgery for a different case; the difference is set out below), ADR 0026
@@ -44,7 +44,7 @@ YAML::XS Error: bad tag found for scalar: 'tag:yaml.org,2002:merge'
 ```
 
 A parse error, not a MAC error, on a file `sops -d` reads at exit 0 — the
-fourth document in this class after karr #102, #105 and #108.
+fourth document in this class after k102, k105 and k108.
 
 And it was never only sops's own documents. This library writes the untagged
 spelling, which sops reads happily; measured, one `sops rotate -i` on a
@@ -53,7 +53,7 @@ File::SOPS could no longer read the file it had written itself.
 
 ## The measurement the decision rests on
 
-The claim in karr #116 was that the MAC runs over values and not over keys, so
+The claim in k116 was that the MAC runs over values and not over keys, so
 the digest is unaffected. That is the assumption a cheap fix stands or falls
 on, so it was measured rather than derived — the stored `mac:` was decrypted
 out of each document and compared against a digest computed here, leaf by leaf.
@@ -159,7 +159,7 @@ XS layer, and none of the module's knobs (`Boolean`, `LoadBlessed`, `LoadCode`,
 `DumpCode`) reaches it. Measured with `LoadBlessed` both ways.
 
 **Refuse with a clear message.** More honest than a libyaml error, and it was
-the right answer for karr #108 (ADR 0024), where refusing closed a path that
+the right answer for k108 (ADR 0024), where refusing closed a path that
 otherwise wrote a phantom value into the document permanently. There is no such
 path here. Nothing is corrupt, nothing is ambiguous, and nothing is lost: the
 tree behind the tag is a tree we already agree with sops about, byte for byte,
@@ -168,7 +168,7 @@ unreadable here, and would leave our own `<<` documents one `sops rotate -i`
 away from being unreadable to us — for a tag that carries no information.
 
 **Expand the merge, the way a caller expecting merge semantics would want.**
-Rejected, and it is the open side-question in karr #116. sops does not expand
+Rejected, and it is the open side-question in k116. sops does not expand
 it; a document whose `<<` had been folded into its parent would have different
 paths, a different digest and a different shape from the file on disk. See
 below.
@@ -237,7 +237,7 @@ spellings now give the identical tree, which is the whole of the change.
   The **encrypt** path is a different matter and is not fixed here: `sops -e`
   accepts all five of those plaintext documents and `File::SOPS->encrypt_file`
   refuses three of them, at parse, with libyaml's message. Recorded as karr
-  #118 with this measurement rather than widened into this change — the retry
+  k118 with this measurement rather than widened into this change — the retry
   is sound because `<<` is a key whose tag carries nothing, and each of those
   tags carries a **type**, which is ADR 0002's territory and a different
   question.

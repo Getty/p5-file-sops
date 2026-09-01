@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-09-01
-- Resolves karr #173, the last open item in docs/adr/0049's *Limits*
+- Resolves k173, the last open item in docs/adr/0049's *Limits*
 - Reproduces the WARNING docs/adr/0049 measured and deliberately left un-emitted
 - The carp precedent is docs/adr/0018 (a document warned about where it cannot
   be refused); the OUTCOME it rides on — the comment is kept, one of four bare
@@ -19,7 +19,7 @@ did **not** reproduce the third thing sops does there: it warns.
 That was the right call for one ADR (every other bare shape is a hard refusal,
 so a warning is a third answer that did not fit the change), and it left a
 question open: a comment in an encrypted slot can hold a secret in the clear,
-nothing authenticates it, and this distribution said nothing. karr #173 asked
+nothing authenticates it, and this distribution said nothing. k173 asked
 whether that is worth a carp. The maintainer decided it is.
 
 ## The measurement
@@ -62,7 +62,7 @@ authenticated, quotes sops's own *Found possibly unencrypted comment* wording,
 and names the repair (any re-encryption turns it into a `type:comment` leaf).
 
 The carp is guarded by the same `should_encrypt_path` the branch already sits
-behind, so it fires only at a SELECTED path — the scope karr #173 asked for. A
+behind, so it fires only at a SELECTED path — the scope k173 asked for. A
 plaintext comment at an EXCLUDED path returns one branch earlier and stays
 silent.
 

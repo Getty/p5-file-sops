@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-21
-- Resolves karr #160, the structural half of karr #150 that ADR 0046 closed
+- Resolves k160, the structural half of k150 that ADR 0046 closed
   with a guard and handed on
 - Removes the guard ADR 0046 installed, and the walker behind it
 - Depends on ADR 0048 (the two regex rules are RE2's now, so asking the rule on
@@ -191,17 +191,17 @@ Three, all measured, none of them closed here.
   discards the compile error, so the rule matches nothing and every value is
   decrypted — and is now refused here. Nothing is written and nothing leaks,
   but it is a sops document this library used to read. **Rule policy is the API
-  lane's**, so it is handed over rather than decided here: karr #171.
+  lane's**, so it is handed over rather than decided here: k171.
 - **An INI comment bucket at an excluded path.** `_adds_no_path_component`
   recognises a `''` key holding nothing but comments. At an excluded path the
   bucket now comes back holding `ENC[...,type:comment]` strings instead of
   `File::SOPS::Comment` objects, so a re-encryption no longer recognises it and
   the bucket key would add a path component. Reachable only through
   `ignore_mac => 1` plus `rotate`/`edit` on an ini document whose rule excludes
-  a section that has comments in it. karr #172.
+  a section that has comments in it. k172.
 - **We do not warn about a plaintext comment at a selected path.** sops does
   (*Found possibly unencrypted comment in file*), at exit 0, and keeps the
-  comment. We keep the comment and say nothing. karr #173.
+  comment. We keep the comment and say nothing. k173.
 
 ## Rejected alternatives
 
@@ -230,7 +230,7 @@ and the read path stays open. Measured to be correct — that really is what sop
 answers — and rejected *here* rather than on its merits: it is a second answer
 out of the one predicate `_encrypt_tree`, `_compute_mac`, `mac_only_encrypted`
 and now `_decrypt_tree` all share, on the most load-bearing change in this
-layer, and it is rule policy. karr #171 carries it, with the alternative of
+layer, and it is rule policy. k171 carries it, with the alternative of
 moving ADR 0048's refusal out of `_rule_qr` and onto the write path explicitly,
 which is what ADR 0048 §3 already says it is.
 
@@ -251,7 +251,7 @@ document; the excluded-`ENC` digest read straight off sops's own
 *MAC mismatch* line and reproduced with `Digest::SHA`. All fixtures are
 invented values; the age keypair was generated for the run.
 
-The corpus comparison is in the karr #160 report: 208 documents across the four
+The corpus comparison is in the k160 report: 208 documents across the four
 formats, produced by sops and by this library, with and without
 `mac_only_encrypted`, under six well-formed rules and eight rule swaps, diffed
 leaf by leaf on AAD, MAC plaintext and decrypted value.

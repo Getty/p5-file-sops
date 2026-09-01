@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-31
-- Resolves karr #176
+- Resolves k176
 - Depends on ADR 0051 (which split the rule-regex refusal between the read
   and write paths and already recorded this case as a Limit), ADR 0048 (the
   construct scan and the `/a` compile), ADR 0038 (the discriminator: *does
@@ -105,7 +105,7 @@ by a test so a future change — if a proportionate balance check is ever built
 ## Consequences
 
 - The one-line change that would close it (option a) is on record as
-  rejected, with the reason. Reopening `#176` means overturning that, not
+  rejected, with the reason. Reopening `k176` means overturning that, not
   rediscovering the case.
 - The pinning test measures both halves against sops 3.13.3: `sops -d` reads
   the `fo(` document at exit 0, and `File::SOPS->decrypt` refuses it naming

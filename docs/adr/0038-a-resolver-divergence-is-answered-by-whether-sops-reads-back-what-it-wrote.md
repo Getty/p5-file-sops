@@ -3,29 +3,29 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: yaml, parser, emitter, types, interop, guards
-- Resolves karr #131 and karr #128, narrows karr #127 to its measured half, and
-  **hands karr #135 to the wire lane** rather than deciding it here
+- Resolves k131 and k128, narrows k127 to its measured half, and
+  **hands k135 to the wire lane** rather than deciding it here
 - Completes the three open bullets in ADR 0032's "Limits", which named `!!int
   0755`, `!!float 1` and the untagged timestamp and deferred all three
 - Depends on ADR 0002 (the type comes from the scalar), ADR 0013 and ADR 0017
   (the foreign-resolution guard and the token it answers from), ADR 0026 and
   ADR 0034 (a plain scalar is resolved the same way on every parse — the
-  machinery a karr #135 fix would have to reuse)
+  machinery a k135 fix would have to reuse)
 - Uses the discriminator ADR 0030 and ADR 0035 both turned on, stated below
 
 ## Context
 
-Four tickets were opened out of the karr #118 and karr #123 measurements, all
+Four tickets were opened out of the k118 and k123 measurements, all
 four saying some version of "sops and this library resolve the same scalar
 differently":
 
-- **karr #127** — `0755` is 493 to sops and 755 here. Same `type:int` label,
+- **k127** — `0755` is 493 to sops and 755 here. Same `type:int` label,
   different number.
-- **karr #128** — a timestamp is `type:time` at sops, with the spelling
+- **k128** — a timestamp is `type:time` at sops, with the spelling
   normalised to RFC3339, and `type:str` here with the source spelling kept.
-- **karr #131** — `!!float 1` is `type:float` at sops and `type:int` here, with
+- **k131** — `!!float 1` is `type:float` at sops and `type:int` here, with
   the same plaintext `1` on both sides.
-- **karr #135** — a leaf that is a **string** on both sides is refused here
+- **k135** — a leaf that is a **string** on both sides is refused here
   where sops quotes it and reads it back.
 
 Answered one at a time they would have produced contradicting answers, because
@@ -43,7 +43,7 @@ sops 3.13.3 at `/tmp/sops`, one age recipient. **50 scalars × 3 documents each*
 distribution's own modules (`Metadata->from_hash`, `Backend::Age->decrypt_data_key`,
 `Encrypted->parse`/`decrypt_bytes` with `lastmodified` as AAD) and the digest
 **solved** against candidate plaintexts rather than assumed — the same method
-the karr #108, #116, #109 and #77 lanes used.
+the k108, k116, k109 and k77 lanes used.
 
 **All 150 documents sops wrote, sops read back at exit 0.** Not one exception,
 in any slot, for any of the 50 spellings. That is the fact the whole decision
@@ -76,9 +76,9 @@ along the ticket boundary, and the split is the finding:
 
 | refused | what sops writes from the same plaintext | is the refusal right? |
 |---|---|---|
-| `0755`, `!!int 0755`, `010` (karr #127) | `493`, `493`, `8` — resolved, spelling gone | **yes** — sops never writes the spelling we are refusing |
-| `2026-08-21`, `2001-12-14t…`, `!!timestamp 2026-08-21` (karr #128) | `2026-08-21T00:00:00Z` etc. — normalised | **yes** — same reason |
-| 22 **string** leaves (karr #135) | the same string, **double-quoted**, `sops -d` exit 0 | **no** — sops writes exactly those bytes |
+| `0755`, `!!int 0755`, `010` (k127) | `493`, `493`, `8` — resolved, spelling gone | **yes** — sops never writes the spelling we are refusing |
+| `2026-08-21`, `2001-12-14t…`, `!!timestamp 2026-08-21` (k128) | `2026-08-21T00:00:00Z` etc. — normalised | **yes** — same reason |
+| 22 **string** leaves (k135) | the same string, **double-quoted**, `sops -d` exit 0 | **no** — sops writes exactly those bytes |
 
 The 22 are `".inf" ".Inf" ".INF" "+.inf" "-.inf" ".nan" ".NaN"`, `"1_000"
 "0_7" "685_230.15"`, `"2015-01-01" "2015-1-2" "2015-01-01t12:00:00Z"
@@ -87,7 +87,7 @@ The 22 are `".inf" ".Inf" ".INF" "+.inf" "-.inf" ".nan" ".NaN"`, `"1_000"
 it is a string, and each measured `sops -e` → `sops -d` exit 0 with the string
 intact.
 
-### Why one row of karr #135's five behaves differently
+### Why one row of k135's five behaves differently
 
 The ticket's fifth row, `"0755"`, is written here and not refused. Probed over
 68 spellings: `$YAML::XS::QuoteNumericStrings` quotes a string that looks like a
@@ -115,29 +115,29 @@ The same question ADR 0030 and ADR 0035 were both decided on:
 
 > **Does sops read back what sops wrote?**
 
-- **It does, and we refuse it** → we are wrong. (karr #102, #105, #116, #118 —
-  and karr #135.)
-- **It does not** → refusing is right. (karr #109 / ADR 0030.)
+- **It does, and we refuse it** → we are wrong. (k102, k105, k116, k118 —
+  and k135.)
+- **It does not** → refusing is right. (k109 / ADR 0030.)
 - **Both read their own documents and the labels or values differ** → a
-  divergence, and possibly nothing to do. (karr #106, karr #77 / ADR 0035.)
+  divergence, and possibly nothing to do. (k106, k77 / ADR 0035.)
 
 Applied to the four, with the measurement as the evidence:
 
 | ticket | slot | class | evidence |
 |---|---|---|---|
-| **#131** | both | **divergence** | `type:float` vs `type:int`, plaintext `1` on both sides, `sops -d` exit 0 both ways, MAC covers `1` in both documents |
-| **#128** RFC3339-exact | both | **divergence** | `type:time` vs `type:str`, plaintext identical, exit 0 both ways |
-| **#128** other spellings | encrypted | **divergence** | value differs, exit 0 both ways |
-| **#128** other spellings | unencrypted | **refusal is right** | sops writes the normalised form, never the source spelling |
-| **#127** | encrypted | **divergence** | 493 vs 755, exit 0 both ways |
-| **#127** | unencrypted | **refusal is right** | sops writes `493`, never `0755` |
-| **#135** | unencrypted | **we are wrong** | sops writes the quoted string and reads it back at exit 0; we refuse to produce it |
+| **k131** | both | **divergence** | `type:float` vs `type:int`, plaintext `1` on both sides, `sops -d` exit 0 both ways, MAC covers `1` in both documents |
+| **k128** RFC3339-exact | both | **divergence** | `type:time` vs `type:str`, plaintext identical, exit 0 both ways |
+| **k128** other spellings | encrypted | **divergence** | value differs, exit 0 both ways |
+| **k128** other spellings | unencrypted | **refusal is right** | sops writes the normalised form, never the source spelling |
+| **k127** | encrypted | **divergence** | 493 vs 755, exit 0 both ways |
+| **k127** | unencrypted | **refusal is right** | sops writes `493`, never `0755` |
+| **k135** | unencrypted | **we are wrong** | sops writes the quoted string and reads it back at exit 0; we refuse to produce it |
 
 ## Decision
 
 **Four questions, three different answers, and the severity decides which.**
 
-### 1. karr #131 — closed, recorded, not fixed
+### 1. k131 — closed, recorded, not fixed
 
 `!!float 1` stays `type:int` here. The plaintext is `1` on both sides, Go
 re-derives the digest input from the declared type (`ToBytes(int 1) ==
@@ -147,24 +147,24 @@ is no wire consequence to fix.
 The only available fix is to take the type from the **tag** instead of from the
 scalar, which inverts ADR 0002 — the rule that removed `looks_like_number` and
 `/^\d+$/` from this distribution. Paying that for a label nothing reads
-differently is the wrong trade. Same answer, same reasoning, as karr #106 and
-karr #77.
+differently is the wrong trade. Same answer, same reasoning, as k106 and
+k77.
 
-### 2. karr #128 — closed, and split between the other two
+### 2. k128 — closed, and split between the other two
 
 The untagged timestamp is **not one question**:
 
 - Where the source spelling is already **exactly RFC3339**, the plaintext is
-  byte-identical on both sides and only the label differs. That is karr #131's
-  class and gets karr #131's answer: recorded, not fixed. Reproducing
+  byte-identical on both sides and only the label differs. That is k131's
+  class and gets k131's answer: recorded, not fixed. Reproducing
   `type:time` would mean implementing Go's time parsing *and* its RFC3339-Nano
   rendering to hit the same digest bytes — a new value transformation, on the
   wire path, for a type Perl does not have.
 - Where the spelling is anything else, the **value** differs, and that is
-  karr #127's class exactly. It is folded into karr #127 rather than tracked
+  k127's class exactly. It is folded into k127 rather than tracked
   twice: the mechanism, the slot behaviour and the fix are the same.
 
-### 3. karr #127 — the ticket's claim is verified; it stays open on its
+### 3. k127 — the ticket's claim is verified; it stays open on its
 ### encrypted half, at its current priority
 
 Both halves were checked, because the priority hangs on them.
@@ -182,8 +182,8 @@ Both halves were checked, because the priority hangs on them.
   an `ENC[…]` string is a string to every resolver.
 
 **It is not raised to high.** Nothing fails, no document is corrupt, and it is
-karr #29's class — a fidelity gap between two parsers. What is worth recording,
-because it is *worse* than karr #29 and the ticket is right about that: there
+k29's class — a fidelity gap between two parsers. What is worth recording,
+because it is *worse* than k29 and the ticket is right about that: there
 the type label differed and something was visible; here both sides say
 `type:int` and only the number differs, so nothing anywhere signals it.
 
@@ -192,7 +192,7 @@ way libyaml does — on the **parse** side, for every document, changing the val
 the ciphertext and the digest. That is ADR 0002's territory and the wire lane's,
 not a formatting change.
 
-### 4. karr #135 — a real defect, and it is handed over, not fixed here
+### 4. k135 — a real defect, and it is handed over, not fixed here
 
 Of the four this is the only one where **sops writes a document, reads it back
 at exit 0, and this library refuses to produce it** — 22 measured spellings.
@@ -211,14 +211,14 @@ states the type the document has rather than inventing one.
 that were established by measuring, not by reading the lane boundary:**
 
 - **It moves bytes on the wire.** 22 leaves that produce no document today would
-  produce one. That is the handover condition karr #135 itself names.
+  produce one. That is the handover condition k135 itself names.
 - **YAML::XS has no per-scalar style control** — no tag, no forced-quote hook,
   as `_quote_sops_timestamp` has recorded since 0.003. The only way to get a
   quoted scalar out of this emitter is to rewrite the text after `Dump`, and
   doing that for arbitrary **data** leaves (rather than for one metadata key in
   one block) is a new mechanism on the wire path.
 - **The obvious fix is wrong, and the measurement is what shows it.** "Quote
-  every `str` leaf the guard would refuse" also silently changes karr #128's
+  every `str` leaf the guard would refuse" also silently changes k128's
   unencrypted half: `v_unencrypted: 2015-01-01` **bare** and
   `v_unencrypted: "2015-01-01"` **quoted** arrive as the *same Perl string* —
   verified, both `[2015-01-01]`, length 10 — so the emitter cannot tell them
@@ -244,9 +244,9 @@ that were established by measuring, not by reading the lane boundary:**
   because nothing under `lib/` was touched.
 - ADR 0032's three deferred "Limits" bullets are now decided rather than open:
   `!!float 1` and the RFC3339-exact timestamp are accepted divergences,
-  `!!int 0755` is karr #127's encrypted half.
-- **karr #131 and karr #128 are closed.** karr #127 stays open, narrowed to the
-  encrypted slot and carrying karr #128's value half. karr #135 stays open and
+  `!!int 0755` is k127's encrypted half.
+- **k131 and k128 are closed.** k127 stays open, narrowed to the
+  encrypted slot and carrying k128's value half. k135 stays open and
   is reassigned to the wire lane with the mechanism above.
 - A caller who needs any of these spellings preserved exactly has two answers
   the guard's message already gives, and both are measured: encrypt the leaf —
@@ -257,23 +257,23 @@ that were established by measuring, not by reading the lane boundary:**
 ## Alternatives rejected
 
 **Answer the four separately.** They would have contradicted each other. Read
-alone, karr #135 argues for quoting a `str` leaf the guard refuses, and
-karr #128's unencrypted half is a `str` leaf the guard refuses — so #135's fix,
-scoped by #135's ticket, would have silently retyped #128's case while #128 was
+alone, k135 argues for quoting a `str` leaf the guard refuses, and
+k128's unencrypted half is a `str` leaf the guard refuses — so k135's fix,
+scoped by k135's ticket, would have silently retyped k128's case while k128 was
 being closed as "recorded, not fixed" on the strength of it failing loudly.
 
-**Raise karr #127 to high because the encrypted slot is silent.** The silence is
+**Raise k127 to high because the encrypted slot is silent.** The silence is
 real and is recorded above. But nothing fails, no document is corrupt, and the
 same caller reading the same file with plain `YAML::XS` gets 755 as well —
 priority `high` is for something that breaks, and this changes a number that
 libyaml itself chose.
 
-**Fix karr #131 by typing from the tag.** Two lines in the parser, and it
-inverts the rule (ADR 0002) that this distribution spent karr #15 establishing,
+**Fix k131 by typing from the tag.** Two lines in the parser, and it
+inverts the rule (ADR 0002) that this distribution spent k15 establishing,
 for a label whose digest bytes are identical.
 
-**Close karr #135 as "documented, not fixed" like the other three.** The
+**Close k135 as "documented, not fixed" like the other three.** The
 discriminator forbids it. The other three are documents both implementations
-write and read; #135 is a document *sops* writes and reads and we refuse. That
-is the class this session has fixed four times (karr #102, #105, #116, #118),
+write and read; k135 is a document *sops* writes and reads and we refuse. That
+is the class this session has fixed four times (k102, k105, k116, k118),
 not the class it has recorded.

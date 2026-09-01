@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #127
+- Resolves k127
 - Depends on ADR 0002 (wire lane owns the value type) and ADR 0013 (foreign
   resolution guards every other spelling the two parsers disagree on); borrows
   the helper `_go_scalar_bytes` that ADR 0026 introduced for the non-finite
@@ -41,8 +41,8 @@ encrypted slot ran `_encrypt_tree` first, which replaced the leaf with an
 `ENC[...]` STRING long before any guard ran, and a string with no public PV
 slips the guard by construction.
 
-This was filed as karr #127 from the karr #118 measurement, narrowed in
-ADR 0038, and explicitly folded karr #128's value-half. JSON is unaffected
+This was filed as k127 from the k118 measurement, narrowed in
+ADR 0038, and explicitly folded k128's value-half. JSON is unaffected
 (10 spellings measured in both slots, 10/10 identical label, plaintext and
 slot text).
 
@@ -164,7 +164,7 @@ ever had. Three observable effects for callers:
 - **An unencrypted slot with a leading-zero spelling now writes an
   integer instead of a string.** The reverse direction — a leading-zero
   STRING in an unencrypted slot — is unaffected; `assert_representable`
-  still warns on it with the same karr #59 message, naming `493` as the
+  still warns on it with the same k59 message, naming `493` as the
   integer to pass. The repair and the warning meet in the same predicate
   and answer the same question from opposite sides.
 - **The encrypted slot's silent divergence is gone.** A document sops
@@ -186,19 +186,19 @@ they cannot be resolved the way Go resolves a bare integer:
   them as integers. The encrypted slot now disagrees on these — silently,
   but only on spellings the wire format disagrees on first, and only
   because the predicate's gate (SVf_IOK) cannot tell what a POK-only
-  scalar would have been. Resolving them is karr #135's territory, which
+  scalar would have been. Resolving them is k135's territory, which
   requires the parse-side quote-vs-bare discriminator (ADR 0039) that
-  #127 alone does not provide.
+  k127 alone does not provide.
 - **Underscore-separated integers (`1_000`).** Same shape: POK-only,
   libyaml does not produce an IV. The walk skips. sops reads `1_000` as
   `1000`. The encrypted slot disagrees here too, and the resolution is
-  the same karr #135 discriminator.
+  the same k135 discriminator.
 
 The path is the same in both cases: the parse-side discrimination
 between bare and quoted sources is what closes them, and that work is
-tracked in karr #99 / karr #127 / karr #135 together. ADR 0038 measures
-22 spellings; this ADR closes 1 (`0755`); karr #99 + this ADR together
-close 17 of the 22; karr #135 stands at 5, gated on the emitter and the
+tracked in k99 / k127 / k135 together. ADR 0038 measures
+22 spellings; this ADR closes 1 (`0755`); k99 + this ADR together
+close 17 of the 22; k135 stands at 5, gated on the emitter and the
 parse-side discriminator.
 
 ## Rejected alternatives

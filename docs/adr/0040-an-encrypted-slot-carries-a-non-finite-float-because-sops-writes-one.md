@@ -6,8 +6,8 @@
   four other candidates, before anything in the repository changed.
 - Date: 2026-08-21
 - Tags: float, yaml, json, wire-format, interop, guards, mac
-- Resolves karr #122 and karr #114. Files karr #141 (the same question for the
-  unencrypted slot) and karr #142 (what the new predicate call costs) for what
+- Resolves k122 and k114. Files k141 (the same question for the
+  unencrypted slot) and k142 (what the new predicate call costs) for what
   it deliberately leaves alone.
 - **Supersedes part 3 of ADR 0031** — "`encrypt_value` keeps refusing the
   encrypted slot" — and the premise that part rested on. Nothing else in
@@ -17,7 +17,7 @@
 - Depends on ADR 0031 (the gate, and the decision this replaces), ADR 0037
   (which turned this round trip's silent corruption into a refusal and named
   this ticket as the rung above it), ADR 0034 (whose repair on **every** parse
-  supplies the leaf that closes karr #114), ADR 0026 (which produces that leaf),
+  supplies the leaf that closes k114), ADR 0026 (which produces that leaf),
   ADR 0006 (`+Inf` / `-Inf` / `NaN` as a non-finite float's digest text),
   ADR 0012 (a scalar whose two halves disagree is refused, not guessed) and
   ADR 0002 (the type comes from the SV; nothing here reads a leaf's text to
@@ -169,7 +169,7 @@ the property ADR 0037 stated and pinned in `t/52` section 9; it flips eight
 further subtests in four more files; and ADR 0031's measurement of that cell
 (`Inf` → `sops -d` exit 51) was taken before the repair existed and no longer
 reproduces, which deserves to be said in its own ADR rather than in a paragraph
-of this one. karr #141.
+of this one. k141.
 
 The shipped change moves **no** unencrypted row: 18 of 18 corpus rows in that
 slot are identical before and after, croak for croak and document for document.
@@ -197,7 +197,7 @@ after (the same tree with this change).
   | `decrypt_file` → `encrypt_file` | 0/3 | **3/3 exit 0** | 0/3 | 0/3, same refusal |
   | `decrypt` → `encrypt` | 0/3 | **3/3 exit 0** | 0/3 | **3/3** |
 
-- **karr #114's own corpus**, all twelve `%GO_CONSTANT` spellings, plaintext
+- **k114's own corpus**, all twelve `%GO_CONSTANT` spellings, plaintext
   `secret: <token>` with `secret` in an encrypted slot, `encrypt_file` handed to
   `sops -d --output-type yaml`, beside `sops -e` on the identical plaintext:
   **0 of 12 → 12 of 12**, `type:float` in every row, and `sops -d` prints the
@@ -214,7 +214,7 @@ after (the same tree with this change).
   yaml` exit 0 with both leaves correct.
 - **The read side does not move.** `decrypt` of our own document hands back the
   infinity as a **bare NV** — `SVf_NOK` set, `SVf_POK` clear — in both formats,
-  which is what ADR 0009 and ADR 0010 require and what karr #114 measured for
+  which is what ADR 0009 and ADR 0010 require and what k114 measured for
   sops's own document.
 - **ADR 0037's twelve-row encrypt-path counter-check** (`t/52` section 9, seven
   leaves × two formats over the unencrypted slot): **identical before and
@@ -252,19 +252,19 @@ for `t/46`, `t/49`, `t/42` and `t/39`:
   ones now carry the value.
 - **`t/46` section 6**, `an encrypted slot still refuses every non-finite float`,
   and **section 7**, `encrypt_value refuses it directly, format-blind`. Both are
-  karr #122 stated as a test. They now assert what `encrypt_value` writes, and
+  k122 stated as a test. They now assert what `encrypt_value` writes, and
   that it still refuses a stated contradictory string half.
 - **`t/49` section 4**, `an encrypted slot is refused, naming the key path` —
   ADR 0034's one row where this library refused something sops writes. It is
   now written, and the subtest asserts the `type:float` and sops's own reading
   of it.
 - **`t/49` section 16**, `an ENCRYPTED non-finite float is no longer retyped by
-  edit (karr #134)`. ADR 0037 turned the silent retyping into a refusal and said
+  edit (k134)`. ADR 0037 turned the silent retyping into a refusal and said
   so in the name; the refusal is now a completed edit, and the subtest asserts
   the wire beside `sops edit`'s own answer.
 - **`t/52` section 10**, `and an encrypted slot is still refused, in both
   formats`, and **section 12**, `edit refuses instead of retyping, and leaves the
-  wire alone`. The same two rows from ADR 0037's own file, which named karr #122
+  wire alone`. The same two rows from ADR 0037's own file, which named k122
   in both.
 
 ## Cost
@@ -282,7 +282,7 @@ entirely the one call: a variant passing a constant instead runs at or below the
 unpatched library (40.4 – 41.5 ms). The predicate itself is 1.87 µs, of which
 only ~0.12 µs is the regex interpolation — the rest is the method call and four
 `defined && length` accessor pairs. `_encrypt_tree` already pays it once per
-leaf, so a thousand-leaf document now pays it twice; that is karr #142, in the
+leaf, so a thousand-leaf document now pays it twice; that is k142, in the
 lane that owns `Metadata.pm`.
 
 The lazy alternative was built and **measured slower than the call it avoids**:
@@ -311,7 +311,7 @@ is written differently.
 | `decrypt_file` → `encrypt_file` of the same | croak | **round-trips** |
 | `decrypt` → `encrypt` of the same, in memory | croak | **round-trips** |
 | the same four on a **JSON** wire document | croak | `rotate` and the in-memory pair are **written**; `edit` and `decrypt_file` still croak at the plaintext emit, where `sops edit` and `sops -d --output-type json` are exit 4 |
-| `encrypt_file` of a **plaintext** whose encrypted slot holds any of the twelve tokens | croak (ADR 0034's one row where sops succeeds) | **written as `type:float`**, 12 of 12, identical to what `sops -e` writes — karr #114 |
+| `encrypt_file` of a **plaintext** whose encrypted slot holds any of the twelve tokens | croak (ADR 0034's one row where sops succeeds) | **written as `type:float`**, 12 of 12, identical to what `sops -e` writes — k114 |
 | `encrypt(data => { secret => 9**9**9 })`, either format | croak | **written**, `type:float` |
 | `dualvar(+Inf, 'banana')` / `'.INf'` / `'-.inf'` in an encrypted slot | croak | **croak**, in a message about the two halves rather than about the float |
 | a non-finite float in an **unencrypted** slot, any spelling, either format | ADR 0031 and ADR 0037's behaviour | **unchanged**, all 18 rows |
@@ -329,21 +329,21 @@ refusal where the reference succeeds, on a document the reference itself writes.
 ### What this leaves broken, and why it is filed rather than fixed
 
 - **A bare non-finite float in an unencrypted YAML slot is still refused**,
-  where the emit walk would now write it correctly. Measured above; karr #141,
+  where the emit walk would now write it correctly. Measured above; k141,
   its own ADR.
 - **`edit` and `decrypt_file` of a JSON document with such a leaf still
   refuse.** They have to write a plaintext, JSON has no spelling for a
   non-finite number, and ADR 0037 decided that refusing is the measured answer —
   `sops edit` is exit 4 on the same document. Unchanged here.
 - **`should_encrypt_path` is now asked twice per leaf on the encrypt path.**
-  karr #142.
+  k142.
 - **`edit` destroys the edit whenever the re-encryption refuses.** Untouched,
   and this change removes causes rather than adding any. ADR 0034 has the
   argument.
 
 ## Rejected alternatives
 
-**Give `encrypt_value` the document format** — karr #122's own plan, and
+**Give `encrypt_value` the document format** — k122's own plan, and
 ADR 0031's. It was measured out of existence before it was built: both wire
 formats carry this leaf at exit 0, the disagreement is between *output* formats,
 and an output format is not a property of the document being written. Building
@@ -360,7 +360,7 @@ they already have is exit 4 on a default `sops -d` whether we touch it or not.
 `Encrypted.pm` alone, no `SOPS.pm`. Measured and tabled above: it also makes a
 bare non-finite float writable in an **unencrypted** YAML slot. That is
 probably right and it is a different ticket, because it moves ADR 0037's own
-counter-check table, which this change is measured against. karr #141.
+counter-check table, which this change is measured against. k141.
 
 **Skip the non-finite check for an encrypted slot entirely**, rather than
 narrowing it to the stated contradiction. Simpler, one word, and consistent with

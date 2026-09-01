@@ -6,15 +6,15 @@
   repository changed.
 - Date: 2026-08-21
 - Tags: yaml, emitter, wire-format, guards, interop, diagnostics
-- Answers karr #135, which ADR 0038 handed to the wire lane. Leaves the refusal
+- Answers k135, which ADR 0038 handed to the wire lane. Leaves the refusal
   in place and corrects the message it is delivered with; adds the two measured
-  preconditions to karr #99 and karr #127 rather than widening either here
+  preconditions to k99 and k127 rather than widening either here
 - Depends on ADR 0013 and ADR 0017 (the foreign-resolution guard and the token
   it answers from), ADR 0008 (a leaf the emitter cannot write as the text the
   digest covers is refused), ADR 0038 (the measurement this starts from),
   ADR 0026 and ADR 0034 (the parse-side resolution that makes seven of the
   twenty-two rows unambiguous, and is the only reason they are), ADR 0019
-  (which rejected write-path text surgery and filed karr #99 for it), ADR 0028
+  (which rejected write-path text surgery and filed k99 for it), ADR 0028
   (which allowed read-path text surgery, under conditions this case does not
   meet) and ADR 0032 (a loud refusal is not traded for a silent divergence)
 - Moves **no wire byte**: no document that is written today is written
@@ -41,7 +41,7 @@ The 22 are `".inf" ".Inf" ".INF" "+.inf" "-.inf" ".nan" ".NaN"`, `"1_000" "0_7"
 0; the guard refuses it because `_go_scalar_bytes` cannot model a `uint64` and
 refuses what it cannot decide (ADR 0013). Its neighbour `"9223372036854775808"`
 is written here, because `looks_like_number` is true for it and `YAML::XS`
-quotes it for us. The row is recorded on karr #135 rather than changing
+quotes it for us. The row is recorded on k135 rather than changing
 anything: it is the same defect and the same answer.
 
 The refusal is wrong. The question this ADR answers is what to do about it
@@ -95,7 +95,7 @@ here the target form is the one thing a carrier cannot produce.
 **Replacing the leaf inside the existing walk.** `reject_scalar` is called from
 `Encrypted::_written_leaf`, whose return value is `$leaf` — the callback's
 answer is discarded, by construction. A replacement would need either an edit to
-`canonical_float_tree`'s contract (another lane's file, and karr #122 is in it)
+`canonical_float_tree`'s contract (another lane's file, and k122 is in it)
 or a **second full tree walk** inside `emit`.
 
 So the only way to get a quoted scalar out of this emitter is to rewrite the
@@ -136,17 +136,17 @@ quoted one**, and the two sources are two different documents to sops. Measured,
 So quoting a leaf whose source was bare writes a **string** where sops writes a
 resolved number, null, boolean or RFC3339 time — turning today's loud refusal
 into a silent divergence, which is the direction ADR 0032 refused for `!!bool
-True` and the direction ADR 0038 refused for karr #128's unencrypted half.
+True` and the direction ADR 0038 refused for k128's unencrypted half.
 The date family is **4** of the 22 rows; the trap it is named for covers **15**.
 
 **Why exactly seven rows escape it, and it is not luck.** ADR 0026 and ADR 0034
 already resolve a *plain* non-finite token the way go-yaml does, on every parse:
 a bare `.inf` comes back as a float carrying the document's own token, so the
 **string** `.inf` can only have come from a quoted scalar or from a caller's own
-Perl string. That is karr #127's fix — a plain scalar resolved as Go resolves it
+Perl string. That is k127's fix — a plain scalar resolved as Go resolves it
 — already implemented for one token family. The seven unambiguous rows are
 exactly that family, which is the measurement's way of saying that the general
-answer to karr #135 is karr #127.
+answer to k135 is k127.
 
 ### 4. Both remedies the message recommends really work
 
@@ -192,20 +192,20 @@ this leaf as the text the digest covers, so the leaf is refused *until the
 emitter can*. Loosening it would write a document that fails its own MAC —
 measured, `sops -d` exit 51 — which is worse than the refusal in every direction.
 
-**What karr #135 actually needs is two changes, and neither belongs to this
+**What k135 actually needs is two changes, and neither belongs to this
 ticket:**
 
-1. **karr #99 — an emitter that can quote one scalar.** ADR 0019 filed it
+1. **k99 — an emitter that can quote one scalar.** ADR 0019 filed it
    explicitly "for the maintainer to decide against a real emitter rather than
    in passing", and that is still the right place for it. With it, and nothing
    else, **7 of the 22 rows** become writable today.
-2. **karr #127 — a plain scalar resolved the way Go resolves it, at parse.**
+2. **k127 — a plain scalar resolved the way Go resolves it, at parse.**
    With both, all 22 become writable, because the bare/quoted ambiguity that
    blocks the other 15 disappears at the parse, where the information still
    exists.
 
 This ADR states that decomposition with the numbers behind it, so the next lane
-to pick karr #135 up does not have to re-measure it.
+to pick k135 up does not have to re-measure it.
 
 ## Consequences
 
@@ -218,7 +218,7 @@ to pick karr #135 up does not have to re-measure it.
 - **The 22 spellings still cannot be written**, and that is a defect this ADR
   records rather than removes. It is pinned by
   `t/53-a-string-leaf-sops-quotes-is-refused-and-says-why.t` in the shape
-  ADR 0037 used for karr #134: the rows are asserted as refused *today* and
+  ADR 0037 used for k134: the rows are asserted as refused *today* and
   named with their ticket, so the fix flips them visibly instead of quietly.
 - The refusal still never names the value: the string tail contains no example
   spelling at all, which is stronger than the numeric one (`0755`, deliberately
@@ -232,7 +232,7 @@ to pick karr #135 up does not have to re-measure it.
 - `SOPS_BIN=/tmp/sops prove -lv t/04-interop.t` is **32/32, executed rather than
   skipped**, against sops 3.13.3 — unchanged, as nothing on the wire moved.
   `prove -lr t/` was 1172/1172 over 53 files before this session; at the time of
-  writing the tree also carries karr #122's in-flight work in `Encrypted.pm` and
+  writing the tree also carries k122's in-flight work in `Encrypted.pm` and
   `File::SOPS.pm`, and 8 subtests in four non-finite-float files fail because of
   it. Verified independent of this change: the same four files fail identically
   with this ADR's `Format/YAML.pm` and with the pre-change copy of it.
@@ -248,7 +248,7 @@ to pick karr #135 up does not have to re-measure it.
 
 ## Alternatives rejected
 
-**Quote every `str` leaf the guard refuses.** The literal reading of karr #135,
+**Quote every `str` leaf the guard refuses.** The literal reading of k135,
 and the measurement in §3 is what refuses it: 15 of the 22 rows arrive
 identically from a bare source, where sops writes a resolved value and we would
 write a quoted string. It trades a loud refusal for a silent divergence in the
@@ -273,7 +273,7 @@ substitution. It is still rejected, on three measured grounds:
   surgery is allowed because it is one fixed token, in one lexical position, on
   the **read** path, on a document that has already failed to parse. This one is
   arbitrary values at arbitrary nesting on the **write** path, on every document.
-- **It pre-empts karr #99 in passing**, which is the one thing ADR 0019 asked
+- **It pre-empts k99 in passing**, which is the one thing ADR 0019 asked
   the next lane not to do. A real emitter answers all 23 rows and this answers 7.
 
 **Loosen the guard for `str` leaves.** It writes the bare token into a
@@ -288,11 +288,11 @@ fails its own MAC, so a warning would hand the caller a broken file with a note
 attached.
 
 **Say nothing and leave the message as it is.** It is the cheapest option and it
-is what karr #135 explicitly refuses: the sentence sends a caller looking for a
+is what k135 explicitly refuses: the sentence sends a caller looking for a
 decimal that does not exist, and it says sops resolves a spelling that, for this
 leaf, sops keeps.
 
-**Fix karr #127 here so all 22 become unambiguous.** It is the real answer and
+**Fix k127 here so all 22 become unambiguous.** It is the real answer and
 it is a different decision: resolving a plain scalar the way Go does changes the
 **value**, the ciphertext and the digest of every document that contains one.
 It needs its own corpus and its own ADR, and ADR 0038 already narrowed the

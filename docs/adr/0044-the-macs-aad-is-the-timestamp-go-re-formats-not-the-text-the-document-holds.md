@@ -3,14 +3,14 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: mac, aad, metadata, interop, wire
-- Resolves karr #144, the AAD half of the sweep that produced ADR 0042
+- Resolves k144, the AAD half of the sweep that produced ADR 0042
 - Corrects one row of ADR 0042's field table: `lastmodified` is a Go **string**
   where `mapstructure` decodes it and a Go **`time.Time`** everywhere after
   that, and the AAD is taken from the second one
 - Depends on ADR 0002 (the type comes from the scalar — `_is_text` is reused
   rather than asked again) and ADR 0043 (a reference in a string field is
   already refused before this decode runs)
-- Leaves karr #144's second direction — an **unquoted** timestamp — undecided
+- Leaves k144's second direction — an **unquoted** timestamp — undecided
   here and hands it to the format lane, for the reason ADR 0038 recorded about
   bare and quoted scalars being the same Perl string
 
@@ -27,7 +27,7 @@ an instant in any RFC3339 form that is not Go's own rendering of it, the two
 disagree: sops reads the file, this library refuses it with
 `Cannot decrypt MAC - refusing to return unverified data`.
 
-karr #144 recorded six measured rows and said outright that it needed the full
+k144 recorded six measured rows and said outright that it needed the full
 spelling set measured before anything was written. This is that measurement.
 
 ## The measurement
@@ -37,8 +37,8 @@ document sops itself wrote — only the `lastmodified` line edited, and, where
 the experiment needs it, the `mac` value re-encrypted under a chosen AAD
 through this distribution's own `File::SOPS::Encrypted->encrypt_value`. The
 MAC plaintext was first recovered by decrypting the stored `mac` with the
-document's own timestamp as AAD, the same method the karr #108, #116, #109 and
-#138 lanes used.
+document's own timestamp as AAD, the same method the k108, k116, k109 and
+k138 lanes used.
 
 ### The AAD is the re-formatted timestamp — measured directly, not inferred
 
@@ -185,7 +185,7 @@ Four properties, all deliberate.
   mis-read; and the grammar is a reimplementation of Go's parser, so the risk
   worth guarding against is that it is *narrower* than Go's somewhere unmeasured.
   Passing through leaves such a document behaving exactly as it does today
-  instead of turning a hypothetical gap into a refusal. This is karr #145's
+  instead of turning a hypothetical gap into a refusal. This is k145's
   reasoning, applied one field over.
 - **No range checks are reproduced.** Go refuses a month of 13 or an offset
   hour of 25 *after* lexing; a value out of range therefore only ever appears
@@ -193,7 +193,7 @@ Four properties, all deliberate.
   Reproducing the ranges would add a calendar to this module and could only
   change behaviour for documents nobody can read.
 
-**karr #144's second direction — an unquoted timestamp — is not decided here.**
+**k144's second direction — an unquoted timestamp — is not decided here.**
 go-yaml v3 resolves a bare RFC3339 scalar as `!!timestamp` and `mapstructure`
 refuses the document at exit 1; this library reads it. The distinction between
 `lastmodified: 2026-08-21T09:05:08Z` and `lastmodified: "2026-08-21T09:05:08Z"`
@@ -259,7 +259,7 @@ writes the canonical form, so the constructor has nothing to correct.
 
 **Refuse a `lastmodified` that does not parse, the way sops does.** Fail-loud
 argues for it and sops stops at exit 1 on all 16 measured spellings. Rejected
-for karr #145's measured reason: a refusal is only as good as the grammar
+for k145's measured reason: a refusal is only as good as the grammar
 behind it, and this grammar is a hand reimplementation of Go's `parse` with a
 fallback layout, including corners that look like bugs and are not — a
 one-digit hour is accepted, a one-digit month is not; `+24:00` is a legal

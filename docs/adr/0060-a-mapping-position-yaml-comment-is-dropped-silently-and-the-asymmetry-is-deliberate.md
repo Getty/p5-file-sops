@@ -2,14 +2,14 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #169
+- Resolves k169
 - Lane: format
 - Depends on **ADR 0041** (the sequence-position guard that defines what
   "refused loudly" looks like here) and **ADR 0041's two-tracker POD in
   `File::SOPS::Format::YAML`** (which already names the asymmetry this ADR
   records as a decision). The work this ADR records is the decision itself;
-  the asymmetry was measured against sops 3.13.3 in karr #148, before karr
-  #169 was filed.
+  the asymmetry was measured against sops 3.13.3 in k148, before karr
+  k169 was filed.
 - **Moves no bytes.** Every behaviour described here is today's behaviour.
   This ADR records it as deliberate so a future reader does not mistake it
   for an accident of where YAML::XS drops comments, and so the asymmetry
@@ -24,7 +24,7 @@ comment as a real element (`- ENC[…,type:comment]`). That gives two
 positions a sops document can carry a comment in, and the two positions
 behave differently here.
 
-karr #169's measurement against sops 3.13.3, reproduced on this branch:
+k169's measurement against sops 3.13.3, reproduced on this branch:
 
 | document | `sops -d` | this library's `decrypt_file` |
 |---|---|---|
@@ -56,7 +56,7 @@ The two positions are not the same thing for two reasons:
    element reaches `parse`; a mapping-position comment line does not.
    Nothing in the tree model can see what was discarded.
 2. **The asymmetry is already sops's own.** `sops -e --output-type json`
-   drops mapping-position comments too (karr #148 / ADR 0041 row 1, last
+   drops mapping-position comments too (k148 / ADR 0041 row 1, last
    column): the JSON emitter has no place for them either. We are not
    making this worse than what sops does to its own YAML-to-JSON round
    trip; we are mirroring the same loss.
@@ -68,10 +68,10 @@ ADR records as deliberate, for the three reasons below.
 
 ### 1. Making B loud would refuse a document sops reads at exit 0
 
-The karr #169 body itself names this:
+The k169 body itself names this:
 
 > Making B loud too would refuse a document sops reads, and would need
-> the read half of karr #148 (YAML::PP's raw token stream) purely to
+> the read half of k148 (YAML::PP's raw token stream) purely to
 > power a refusal.
 
 ADR 0041 made the sequence-position equivalent loud on the same trade —
@@ -84,11 +84,11 @@ all today.
 
 A loud guard on B would need the comment text in the first place, and the
 comment text is not in the tree. YAML::PP's parser keeps it in its raw
-token stream (ADR 0041 / karr #148's measurement), but a recovered
+token stream (ADR 0041 / k148's measurement), but a recovered
 comment has nowhere to go: a sequence comment is preserved because a
 **sequence element** is a slot the tree model already has, and a mapping-
 position comment sits **before a key**, where a Perl hash has no slot.
-The recovery work is the read half of karr #148 — a sizeable refactor
+The recovery work is the read half of k148 — a sizeable refactor
 whose deliverable is a comment that lands in the tree, not in a refusal.
 
 ### 2. Making A quiet would undo ADR 0041's decision
@@ -96,11 +96,11 @@ whose deliverable is a comment that lands in the tree, not in a refusal.
 ADR 0041 made the sequence-position comment loud because the leaf was in
 the tree as an `ENC[…,type:comment]` string and the write path was
 **silently dropping the comment** from the plaintext output (the prior
-behaviour, karr #108's defect). The decision was loud-or-silent, not
+behaviour, k108's defect). The decision was loud-or-silent, not
 loud-or-perfect: a comment in the tree is either refused by name or
 dropped without a word, and ADR 0041 chose the refusal because the
 information was available to refuse. Undoing that to make A and B
-symmetric is to re-introduce karr #108 in a different position.
+symmetric is to re-introduce k108 in a different position.
 
 ### 3. The asymmetry is already documented and the loss is recoverable
 
@@ -125,7 +125,7 @@ kept" already names the asymmetry in the prose this ADR generalises:
 > mapping key is written back **silently without it**. `sops -d` returns
 > both comments intact for both documents.
 
-This ADR records that prose as the decision, with the karr #169
+This ADR records that prose as the decision, with the k169
 measurement and the architectural reason behind it — so a future reader
 who meets the asymmetry does not mistake it for an accident of where
 YAML::XS drops comments.
@@ -144,26 +144,26 @@ YAML::XS drops comments.
   document is written without error and without the comments. The test
   fails under any future change that makes the sequence-position case
   silent or the mapping-position case loud.
-- **The mapping-position comment is still open as a half of karr #148**,
-  the ticket ADR 0041 named and karr #148 measured. When the read half
-  of karr #148 lands — a YAML::PP raw-token recovery with somewhere for
+- **The mapping-position comment is still open as a half of k148**,
+  the ticket ADR 0041 named and k148 measured. When the read half
+  of k148 lands — a YAML::PP raw-token recovery with somewhere for
   the comment to live — the silent loss this ADR records as deliberate
   becomes a recoverable one, and a future ADR will replace this one.
 
 ## Rejected alternatives
 
 **Make B loud.** The mirror of the decision, and what a fail-loud reading
-of karr #169 would reach for. Refused for the same reason ADR 0041's
+of k169 would reach for. Refused for the same reason ADR 0041's
 guard is loud where it can be: refusing requires the data. The comment is
 in YAML::PP's raw token stream, but a guard that fires on its presence is
 a refusal fired on data the parse did not retain, with no caller-visible
-recovery and a sizeable refactor (karr #148) upstream of it. It also
+recovery and a sizeable refactor (k148) upstream of it. It also
 moves an asymmetry that is **already sops's own** in the YAML→JSON round
-trip (karr #148 / ADR 0041 row 1), in a worse direction for this library:
+trip (k148 / ADR 0041 row 1), in a worse direction for this library:
 sops drops the comment at the format boundary, this library would die.
 
 **Make A quiet (drop the sequence-position refusal).** Undoes ADR 0041
-and re-opens karr #108's defect at a different position. Rejected on the
+and re-opens k108's defect at a different position. Rejected on the
 same grounds ADR 0041 rejected it: the data is in the tree, the loss
 would be silent, and a `decrypt` + `encrypt` cycle would make it
 permanent with every party reporting success.
@@ -174,7 +174,7 @@ ADR 0019 rejected: a regex over the raw text, on the read path, where a
 mis-hit refuses a document whose comment line the regex happens to
 match. ADR 0028's conditions for permitted surgery (one fixed token,
 reconciled against a second parser before the result is used) are met by
-none of the work — karr #148 measured this and the half that would
+none of the work — k148 measured this and the half that would
 power a refusal is the half that has nowhere to put the comment.
 
 **Re-render the document through `sops -d` after `decrypt_file`.** A

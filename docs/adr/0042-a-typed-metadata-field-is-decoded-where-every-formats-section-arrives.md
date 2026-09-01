@@ -3,9 +3,9 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: metadata, mac, api, interop, env, ini
-- Resolves karr #138, the metadata half handed over from karr #77
+- Resolves k138, the metadata half handed over from k77
 - Implements the decision recorded in ADR 0035, section *"The metadata half of
-  karr #77, and where it belongs"* — this ADR is the measurement that backs it
+  k77, and where it belongs"* — this ADR is the measurement that backs it
   and the specification that was missing
 - Depends on ADR 0002 (a value's type comes from the scalar — the same
   discriminator is reused here rather than spelled again) and ADR 0022 (the
@@ -26,7 +26,7 @@ block, so the two settings can never produce the same digest for the same
 document. Reading it wrong is not a cosmetic error: it computes the wrong MAC
 for a document `sops -d` reads at exit 0.
 
-karr #75 found the hazard in the flat encoding. `File::SOPS::Metadata::Flat->unflatten`
+k75 found the hazard in the flat encoding. `File::SOPS::Metadata::Flat->unflatten`
 returns every leaf as a **string**, because the ENV and INI stores have no
 syntax for a type, so `sops_mac_only_encrypted=false` arrives at
 `File::SOPS::Metadata->from_hash` as the string `'false'` — which is **true**
@@ -185,7 +185,7 @@ all three are documents this library previously read differently from sops:
 **The flat metadata encoding becomes usable without a trap in front of it.**
 `Metadata::Flat->unflatten` hands `from_hash` a string for every leaf, which is
 now the *supported* input rather than a hazard the caller has to close. The ENV
-and INI handlers (karr #36, #37) inherit that.
+and INI handlers (k36, k37) inherit that.
 
 **A reference where a scalar belongs is refused** rather than reaching an
 attribute, where an ARRAY ref would have been Perl-true.
@@ -228,7 +228,7 @@ behaviour being reproduced rather than an addition to it.
 **Model `shamir_threshold` as an attribute.** It would put the field in
 `to_hash`'s hands and out of `extra`'s, but this class models what a field
 **is** and not what it **means**, and the meaning of a threshold is
-`key_groups` — the field this distribution cannot implement (karr #39). It
+`key_groups` — the field this distribution cannot implement (k39). It
 stays unmodelled and decoded.
 
 ## Notes

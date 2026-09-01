@@ -3,11 +3,11 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: float, json, wire-format, interop
-- Resolves karr #88
+- Resolves k88
 - Depends on ADR 0005 (why this handler binds `Cpanel::JSON::XS` by name, and
   the `-0.0` it writes that no other backend does), ADR 0006 (the
   `roundtrips`/`carrier` pair, the rule that an emitted decimal has to parse
-  back to the same double, and karr #62's amendment that made the YAML carrier
+  back to the same double, and k62's amendment that made the YAML carrier
   write `-0.0`) and ADR 0011 (which sends a PV-carrying float leaf to the
   carrier instead of refusing it)
 
@@ -61,7 +61,7 @@ stripped of the string half that sent it there:**
 `Cpanel::JSON::XS` writes that bare NV as `-0.0` — the bytes the same value has
 always produced when it arrived without a PV — and that text parses back to the
 same double, which is what ADR 0006 asks of an emitted decimal, not that it be
-spelled canonically. It is the same split karr #62 measured on the YAML side,
+spelled canonically. It is the same split k62 measured on the YAML side,
 in the other format. Measured, sops 3.13.3, JSON leaf whose digest is `-0`:
 
 | document holds | `sops -d` |
@@ -92,7 +92,7 @@ the sign outright — the same fact ADR 0006 already records for Perl's
 `grok_number`. And Perl's arithmetic ops call `SvIV_please` on their operands,
 which sets the **private** `IOK` on the *caller's* scalar **in place**; the next
 multiplication of that leaf then takes the integer path and returns a plain `0`.
-That is karr #72 and #73 one frame further in, on a value the walk was handed
+That is k72 and k73 one frame further in, on a value the walk was handed
 rather than one it read: the first document written in a process would have been
 correct and every later one silently wrong, from the same tree. `pack 'd'` reads
 the NV and nothing else.
@@ -162,15 +162,15 @@ reachable only if `Math::BigFloat` truncates despite the explicit
 ### Not fixed here
 
 The carrier callback is given `($value, $text)` and no key path, so this message
-— unlike the reject callbacks' since karr #68 — cannot name the leaf it died on.
+— unlike the reject callbacks' since k68 — cannot name the leaf it died on.
 Widening `canonical_float_tree`'s carrier contract is a change to every handler
-and was left out of this one. karr #68's known gap, recorded in `Changes`.
+and was left out of this one. k68's known gap, recorded in `Changes`.
 
 ## Rejected alternatives
 
 **Leave the repair out and fix only the message.** The ticket allowed it, and it
 is the smaller change. It is also the wrong one by this repository's own
-precedent: karr #62 measured a YAML spelling that works rather than accepting
+precedent: k62 measured a YAML spelling that works rather than accepting
 that `-0` had none, and ADR 0011 chose the carrier over a refusal for the leaf
 class that leads straight into this one. A spelling that works exists here too,
 and it is the one the same value already produces through the other door.

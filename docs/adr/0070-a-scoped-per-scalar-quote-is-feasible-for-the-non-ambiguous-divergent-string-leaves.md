@@ -1,17 +1,17 @@
 # ADR 0070 — A scoped per-scalar quote is feasible for the divergent string leaves that parse unambiguously
 
-- Status: **accepted** — 2026-09-01, by the maintainer, who cleared karr #99 to
+- Status: **accepted** — 2026-09-01, by the maintainer, who cleared k99 to
   build. The Decision's scoped mechanism (sentinel substitution with fail-closed
   verification, the nine measured-safe rows only) is authorized for implementation;
-  the sixteen ambiguous rows stay refused pending a full karr #127. The
+  the sixteen ambiguous rows stay refused pending a full k127. The
   feasibility tables below were measured against sops 3.13.3 at `.sops-bin/sops`;
   the surgery mechanism was probed in a scratch copy before anything moved.
 - Date: 2026-09-01
 - Tags: yaml, emitter, wire-format, guards, interop
-- Answers karr #99 ("Quoting a True/False string on the way out … needs a real
+- Answers k99 ("Quoting a True/False string on the way out … needs a real
   emitter"), which ADR 0019 filed "for the maintainer to decide against a real
   emitter rather than in passing", and which ADR 0038/0039 named as the first of
-  two gates on karr #135
+  two gates on k135
 - Depends on ADR 0008 (a leaf the emitter cannot write as the text the digest
   covers is refused — this proposes making the emitter able for a scoped set),
   ADR 0013/0017 (the foreign-resolution guard and the token it answers from),
@@ -21,9 +21,9 @@
   (read-path text surgery, allowed under conditions this write-path case must
   meet another way), ADR 0038/0039 (the 22-row corpus and the decomposition this
   ADR corrects), ADR 0002 (the type comes from the SV — untouched here)
-- **Corrects a premise in ADR 0039.** ADR 0039 wrote that karr #99 + karr #127
+- **Corrects a premise in ADR 0039.** ADR 0039 wrote that k99 + k127
   would make all 22 rows writable "because the bare/quoted ambiguity … disappears
-  at the parse". karr #127 has since landed, and the ambiguity did **not**
+  at the parse". k127 has since landed, and the ambiguity did **not**
   disappear: the landed `_go_repair_int_leaves` repairs leading-zero integers
   only, none of which are in the 22. See "What was measured", §2.
 
@@ -38,10 +38,10 @@ they could not take, and filed it here:
 - **ADR 0019** rejected it for a `True`/`False` *string*, where quoting retypes
   nothing (the leaf is already a string) and is measured to be exactly what sops
   writes — but it "moves wire bytes for a class of documents that are accepted
-  today", and "YAML::XS has no per-scalar style control", so it filed karr #99.
+  today", and "YAML::XS has no per-scalar style control", so it filed k99.
 - **ADR 0038/0039** found 22 (then 23) *string* leaves that sops writes
   double-quoted, reads back at exit 0, and this library refuses — and handed the
-  emitter half to the wire lane as karr #99, the parse half to karr #127.
+  emitter half to the wire lane as k99, the parse half to k127.
 
 All three turn on one missing capability: forcing exactly one chosen scalar to be
 double-quoted in the YAML::XS output, at an arbitrary key path and arbitrary
@@ -87,7 +87,7 @@ Both verify against the *same* MAC, because the digest input is the byte string
 quoted `"True"` already is. Quoting therefore changes only which *type* sops
 reads; it never changes the digest, and it never changes this library's digest,
 which is computed over the plaintext tree before serialization. This is the fact
-karr #99 rests on, and it is confirmed rather than assumed.
+k99 rests on, and it is confirmed rather than assumed.
 
 ## What was measured
 
@@ -144,10 +144,10 @@ computed over the original tree in `File::SOPS::_compute_mac` — before `emit`
 runs — and the sentinel is only a transient value substitution that never
 touches a key, the surgery cannot move a digest byte or a key's sort position.
 
-### 2. The bare/quoted ambiguity is UNCHANGED by karr #127 — only seven rows parse unambiguously
+### 2. The bare/quoted ambiguity is UNCHANGED by k127 — only seven rows parse unambiguously
 
 This is the finding that scopes the whole ticket, and it corrects ADR 0039.
-karr #127 is now **done**, but the landed `_go_repair_int_leaf` repairs a leaf
+k127 is now **done**, but the landed `_go_repair_int_leaf` repairs a leaf
 only when it is `SVf_IOK` **and** its PV matches `/\A[+-]?0\d+\z/` — a
 leading-zero *integer*. None of the 22/23 divergent spellings are leading-zero
 integers. So the ambiguity ADR 0039 measured is exactly as wide today as it was
@@ -163,7 +163,7 @@ through `Format::YAML->parse`, compared by `detect_type` + `value_to_bytes`:
 | `Null NULL TRUE FALSE` | 4 | `str`, the token | `str`, the token | no |
 | `0xffffffffffffffff` | 1 | `str`, the token | `str`, the token | no |
 
-The seven that parse unambiguously do so because of ADR 0026/0034, not karr #127:
+The seven that parse unambiguously do so because of ADR 0026/0034, not k127:
 a bare `.inf` is resolved to a float at parse, so a leaf that is *still the
 string* `.inf` can only have come from a quoted scalar or a caller's own Perl
 string. Quoting it is therefore safe — it states the type the leaf already has.
@@ -175,7 +175,7 @@ Quoting a leaf whose source was bare would write a **string** where sops writes 
 resolved value — turning today's loud refusal into a silent value divergence,
 the direction ADR 0032 and ADR 0038 both refused. The emitter cannot tell the
 two sources apart, so it cannot safely quote these until the *parse* disambiguates
-them — which is the full karr #127 (resolve every plain scalar the way Go does),
+them — which is the full k127 (resolve every plain scalar the way Go does),
 **not** the leading-zero-only slice that landed.
 
 ### 3. `True`/`False` are safely quotable although they are not parse-distinguishable
@@ -218,7 +218,7 @@ The scope is what §2 and §3 establish is safe **today**, and no wider:
 
 - **The `type` divergence class** — a `str` leaf whose emitted token go-yaml
   resolves to a boolean (`True`, `False`). Quoting it turns today's `carp`
-  (ADR 0019) into a written, self-consistent document. This is karr #99's
+  (ADR 0019) into a written, self-consistent document. This is k99's
   headline.
 - **The seven parse-unambiguous non-finite `str` leaves** —
   `.inf .Inf .INF +.inf -.inf .nan .NaN`. Quoting turns today's refusal
@@ -227,7 +227,7 @@ The scope is what §2 and §3 establish is safe **today**, and no wider:
 **Everything else stays exactly as it is.** The sixteen ambiguous rows
 (`1_000 0_7 685_230.15`, the four dates, `0o10 0O10 0x1f 0b101`,
 `Null NULL TRUE FALSE`, `0xffffffffffffffff`) stay **refused**, with the message
-ADR 0039 already corrected, until the full karr #127 disambiguates their source
+ADR 0039 already corrected, until the full k127 disambiguates their source
 at parse. An integer/float `mac` divergence (`0755`, `010`) stays refused
 (ADR 0013 — quoting would retype it, and the maintainer decided against that).
 The plaintext emitters (`decrypt_file`, `edit`) install no guard and are not in
@@ -297,10 +297,10 @@ Representative measurement already taken (the load-bearing rows):
   byte-identical to sops's own output and stable across a sops write-back. No
   document that is written today changes, and no document that is refused today
   other than the seven non-finite is written.
-- **karr #99 is answerable for its headline (True/False) and for 7 of the 22
-  ADR 0038 rows, but not for the other 16.** ADR 0039's "karr #99 + karr #127 →
-  all 22" is corrected: the landed karr #127 does not disambiguate the sixteen,
-  and a *full* karr #127 (resolve every plain scalar as go-yaml does, at parse,
+- **k99 is answerable for its headline (True/False) and for 7 of the 22
+  ADR 0038 rows, but not for the other 16.** ADR 0039's "k99 + k127 →
+  all 22" is corrected: the landed k127 does not disambiguate the sixteen,
+  and a *full* k127 (resolve every plain scalar as go-yaml does, at parse,
   moving the value/ciphertext/digest of every affected document — ADR 0002's
   territory) remains the precondition for them.
 - **A separate plaintext-path fidelity gap surfaced while measuring** and is
@@ -313,8 +313,8 @@ Representative measurement already taken (the load-bearing rows):
 ## Rejected alternatives
 
 **Defer entirely, as ADR 0039 did.** ADR 0039 deferred because a fix "pre-empts
-karr #99, which is the one thing ADR 0019 asked the next lane not to do" — and
-this **is** karr #99, so that objection is spent. The remaining objection, a
+k99, which is the one thing ADR 0019 asked the next lane not to do" — and
+this **is** k99, so that objection is spent. The remaining objection, a
 corrupt file from a write-path mis-hit, is answered by the fail-closed sentinel
 design: a count miss or a re-`Load` mismatch falls back to the refusal, so a
 mis-hit cannot ship. Deferring now would leave the measured, safe nine rows
@@ -330,10 +330,10 @@ mechanism whose mis-hit ADR 0019 rejected, and it is avoidable: the sentinel is
 substituted *before* `Dump`, so the surgery matches a unique random token, never
 a path, and verifies the finished bytes by re-`Load`.
 
-**Wait for the full karr #127 and do all 22 at once.** It is the complete answer
+**Wait for the full k127 and do all 22 at once.** It is the complete answer
 and a much larger, value-moving parse change (ADR 0002's territory, its own
 corpus, its own ADR). Making the nine safe rows writable now does not block it
-and does not overlap it: karr #127 changes what the *parse* produces, this
+and does not overlap it: k127 changes what the *parse* produces, this
 changes what the *emit* writes for a leaf that is already unambiguously a string.
 
 **Switch the emitter to YAML::PP for per-node style control.** Out of bounds by

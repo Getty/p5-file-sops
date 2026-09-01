@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: float, api, json, yaml, interop
-- Resolves karr #61 (second half; the first half needed no code, see ADR 0006)
+- Resolves k61 (second half; the first half needed no code, see ADR 0006)
 - Depends on ADR 0006 (the canonical decimal and why the emitters could not
   write it) and ADR 0009 (the decrypted float's SV, which is the numeric half
   of what this returns)
@@ -33,7 +33,7 @@ YAML float keeps the parser's PV — measured, `YAML::XS` retains the source tex
 — so `ratio_unencrypted` stringifies with all 17 digits while its encrypted
 neighbour stringifies as `0.3`. Two leaves of the same document, two answers.
 
-karr #61's plan set out three options and the maintainer chose the third:
+k61's plan set out three options and the maintainer chose the third:
 
   (a) keep returning the NV and document `sprintf('%.17g')` in the POD;
   (b) return the canonical decimal as a string, as `sops -d --extract` prints;
@@ -76,9 +76,9 @@ compare equal. Measured end to end, a dualvar in an unencrypted JSON slot
 produced `"ratio_unencrypted": "0.30000000000000004"` and `sops -d` read it
 back at exit 0 **as a string** — the file is fine, the value has changed type.
 So the dualvar is a value to read, and it stops at the boundary where a caller
-reads one. Recorded as karr #78 for the emitter side.
+reads one. Recorded as k78 for the emitter side.
 
-**Amended by karr #78 / ADR 0011.** The JSON row of that table is no longer
+**Amended by k78 / ADR 0011.** The JSON row of that table is no longer
 what happens: `_float_roundtrips` now answers *no* when the reparsed leaf is
 not a float, and the `Math::BigFloat` carrier writes the canonical decimal as a
 **bare number** — measured, byte-identical to the bare-NV document for the
@@ -115,10 +115,10 @@ the wire's: it is the text the document actually contains, the text the digest
 covers, and it is already computed. Matching sops's printed spelling instead
 would mean writing a second float formatter — Go's `%g` rules, reimplemented
 next to the `%f` rules we already have — for a cosmetic difference at two ends
-of the range. Recorded as karr #79 in case the maintainer wants the printed
+of the range. Recorded as k79 in case the maintainer wants the printed
 form after all.
 
-**Amended by karr #79, which closed on this measurement rather than on a
+**Amended by k79, which closed on this measurement rather than on a
 change.** The table above is a YAML measurement and the two ends it names are
 examples, not the boundaries. Re-measured against sops 3.13.3 across the whole
 double range, one document per row, both formats:
@@ -181,7 +181,7 @@ An **unencrypted** slot was the exception recorded above: in JSON the emitter
 quoted it, so a caller who put an extracted float into an `_unencrypted` key in
 a JSON document got a string there.
 
-**Superseded by ADR 0011 (karr #78).** That path now writes a number in both
+**Superseded by ADR 0011 (k78).** That path now writes a number in both
 formats, and the `extract` → `encrypt` round trip a caller most obviously
 writes produces a correct document rather than a retyped or refused one. What
 survives of this paragraph is the spelling caveat in the amendment above, and
@@ -212,11 +212,11 @@ string is a `str` to `detect_type`, so a caller who extracts a float and writes
 it back encrypts `type:str`. (`value_to_bytes`'s own return happens to carry
 `NOK` today, so it would *not* behave like a plain string — that is an accident
 of how `_float_bytes` finds the shortest form, measured and recorded as karr
-#80, not a property to build on.) Turning a number into a string on the way out of a
+k80, not a property to build on.) Turning a number into a string on the way out of a
 codec is the mirror of the defect ADR 0002 removed on the way in.
 
 **(d) Put the dualvar in `_deserialize_value`, so `decrypt` returns them too.**
-The tempting one, because it would also have covered karr #73 in a single
+The tempting one, because it would also have covered k73 in a single
 place. It does neither: a dualvar built on the pre-ADR-0009 NV inherits that
 NV's `IOK` and stays an `int` to `detect_type`, and a dualvar in the decrypt
 tree reaches both emitters with the measured results in the table above.

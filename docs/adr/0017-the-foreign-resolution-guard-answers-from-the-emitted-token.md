@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: yaml, mac, wire-format, guards, interop
-- Resolves karr #91
+- Resolves k91
 - Amends ADR 0013 (same guard, same model of Go, different step order — the
   refusal rule itself is unchanged and no document moves)
 - Depends on ADR 0016 (Perl's own boolean SV is the one leaf class whose
@@ -37,7 +37,7 @@ boolean SV is the exception, and it breaks the proxy in both directions:**
 | `!!1` | `1` | `true` | `True` |
 | `!!0` | *(empty)* | `false` | `False` |
 
-karr #90 came through step 2 by exactly this route: before that fix the digest
+k90 came through step 2 by exactly this route: before that fix the digest
 text for `!!1` was `1`, so `_go_agrees("1", "1")` was true, the guard returned
 **before it had asked the emitter anything**, and the document carried a bare
 `true` against a digest of `1` — `sops -d` exit 51. The fix was one level down,
@@ -46,7 +46,7 @@ because the digest text moved to `True` and `1` no longer resolves to it.
 
 Step 1 has the mirror-image hole and it is still open: `!!0` stringifies to the
 empty string, which `$GO_LOOKS_AT` does not match, so the guard returns before
-step 2 as well. Measured after the karr #90 fix, sops 3.13.3: the answer is
+step 2 as well. Measured after the k90 fix, sops 3.13.3: the answer is
 correct anyway — the emitted `false` resolves through `%GO_CONSTANT` to `False`,
 which is the digest — so this is a latent gap, not a live defect.
 
@@ -65,7 +65,7 @@ rest are `undef`, or references that ADR 0008's `reject` takes first).
   by YAML::XS in its default boolean mode). In all four the answer is `agrees`,
   so today's early return is right by luck.
 - **Gap B — step 2 accepts while the token disagrees: 0 of 220 today.** It was
-  not 0 before karr #90; it was the defect.
+  not 0 before k90; it was the defect.
 
 **Whether the cheap gate can be made sound without asking the emitter.** The
 claim it rests on is: *for a leaf that is not a boolean, the token starts with
@@ -101,7 +101,7 @@ End to end, `File::SOPS->encrypt` over a mixed 400-leaf document: 16.1ms with
 the guard off, 17.1ms today, **19.5ms under E**, 23.9ms under A. Over 40 leaves
 the three are within noise of each other (4.8 / 5.3 / 5.4ms).
 
-A is what karr #91 costed and ADR 0013 declined, and the measurement says the
+A is what k91 costed and ADR 0013 declined, and the measurement says the
 ADR was right about the price: it is the leaves Go's resolver **ignores** that
 pay it, and in a real configuration file those are the majority. E buys the same
 answer for the leaves that can disagree. Over the same 220 leaves: today 199
@@ -168,13 +168,13 @@ that was refused is written, and `emit`'s arguments are unchanged.
 **Keep today's form and close the ticket with the measurement.** Defensible on
 the numbers as they stand — gap A is 4 rows out of 220 and all four answer
 correctly. It is not defensible on the mechanism: gap B was the same "latent"
-shape until karr #90 made it live, and this session made two latent guard gaps
-live three times (#84 → #86 → #89 → #90, each one "the guard does not see it").
+shape until k90 made it live, and this session made two latent guard gaps
+live three times (k84 → k86 → k89 → k90, each one "the guard does not see it").
 A guard whose correctness depends on the digest text of one type never colliding
 with the resolution of another type's stringification is a coincidence that has
 already failed once.
 
-**Ask the emitter for every leaf (option A).** The literal reading of karr #91,
+**Ask the emitter for every leaf (option A).** The literal reading of k91,
 and the one ADR 0013 costed. Measured above: it is 3x on the leaf class that
 dominates a real document — strings the resolver ignores, 5.2ms → 17.0ms per
 1000 — and it buys nothing over E, because a token the resolver ignores cannot
@@ -184,10 +184,10 @@ disagree with anything. 0 rows of 900 differ between A and E.
 1000 against 6.8ms for one `Dump` each, so A would become nearly free. It needs
 the walk split into a collect phase and a check phase, which moves the croak out
 of the walk and away from the leaf that caused it — the key path in the message
-is karr #68's fix and is worth more than 5ms per 1000 leaves. Reconsider only if
+is k68's fix and is worth more than 5ms per 1000 leaves. Reconsider only if
 a document size ever makes the emit path matter.
 
-**Let the walk hand the guard a `bool` hint** — the narrower fix karr #91 itself
+**Let the walk hand the guard a `bool` hint** — the narrower fix k91 itself
 suggests. `_canonical_floats` already calls `detect_type($node) eq 'bool'` one
 line earlier, so the hint is free there and saves the guard's own call: 1ms per
 1000 string leaves. It widens `reject_scalar`'s contract with a fifth argument

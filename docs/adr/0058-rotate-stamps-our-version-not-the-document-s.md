@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #151
+- Resolves k151
 - Lane: api
 - **No code change.** Documentation-only: POD in `lib/File/SOPS/Metadata.pm` and
   this ADR. No test, no wire byte, no behaviour change. The behaviour this
@@ -64,8 +64,8 @@ NOTHING BREAKS. Measured on sops 3.13.3:
 - The only consumer of the field is sops itself, and sops uses it only to
   decide whether the document's version is one it can parse -- and 3.7.3 is.
 
-The defect class this looks like is not the defect class it is. karr #18
-(re-encrypting in place producing unrecoverable values) and karr #150
+The defect class this looks like is not the defect class it is. k18
+(re-encrypting in place producing unrecoverable values) and k150
 (silent document collapse to its last YAML document) are both "this library
 wrote a document that lost something". This ticket is the opposite: nothing
 on the document has been lost, and a field whose only consumer is a binary

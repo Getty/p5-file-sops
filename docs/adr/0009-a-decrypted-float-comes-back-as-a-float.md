@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: float, types, mac, wire-format, json, interop
-- Resolves karr #73
+- Resolves k73
 - Depends on ADR 0002 (a value's type comes from the scalar's SV flags — this
   is the same rule applied to the scalar *we* manufacture) and ADR 0006 (the
   canonical float text and the emitters' rendering of a bare NV)
@@ -53,7 +53,7 @@ The full read ladder, `encrypt_value(type => 'float')` → `decrypt_value` →
     9007199254740993  9223372036854775807
 
 and the remaining 25 — every non-integral value, every non-finite one, and
-every negative zero (ADR 0006 / karr #72 already returns a literal `-0.0`
+every negative zero (ADR 0006 / k72 already returns a literal `-0.0`
 there) — came back as `float`.
 
 ## Decision
@@ -87,7 +87,7 @@ Three things about this are deliberate:
 - **The sign branch stays.** `pack 'd'` on the text `-0` still yields a
   positive zero — Perl's numeric conversion settles that text as an integer
   zero before `pack` ever sees a double — so the explicit negative-zero
-  restoration from ADR 0006 / karr #72 is still doing the work, and its
+  restoration from ADR 0006 / k72 is still doing the work, and its
   throwaway-copy comparison is still load-bearing for the same reason.
 
 ### The digits change for a float that never was one
@@ -165,7 +165,7 @@ authenticated plaintext is unaffected.
 ## Rejected alternatives
 
 **Return a `dualvar` of the number and its canonical text.** It looks like it
-solves this and karr #61's `extract` half in one place, and it does not solve
+solves this and k61's `extract` half in one place, and it does not solve
 this one at all: measured, `dualvar($data + 0.0, '2')` carries `IOK|POK` — the
 flag is inherited from the numeric argument, so the value is still an `int` to
 `detect_type` unless the *numeric half* is fixed first, which is this ADR.

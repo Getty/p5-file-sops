@@ -1,19 +1,19 @@
 # ADR 0021 — A JSON number Go cannot hold is a float, not a refusal
 
 - Status: **proposed** — written as a form decision before any code, the way
-  karr #63's pass wrote ADR 0020. Every table below comes from a measurement
+  k63's pass wrote ADR 0020. Every table below comes from a measurement
   against sops 3.13.3 at `/tmp/sops`, with the guard under discussion switched
   off in a scratchpad monkey-patch rather than in `lib/`. The implementing
   lanes correct it where they measure something else, marked where it sits
   rather than smoothed over; lane 1 (`file-sops-wire`) has run and left two
   corrections, in "The two gates" and in "What changes for existing callers".
-  A third correction landed 2026-08-21 as karr #107: the cross-format YAML
+  A third correction landed 2026-08-21 as k107: the cross-format YAML
   rows split on `uint64max`, and that is not the discriminator — measured, it
   is whether ADR 0011's repair has to fire at all. Marked where it sits, in
   "The two gates".
 - Date: 2026-08-20
 - Tags: int, float, json, wire-format, guards, interop, parser
-- Resolves karr #101
+- Resolves k101
 - Depends on ADR 0002 (the type comes from the SV's public flags, which is why
   the answer has to be a different SV and not a different label), ADR 0005 (the
   JSON backend is named, so its decoder is ours to walk), ADR 0006 (the
@@ -21,9 +21,9 @@
   digest), ADR 0011 (the float repair this leaf then takes), ADR 0013 (the YAML
   side, which stays exactly as it is) and **ADR 0020**, whose mechanism this
   extends by one magnitude downwards
-- Neighbour, deliberately **not** resolved here: karr #104, the same window for
+- Neighbour, deliberately **not** resolved here: k104, the same window for
   a value that did not come from a JSON parse
-- Contradicts karr #101's own analysis in one place, and the contradiction is
+- Contradicts k101's own analysis in one place, and the contradiction is
   the reason the fix is one gate instead of a slot-dependent guard: see
   "What the ticket got wrong"
 
@@ -87,7 +87,7 @@ loses the digits itself before this library is ever involved.
 
 ### What the ticket got wrong
 
-karr #101's analysis says the guard "is not simply wrong — for an ENCRYPTED
+k101's analysis says the guard "is not simply wrong — for an ENCRYPTED
 slot it is right", and concludes the fix has to be slot-dependent and therefore
 belongs at emit time. Both halves were measured. One holds and one does not.
 
@@ -133,7 +133,7 @@ and handed to `sops -d`:
 | differs from it | 21 | **exit 51, MAC mismatch, 21 of 21** |
 
 No exceptions in either direction. It is the same round-trip notion ADR 0006
-uses and the same one the karr #63 pass sharpened: **digest stability is not a
+uses and the same one the k63 pass sharpened: **digest stability is not a
 numeric range, it is "the text is the shortest round-trip decimal of its
 double"**. `9223372036854776832` is inside the window, ends in three zeros, and
 fails — its double is `2^63` (ties-to-even) whose shortest decimal is
@@ -218,7 +218,7 @@ can reach them by parsing JSON and emitting YAML, which is a supported crossing:
 | unencrypted slot, `%.15g` form does not round-trip, canonical decimal ≤ `uint64max` | **croak**, ADR 0013's message |
 | unencrypted slot, canonical decimal > `uint64max` | written bare, `sops -d` **exit 0** |
 
-**Corrected 2026-08-21, karr #107.** This table had three rows and split them on
+**Corrected 2026-08-21, k107.** This table had three rows and split them on
 `uint64max` alone, which is measurably not the discriminator. The sweep that
 found it: 12 literals across the window × 2 formats × 2 slots, the float answer,
 against sops 3.13.3 — 7 of 48 cells croak, all of them unencrypted YAML, but
@@ -286,7 +286,7 @@ waste time on a string leaf, it retypes it. Measured on
 
 Three of four string leaves retyped, and the document either silently changes
 schema or stops being writable — from a walk that never reached the window at
-all. This is karr #32's mechanism and ADR 0002's rule, and it is the reason the
+all. This is k32's mechanism and ADR 0002's rule, and it is the reason the
 gate order is not negotiable rather than merely preferable. Two forms are safe
 and no third is: **test the flag first**, so the comparison only ever runs on a
 leaf that is already `IOK` and where it is a no-op, or compare a **copy**. The
@@ -310,7 +310,7 @@ middle row's budget absorbs it.
 
 ### Why the parser and not `assert_representable`
 
-karr #101 asked the question as "where does a slot-dependent guard go", and
+k101 asked the question as "where does a slot-dependent guard go", and
 ADR 0008, 0012 and 0013 all answered their own version of it with "emit time,
 never `assert_representable`". This decision does not need that answer, and the
 reason is worth stating because it is the line between the two ADRs:
@@ -367,7 +367,7 @@ written quoted), no boolean, `null`, container, `int64max`, `int64min` or
 ADR 0020 row.
 
 `prove -lr t/` with the change prototyped: **846 of 848**, and the two failures
-are `t/36` subtests 10 and 12 — the subtest whose name is *"karr #101 (open,
+are `t/36` subtests 10 and 12 — the subtest whose name is *"k101 (open,
 NOT fixed here): the uint64 window still stays an integer and still refuses"*,
 and one row of a flags table that lists `uint64_max` as a leaf outside the
 target class. Both are claims this ADR replaces on purpose.
@@ -450,12 +450,12 @@ oversight. Measured, it is also not fully right: of the 35-literal window
 sweep, 14 would have produced a working document in a JSON unencrypted slot and
 are refused. The other 21 would not, and the encrypted slot and both YAML slots
 are refusals in all 35. Closing that sliver needs the slot-dependent emit-time
-guard karr #101 sketched — a `mac_covered`-style flag threaded through
+guard k101 sketched — a `mac_covered`-style flag threaded through
 `Format::JSON::serialize`, a `reject_scalar` hook the JSON emitter does not
 have today, and the `int64` rung dropped from `_compute_mac`'s sweep and
 re-covered by `encrypt_value` for encrypted slots. That is a second, larger
 change with a much worse ratio, it loosens a guard rather than moving a parser,
-and it is filed as karr #104 rather than folded in. The refusal's
+and it is filed as k104 rather than folded in. The refusal's
 **message** should learn
 one sentence in the meantime: it currently offers only "pass it as a string",
 where the answer that matches sops is now "pass it as a float".
@@ -484,7 +484,7 @@ argument or error message changes.
 
 ## Rejected alternatives
 
-**The slot-dependent emit-time guard karr #101 describes.** It is the shape the
+**The slot-dependent emit-time guard k101 describes.** It is the shape the
 ticket derives from a correct premise, and the measurements take it off the
 table twice. It leaves the **encrypted** slot refusing documents sops writes and
 reads (`type:float`, measured identical to ours), because the ticket assumed
@@ -500,7 +500,7 @@ branch, for a strictly worse result.
 
 **Refuse in the parser instead — reject the document outright.** It is honest
 and it is what we do today, and it refuses documents `sops -e` writes and
-`sops -d` reads. Taken off the table for karr #63 by the maintainer on
+`sops -d` reads. Taken off the table for k63 by the maintainer on
 2026-08-20 for the same reason, and the reason has not changed.
 
 **Keep the leaf an `int` and teach `value_to_bytes` to write `FormatFloat` for

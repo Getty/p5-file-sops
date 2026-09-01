@@ -6,7 +6,7 @@
   the measurement (see "What the ticket had wrong").
 - Date: 2026-08-21
 - Tags: float, yaml, wire-format, interop, parser, mac
-- Resolves karr #105
+- Resolves k105
 - Depends on ADR 0001 (order and values come from two different parses, and a
   leaf repaired in the parse reaches the digest through the side that was
   repaired), ADR 0002 (the type comes from the SV — which is why this decision
@@ -15,7 +15,7 @@
   the Go resolution model, which already holds the answer and is re-verified
   here) and ADR 0023, whose walk this one runs after and whose stated
   disjointness it has to keep true
-- Does **not** touch the non-finite guard from karr #59 in
+- Does **not** touch the non-finite guard from k59 in
   `Encrypted::assert_representable`. A measurement that says the guard is now
   too wide for one scalar shape is in "What this leaves broken", and is filed
   rather than acted on
@@ -158,7 +158,7 @@ The walk runs after the `sops` section is split off and after ADR 0023's
 4. **replaces only where both sides agree.** The `YAML::XS` leaf must be a
    defined, unreferenced scalar with public `SVf_POK` and neither public
    `SVf_NOK` nor public `SVf_IOK` — a plain string, read off the SV, nothing
-   numified (ADR 0002, karr #32) — whose text is a key of `%GO_CONSTANT`. The
+   numified (ADR 0002, k32) — whose text is a key of `%GO_CONSTANT`. The
    `YAML::PP` leaf at the same position must be a scalar with public `SVf_NOK`
    whose NV is `NaN` or `±Inf`. The replacement is
    `dualvar($double, $token)`: the double derived from `%GO_CONSTANT`'s own
@@ -187,7 +187,7 @@ whose string half is the text the document contains.
 
 ### What the ticket had wrong
 
-karr #105 says the repair "would have to manufacture a real `+Inf` on parse,
+k105 says the repair "would have to manufacture a real `+Inf` on parse,
 which `assert_representable` then refuses on any re-encrypt, so `rotate` breaks
 on a document we just learned to read". Measured, both halves of that are off:
 
@@ -255,7 +255,7 @@ what sops digests for the same document, and it is the entire fix.
 ### What this leaves broken, and why it is filed rather than fixed
 
 A document this now reads still cannot be written back. `_compute_mac` runs
-`assert_representable` over every leaf, and karr #59's non-finite guard refuses
+`assert_representable` over every leaf, and k59's non-finite guard refuses
 the dualvar.
 
 The guard's stated premise does not hold for this scalar shape, and that was
@@ -267,7 +267,7 @@ non-finite NV, which `YAML::XS` writes as `Inf`; it is too wide for one that
 carries a `%GO_CONSTANT` token as its string half.
 
 Narrowing it is a decision about a guard, with its own corpus and its own ADR,
-and karr #105 says in as many words not to take it here. Filed as karr #113.
+and k105 says in as many words not to take it here. Filed as k113.
 
 ### Cost
 
@@ -296,7 +296,7 @@ mapping **key** beside a quoted one as a value, an empty document, and a token
 inside the `sops` branch. All seven answer correctly. The recursive one is the
 only place the fail-safe fires — `YAML::PP` refuses it outright (`Found cyclic
 ref for alias 'a'`) where `YAML::XS` hands back a real Perl cycle, so nothing
-is repaired and the document is refused downstream by karr #110's guard anyway.
+is repaired and the document is refused downstream by k110's guard anyway.
 
 All three walks carry their own visited set. A recursive YAML anchor really does come
 back from `YAML::XS` as a cycle (ADR 0023), and the parallel walk would follow
@@ -304,7 +304,7 @@ it twice over.
 
 ## Rejected alternatives
 
-**Repair the MAC path instead of the parse** — karr #105's option (ii): leave the
+**Repair the MAC path instead of the parse** — k105's option (ii): leave the
 leaf a string in the tree and give the digest Go's bytes for this one token. It
 needs the format-blind `_value_to_bytes` in `File::SOPS` to learn a YAML rule,
 which is a second value→bytes conversion beside `Encrypted::value_to_bytes` —
@@ -314,7 +314,7 @@ would keep handing back the string `.inf` for a slot sops reads as a float. And
 without the style oracle it breaks the quoted row, exactly like every other
 text-keyed repair.
 
-**Refuse the document with a message that names the path** — karr #105's option
+**Refuse the document with a message that names the path** — k105's option
 (iii), and ADR 0024's shape. It needs the same oracle, the same walk and the same
 ADR, and then declines to use the answer it just computed: with plain/quoted in
 hand the leaf can simply be read correctly. Refusing would also be strictly worse
@@ -332,7 +332,7 @@ three-element list above is the counter-example in one document.
 
 **Loosen the non-finite guard so the write path works too.** It is the other
 half of the round trip and it is a separate decision about a guard that is right
-about every value it was written for. karr #105 says not to; karr #113 is where
+about every value it was written for. k105 says not to; k113 is where
 it gets its own measurement.
 
 **Put the rule in `detect_type`.** One rung, in the single source of truth for

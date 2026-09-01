@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-10
 - Tags: yaml, mac, wire-format, guards, interop
-- Resolves karr #65
+- Resolves k65
 - Depends on ADR 0002 (a value's type comes from the scalar, which is why a
   blessed leaf is `str` to the digest) and ADR 0006 (which built the `reject`
   hook this uses, and applied it to two classes on the JSON side only)
@@ -107,7 +107,7 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   value: an error goes into bug reports, and a plaintext secret that lands
   there was not encrypted for any practical purpose.
 
-  **Amended by karr #68:** it now also names the leaf's key path, in front of
+  **Amended by k68:** it now also names the leaf's key path, in front of
   the message (`servers:1:weight: cannot write …`, or `(document root): …`).
   The path comes from `canonical_float_tree`, which passes it to `reject` as a
   second argument, and is the shape the MAC walk's own messages use. Keys, not
@@ -136,10 +136,10 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   `\1` / `\0` is written by `Cpanel::JSON::XS` as bare `true` / `false` while the
   digest covers `SCALAR(0x…)` — self-MAC FAIL, `sops -d` exit 51, silently.
   Same defect class, different trigger, and the fix is one more condition in
-  `Format::JSON::_reject_foreign_bignum`. Filed as karr #66 rather than folded
+  `Format::JSON::_reject_foreign_bignum`. Filed as k66 rather than folded
   in, so that this change stays the one the ticket describes.
 
-  **Closed by karr #66 (the edit to `_reject_foreign_bignum` -- renamed to
+  **Closed by k66 (the edit to `_reject_foreign_bignum` -- renamed to
   `Format::JSON::_reject_referenced_leaf`, because the two-name bignum
   whitelist it was named for is gone -- that turns it into the same
   exact-class rule the YAML side uses).** The JSON guard now refuses every referenced leaf except an exact
@@ -150,10 +150,10 @@ that refuses every referenced leaf other than an exact `JSON::PP::Boolean`.**
   `JSON->true` / `JSON->false` still write as bare `true` / `false`, and
   `t/26-json-unblessed-ref-guard.t` pins the whole exchange (13 subtests,
   5 of them driven against the binary). No new ADR: the rationale is this
-  one's, and a karr #66 ADR would be a "same rule, same exception, same
+  one's, and a k66 ADR would be a "same rule, same exception, same
   rationale, JSON side" of itself.
 
-- **The encrypted-slot half of the same defect closed by karr #67.** The
+- **The encrypted-slot half of the same defect closed by k67.** The
   decision above explicitly rejected putting the rule in
   `assert_representable`, on the grounds that doing so would refuse
   encrypted-slot documents this library reads and writes correctly today:
@@ -247,7 +247,7 @@ files it can currently open. Measured, not assumed: an encrypted
 `Math::BigFloat`, an overloaded object and a `qr//` all round-trip through
 `encrypt`/`decrypt` today in YAML and in JSON.
 
-**Partially reopened by karr #67.** The rationale that blocked the rule
+**Partially reopened by k67.** The rationale that blocked the rule
 from living in `assert_representable` — "would refuse documents this
 library writes and reads correctly today" — applies to *blessed* objects,
 not to unblessed ones. The blessedness of the leaf, not the format

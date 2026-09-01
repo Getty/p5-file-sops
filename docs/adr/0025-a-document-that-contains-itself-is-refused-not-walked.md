@@ -3,10 +3,10 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: api, guards, yaml, robustness, interop
-- Resolves karr #110
+- Resolves k110
 - Related: ADR 0008 (a leaf this library cannot faithfully carry is refused
   rather than approximated — this is the same rule for a whole document)
-- Opens karr #112 (an *acyclic* alias bomb is a separate exposure and is not
+- Opens k112 (an *acyclic* alias bomb is a separate exposure and is not
   addressed here)
 
 ## Context
@@ -129,4 +129,4 @@ An **acyclic** alias bomb still hangs. sops has a second guard for it —
 measured on a 25-level diamond — and this library has no equivalent: the
 expansion is exponential in `_sorted_leaves` and `_encrypt_tree`, and the
 document is legitimately acyclic, so this ADR's guard correctly does not fire.
-That is a separate exposure with a separate answer, and it is karr #112.
+That is a separate exposure with a separate answer, and it is k112.

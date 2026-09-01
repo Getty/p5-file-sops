@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: yaml, mac, wire-format, guards, interop, diagnostics
-- Resolves karr #87
+- Resolves k87
 - Revises ADR 0013's "`mac_only_encrypted` documents are not affected, and are
   deliberately left out" — the same rule, the same model of Go, and now a
   warning where the MAC has nothing to say
@@ -28,7 +28,7 @@ leaf `mode_unencrypted: 0755`:
 | `mac_only_encrypted = 1` | **exit 0** | **493**, where this library reads 755 |
 
 Nothing fails. The file says `0755`, sops reads the integer 493, File::SOPS
-reads 755, and no reader of either complains. The question karr #87 asks is not
+reads 755, and no reader of either complains. The question k87 asks is not
 whether the MAC holds — it does — but whether a caller who turns
 `mac_only_encrypted` on can find out that a `mode: 0755` in their document is a
 different number for the two implementations.
@@ -54,7 +54,7 @@ warning **would** have said:
   `False` **string** leaf is a `str` here and a `bool` in Go, while both digest
   the bytes `True`/`False` — so the guard, which compares digest bytes, is
   correct to accept it. ADR 0013 lists it as an agreeing row for the same
-  reason. Filed as karr #92.
+  reason. Filed as k92.
 - **2 documents sops refuses outright** (`0xffffffffffffffff`, exit 25,
   `Cannot walk value, unknown type: uint64`) — unchanged, and they warn.
 - **0 documents stop being written.** All 217 are written before and after, and
@@ -85,7 +85,7 @@ instead. `serialize` installs the same check in a warning mode for a
   a warning goes to logs.
 - `carp`, not `warn`: the house rule that a diagnostic reports the caller's line
   applies to both, and `@CARP_NOT` in this module already makes it walk out of
-  the emitter and the walk (karr #71). A caller who wants it quiet localises
+  the emitter and the walk (k71). A caller who wants it quiet localises
   `$SIG{__WARN__}`, which the POD says.
 
 ## Consequences
@@ -144,7 +144,7 @@ Lexical warning categories are checked against the *caller's* bitmask at the
 point the warning is raised, and this one is raised deep inside the emitter's
 own walk, where the caller's lexical scope is not in view. It would need
 `warnings::enabled_at_level` gymnastics keyed to a recursion depth that changes
-with the leaf — the same reason `$Carp::CarpLevel` was rejected in karr #71.
+with the leaf — the same reason `$Carp::CarpLevel` was rejected in k71.
 `$SIG{__WARN__}` is one line and works.
 
 **A return value or a callback instead of a warning.** `serialize` returns a

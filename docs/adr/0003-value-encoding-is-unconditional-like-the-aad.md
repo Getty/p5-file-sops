@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-09
-- Revised: 2026-08-23 — Known limitation recorded on the write path of `type:bytes` (karr #136): sops 3.13.3 panics on the read path. The decision stands; the warning is documented here, in the POD, and in t/71.
+- Revised: 2026-08-23 — Known limitation recorded on the write path of `type:bytes` (k136): sops 3.13.3 panics on the read path. The decision stands; the warning is documented here, in the POD, and in t/71.
 - Tags: encoding, mac, interop, wire-format
 - Completes the encoding rule begun in commit 11658c3 (AAD) and depends on ADR 0002
 
@@ -98,7 +98,7 @@ all of it".
 
 ADR 0002 collapsed the type ladder and the value→bytes conversion into a single
 `File::SOPS::Encrypted->value_to_bytes`. The ticket for this defect
-(karr #27) was written before that and assumed the fix would have to touch
+(k27) was written before that and assumed the fix would have to touch
 "both value conversions". **It does not: there is exactly one left**, and
 `_utf8_bytes` has exactly one caller. The behavioural change here is one
 removed conditional. That is worth stating because it is the direct payoff of
@@ -183,12 +183,12 @@ detected from inside Perl.
 
 Existing encrypted documents are unaffected; nothing about reading changes.
 
-### A latent trap for karr #30
+### A latent trap for k30
 
 `File::SOPS::_value_to_bytes` calls `value_to_bytes($value)` with **no type**,
 so a leaf reaches the digest as `str` and gets encoded. `type:bytes` can only
 be reached today through `File::SOPS::Encrypted->encrypt_value` directly, where
-there is no MAC, so the two cannot currently disagree. If karr #30 adds a
+there is no MAC, so the two cannot currently disagree. If k30 adds a
 per-leaf type override to `File::SOPS->encrypt`, the MAC path must be given the
 type as well or a `type:bytes` leaf will be hashed encoded and encrypted raw —
 a document that fails its own MAC. Noted on that ticket.
@@ -213,7 +213,7 @@ library wrote and read back agreed with itself perfectly while sops saw binary.
 
 ## A known limitation on the write path: sops 3.13.3 cannot read a `type:bytes` cell
 
-Measured against sops 3.13.3 on 2026-08-21 during the karr #77 / karr #136
+Measured against sops 3.13.3 on 2026-08-21 during the k77 / k136
 investigation, where the same finding was first named as a neighbouring
 paragraph in the Notes section of
 [ADR 0035](https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0035-an-untyped-stores-unencrypted-leaf-is-written-as-the-bytes-the-digest-covers.md):
@@ -242,7 +242,7 @@ hashable type in Go — that is where the panic comes from.
 The decision above is unaffected: `type => 'bytes'` is still the right escape
 hatch for a caller who genuinely has bytes rather than characters, and the
 document File::SOPS writes for such a value is still the document sops would
-write if sops wrote one. The decision being recorded here is the one karr #136
+write if sops wrote one. The decision being recorded here is the one k136
 explicitly asked for — **warn, do not refuse**:
 
 - A document that contains a `type:bytes` cell cannot be opened by `sops 3.13.3`
@@ -259,7 +259,7 @@ explicitly asked for — **warn, do not refuse**:
 - No fix is on the sops side at the time of writing. The sops repo's issue
   tracker is the only place that can land one.
 
-Cross-references: karr #136, `t/71-sops-3133-panics-on-type-bytes.t`, the POD
+Cross-references: k136, `t/71-sops-3133-panics-on-type-bytes.t`, the POD
 warnings at `File::SOPS::Encrypted::encrypt_value` and `value_to_bytes`, and
 the neighbouring-finding paragraph in ADR 0035 that recorded the same
 measurement before the decision went in.

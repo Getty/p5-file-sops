@@ -9,7 +9,7 @@
   sits.
 - Date: 2026-08-21
 - Tags: float, str, yaml, wire-format, interop, parser, mac
-- Resolves karr #102
+- Resolves k102
 - Depends on ADR 0002 (the type comes from the SV's public flags — which is why
   the answer has to be a different SV and not a different label, and why the
   predicate reads flags rather than text), ADR 0006 (`FormatFloat(v,'f',-1,64)`
@@ -18,10 +18,10 @@
   already answers correctly for every spelling below and needs no change) and
   ADR 0020, which named this ticket as the lever and expected it to answer for
   **both** parsers at once — measured here, it must not
-- Neighbours, deliberately **not** resolved here: karr #105 (a bare `.inf`
+- Neighbours, deliberately **not** resolved here: k105 (a bare `.inf`
   written by sops fails our MAC — the same magnitude, the opposite direction,
   and its repair would collide with the guard this one leaves alone) and
-  karr #106 (a literal that *underflows* to zero, where no non-finite NV ever
+  k106 (a literal that *underflows* to zero, where no non-finite NV ever
   appears and this predicate cannot fire)
 
 ## Context
@@ -40,7 +40,7 @@ literal too large for a double. Both halves reproduced at c8eee80, sops 3.13.3:
     File::SOPS->encrypt of the same tree
       -> croak, "value is a non-finite float (+Inf)"
 
-The **read** half is the one karr #102 was filed without. A file sops writes and
+The **read** half is the one k102 was filed without. A file sops writes and
 sops verifies is unreadable here, and for a distribution whose entire claim is
 byte compatibility that is the centre of the ticket rather than its edge.
 
@@ -129,11 +129,11 @@ scalar with **public** `SVf_NOK` and **public** `SVf_POK` set, whose NV is `NaN`
 or `±Inf`. The replacement is a plain copy of the scalar's PV. Nothing numifies
 anything — `B` reads the NV and the PV out of the SV's own slots — so the walk
 cannot retype a caller's scalar the way a numeric comparison on it would
-(karr #32).
+(k32).
 
 Three things this deliberately is not:
 
-- **It is not a loosened guard.** The non-finite refusal from karr #59 is
+- **It is not a loosened guard.** The non-finite refusal from k59 is
   untouched, and a caller who hands `encrypt` a real `9**9**9` still gets it
   (measured, 6 of 6 croaks before and after, encrypted and unencrypted slot
   alike). What is removed is an artefact of *our parser*, not a rule about
@@ -220,9 +220,9 @@ reads what the other implementation reads.
 | the same in an **encrypted** slot | croak (`assert_representable` runs before encryption) | `type:str`, the literal verbatim — sops's own token |
 | `decrypt` / `extract` of such a slot | a real Perl `Inf` / `NaN`, on the three documents that read at all | the literal's text |
 | an **encrypted** `type:float` whose plaintext is `+Inf` / `-Inf` / `NaN` | a real Perl non-finite float | **unchanged** — byte-identical doubles, measured `000000000000f07f` / `f0ff` / `f8ff` before and after |
-| `encrypt(data => { v => 9**9**9 })` | croak (karr #59) | **unchanged** — croak |
-| a bare `.inf` in an unencrypted slot | MAC verification failed | **unchanged** — karr #105 |
-| `1e-400` | `type:int`, digest `0` | **unchanged** — karr #106 |
+| `encrypt(data => { v => 9**9**9 })` | croak (k59) | **unchanged** — croak |
+| a bare `.inf` in an unencrypted slot | MAC verification failed | **unchanged** — k105 |
+| `1e-400` | `type:int`, digest `0` | **unchanged** — k106 |
 | JSON, any of the above | croak | **unchanged** — croak, which is what sops does |
 
 ### Cost
@@ -231,11 +231,11 @@ One tree walk per YAML parse, reading two flags per scalar leaf. It carries its
 own visited set, because a recursive YAML anchor (`root: &a` / `b: *a`) really
 does come back from `YAML::XS` as a cycle; that keeps this walk terminating and
 does not pretend to fix the encrypt and decrypt walks, which hang on such a
-document today and are filed as karr #110.
+document today and are filed as k110.
 
 ## Rejected alternatives
 
-**Accept the divergence and document it** — karr #102's own option (ii). It was
+**Accept the divergence and document it** — k102's own option (ii). It was
 written before the read half was measured, and the read half is what removes it
 from the table: it would make permanent the statement that valid `sops` output
 is unreadable here, for ten documents the reference writes and verifies.
@@ -267,9 +267,9 @@ distribution names as its signature defect.
 
 **Widen the predicate to any leaf whose Go-resolved type differs from ours.**
 That is a general widening with its own corpus and its own failure modes, and it
-is what karr #106 asks as an open question. It would also swallow karr #105,
+is what k106 asks as an open question. It would also swallow k105,
 whose repair has to go the *other* way — manufacture a real `+Inf` where our
-parser has a string — and would then collide with the karr #59 guard. Those two
+parser has a string — and would then collide with the k59 guard. Those two
 are separate tickets because they are separate decisions.
 
 **Ask `YAML::PP` what the leaf is.** Rejected here for the reason ADR 0013 gives:

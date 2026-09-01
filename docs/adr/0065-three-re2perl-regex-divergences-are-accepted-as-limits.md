@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-23
-- Resolves karr #165
+- Resolves k165
 - Depends on ADR 0048 (which closed 28 of the 29 measured (rule, key)
   disagreements and recorded these three as Limits there), ADR 0051 (which
   split the refusal between the read and write paths), ADR 0038 (the
@@ -26,7 +26,7 @@ left three rows standing:
 | `$` before trailing newline | `^foo$` | `"foo\n"` | matches (`$` is `(?=\n?\z)`) | no match (`$` is `\z`) | secret-bare |
 | `\p{NAME}` Go does not have | `\p{Word}` | `"Word"` | matches | rule compile error, matches nothing | secret-bare |
 
-karr #165 was opened to decide whether any of the three is reachable by
+k165 was opened to decide whether any of the three is reachable by
 a fix proportionate to one rule nobody has been seen to write. The
 measurement it took is the one this ADR records.
 
@@ -97,7 +97,7 @@ a rule nobody has been seen to write.
 `(?i)^ss$` over `ß` leaves the value bare here and encrypted at sops.
 There is no Perl flag that reproduces RE2's simple folding without also
 breaking the k/KELVIN and s/LONG-S folds. The (rule, key) pair is the
-only row of the 43 measured after #161 still in the secret-bare
+only row of the 43 measured after k161 still in the secret-bare
 direction.
 
 ### Shape 2 — accept the limit

@@ -3,10 +3,10 @@
 - Status: accepted
 - Date: 2026-08-20
 - Tags: float, yaml, wire-format, type-detection, interop
-- Resolves karr #89
+- Resolves k89
 - Amends ADR 0002 (the type ladder gains its one exception) and ADR 0013 (the
   Go model's float conversion, which lost the same sign one level down)
-- Depends on ADR 0006 and its karr #62 amendment (the emitted decimal has to
+- Depends on ADR 0006 and its k62 amendment (the emitted decimal has to
   parse back to the same double, which is why a negative zero is written `-0.0`
   and not `-0`) and ADR 0014 (`pack`/`unpack` is the only copy of a double that
   keeps the sign of a zero, in every round)
@@ -82,9 +82,9 @@ This is ADR 0002's own contamination note — "a caller's `$h{port} > 1024`
 retypes the document" — landing on the one value where the retyping also changes
 the **bytes**. `if ($ratio == 0)` before encrypting turned a `-0` into a `0` in
 the document, silently, and whether it did depended on whether the caller had
-looked at the value. karr #32 in a different frame.
+looked at the value. k32 in a different frame.
 
-### Why the karr #86 guard waved it through, which is the interesting part
+### Why the k86 guard waved it through, which is the interesting part
 
 ADR 0013's `Format::YAML::_go_scalar_bytes` models `yaml.v3` and exists to catch
 exactly a document that disagrees with its own MAC. It answered `0` for
@@ -125,7 +125,7 @@ to the float `-0`, writes the canonical text `-0`, and then re-reads that as an
 *integer* and rejects its own file. Every exponent spelling above does the same.
 So unlike ADR 0013's `mode: 0755`, there is no "pass what sops itself writes"
 here — what sops writes is broken, and `-0.0` is the only spelling both
-implementations read as the double the digest covers. That is karr #62's finding
+implementations read as the double the digest covers. That is k62's finding
 and it is unchanged.
 
 In an **encrypted** slot sops is self-consistent and unambiguous:
@@ -179,7 +179,7 @@ retains the source text of every scalar it parses and writes it back verbatim,
 `_float_roundtrips` reparses that and gets the same `-0` out, so the leaf never
 reaches the carrier. In JSON the leaf now takes the float branch and ADR 0014's
 carrier writes `-0.0`, which is what a negative zero has been written as there
-since karr #88.
+since k88.
 
 ### Why this is still the SV deciding, and not a pattern
 
@@ -276,7 +276,7 @@ changed under them depending on whether anything had compared it first.
 verify: before this change the file verified against **our own** MAC (both sides
 were wrong together) and failed against sops; now both sides say `-0`. A
 `type:float` plaintext of `-0` already came back as a negative zero
-(ADR 0009 / karr #72), so nothing on the decrypt path needed a second change.
+(ADR 0009 / k72), so nothing on the decrypt path needed a second change.
 
 ### The model is a model, and it drifted
 
@@ -292,7 +292,7 @@ where a conversion is shared between them.
 ## Rejected alternatives
 
 **Fix only `_go_float`, and let the guard refuse these documents.** The obvious
-minimal change, and karr #89's own first suggestion. Measured on the same
+minimal change, and k89's own first suggestion. Measured on the same
 corpus: **12 rows move and all 12 go from `sops -d` exit 51 to a croak.** It
 fixes neither half of the defect — the twelve JSON rows still croak for the
 wrong reason, the forty encrypted-slot rows still write `type:int` / `0`, and a
@@ -301,7 +301,7 @@ itself stores without complaint in an encrypted slot, and the refusal cannot
 name anything to pass instead, because `-0` is what sops writes and `-0` is what
 breaks. ADR 0013 refused `0755` on the strength of being able to say "pass 493,
 that is what sops writes"; there is no such sentence here. The repository's own
-precedent — karr #62, #78, #88 — is to write the spelling that works.
+precedent — k62, k78, k88 — is to write the spelling that works.
 
 **Read `NOK` before `IOK`.** One line, no bit comparison, and it fixes every row
 this ADR fixes. Measured: **114 rows move instead of 64**, and the extra 50 are
@@ -312,7 +312,7 @@ and a plain `0.0` that a caller happened to compare. Their digest bytes were
 already right and their documents already worked; moving them is 50 rows of
 unmeasured wire change to fix a value that is one row of it. It also sweeps in
 Perl's boolean sentinels, which carry both flags and are a separate defect with
-a separate answer (karr #90).
+a separate answer (k90).
 
 **Compare with `$nv == 0 && sprintf('%g', $nv) =~ /^-/`, or any numeric test.**
 `==` cannot tell the two zeroes apart, which is the whole problem, and every

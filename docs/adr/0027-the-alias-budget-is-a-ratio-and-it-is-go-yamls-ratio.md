@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-08-21
 - Tags: api, guards, yaml, robustness, interop, dos
-- Resolves karr #112
+- Resolves k112
 - Related: ADR 0025 (a document that contains itself is refused — this is the
   other half of that finding, and the two guards are ordered)
 
@@ -35,7 +35,7 @@ below it expands each alias, as it must, because sops expands them too
 | 25 | did not return | — |
 
 The growth is a clean doubling, so 25 levels is roughly 4,400 s and tens of
-gigabytes. karr #110 measured the climb at about 1 GB of RSS every 3 seconds.
+gigabytes. k110 measured the climb at about 1 GB of RSS every 3 seconds.
 
 Both directions are exposed, and the caller-supplied-structure origin is too:
 
@@ -218,10 +218,10 @@ affecting any measured document:
 - **Merge keys.** `YAML::XS` does not expand `<<: *base`; it hands back a
   literal `<<` key whose value is the shared hash. **Neither does sops**, so
   this is a smaller disagreement than first written here, and possibly none at
-  all. *Corrected 2026-08-21, karr #119.* The original note said "go-yaml
+  all. *Corrected 2026-08-21, k119.* The original note said "go-yaml
   expands the merge", which is true only when go-yaml decodes into a Go map or
   struct; sops decodes into a `yaml.Node` tree, where it does not. Measured
-  while landing karr #116: `sops -e` on `derived:` / `<<: *b` writes
+  while landing k116: `sops -e` on `derived:` / `<<: *b` writes
   `!!merge <<:` carrying its own leaf, encrypted under the AAD path
   `derived:<<:x:` and digested in document order — so `<<` is an ordinary key
   to sops, not an expansion (ADR 0028 has the measurement). The sharing is
