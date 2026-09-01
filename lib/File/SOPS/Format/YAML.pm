@@ -1943,15 +1943,27 @@ sub emit {
       : $args{warn_foreign_resolution} ? \&_warn_foreign_resolution
       :                                  undef;
 
-    # docs/adr/0070: force-quoting is the MAC-covered path only. There a
-    # divergent leaf makes the file fail its own MAC (the non-finite class) or
-    # silently retypes a caller's string (the True/False class), and quoting the
-    # safe subset is what lets such a document be written at all. The plaintext
-    # path (no guard) and the mac_only_encrypted (warn) path are unchanged --
-    # there the leaf is not covered by the MAC, the document already works, and
-    # ADR 0070 scoped the change to the MAC-covered path -- so both go straight
-    # to the one Dump below, byte-identical to before.
-    return _emit_docs($class, \@docs, $reject_scalar) unless $args{mac_covered};
+    # Force-quoting runs on EVERY path except mac_only_encrypted (warn):
+    #
+    #   * MAC-covered (docs/adr/0070): a divergent leaf makes the file fail its
+    #     own MAC (the non-finite class) or silently retypes a caller's string
+    #     (the True/False class), and quoting the safe subset is what lets such a
+    #     document be written at all.
+    #   * Plaintext -- decrypt_file, edit (karr #186): sops writes `".inf"` and
+    #     `"True"` double-quoted, and without this the plaintext emitter wrote
+    #     them bare, so a decrypt_file -> re-encrypt round trip flipped the leaf
+    #     from string to float/bool (a bare `.inf` resolves to +Inf at the next
+    #     parse, docs/adr/0026). Quoting the same safe subset makes the plaintext
+    #     emitter a faithful inverse of what sops wrote.
+    #
+    # The mac_only_encrypted (warn) path is the one exception, kept as ADR 0070
+    # left it: there the document already works and the leaf is not MAC-covered,
+    # so its bytes are unchanged. Neither the MAC-covered digest (computed over
+    # the original tree before emit) nor the plaintext output (never hashed) has
+    # a digest quoting could move, so this is safe on every path it runs.
+    my $force_quote = !$args{warn_foreign_resolution};
+
+    return _emit_docs($class, \@docs, $reject_scalar) unless $force_quote;
 
     # Replace exactly the safely-quotable divergent leaves (the True/False type
     # divergence, and the seven parse-unambiguous non-finite str leaves) with

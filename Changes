@@ -9,6 +9,9 @@ Revision history for File-SOPS
   - A "True"/"False" string and the non-finite spellings .inf/.Inf/.INF/+.inf/
     -.inf/.nan/.NaN are written double-quoted, as sops writes them, instead of
     bare (where Go read a boolean or a float back). (k99)
+  - decrypt_file and edit write those same spellings quoted too, so decrypt_file
+    is a faithful inverse of what sops wrote instead of flipping such a leaf back
+    to a float or boolean on the next encrypt. (k186)
   - The four encryption rules (unencrypted_suffix, encrypted_suffix,
     unencrypted_regex, encrypted_regex) are usable as arguments to encrypt and
     encrypt_file, or carried via metadata => $meta.
