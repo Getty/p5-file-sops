@@ -1,6 +1,16 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - ARBITRATION: a caller-supplied integer SV in the int64..uint64 window
+    (a Perl UV literal, a computed integer, or a scalar out of a YAML parse
+    -- not one read through Format::JSON::parse, which docs/adr/0021 already
+    fixed) is refused by assert_representable, and that residue is accepted
+    as a limit rather than closed by loosening a MAC-path guard. Measured
+    against sops 3.13.3: the guard is wrong for at most 14 of 35 such values,
+    only in the JSON unencrypted slot; the croak already names both
+    workarounds (string or float, c8eee80), and the negative half of the
+    window is structurally unreachable. No code change. Pinned by
+    t/10-integer-range.t. See docs/adr/0069 and karr #104.
   - decrypt now carps when a plaintext comment stands in a slot the
     encryption rule marks as encrypted, matching sops' "Found possibly
     unencrypted comment in file" warning. Advisory only: the comment is
