@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-09-01T03:27:19Z
+created: 2026-09-01T03:06:52Z
+id: 181
+priority: high
+started: 2026-09-01T03:27:19Z
+status: done
+tags:
+- docs
+- release-blocker
+title: decrypt new plaintext-comment carp (karr 173 / ADR 0067) has zero POD coverage
+updated: 2026-09-01T03:27:19Z
+---
+
+File::SOPS.pm:3646 carps when decrypt finds a plaintext comment in a slot the encryption rule marks encrypted. Real user-visible new stderr output, matches sops message Found possibly unencrypted comment in file. The =method decrypt POD (SOPS.pm:1066-1448), including its own A comment in a list comes back as a File::SOPS::Comment subsection, never mentions it; neither do decrypt_file/rotate/edit. Every other New-in-0.003 behavior in this POD is documented at length, this one is not. Recommend documenting before the next release. Found during pre-release audit at HEAD 57f8258.
+
+ERLEDIGT 5967ccc: carp aus #173/ADR 0067 in =method decrypt dokumentiert (2 Absaetze im Kommentar-Unterabschnitt) + Querverweise in decrypt_file/rotate/edit. Nur POD. dzil test 85/1453 PASS inkl. author-pod-syntax/-links.
