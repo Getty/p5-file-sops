@@ -12,47 +12,73 @@ use File::SOPS::Format::YAML;
 # document, because YAML::XS::Load in scalar context returns only that one.
 # Encrypting a two-document file therefore wrote one document back and threw
 # the other away, with no error and nothing in the output to show it had
-# happened. These tests pin the loud failure that replaced it.
+# happened. karr #31 / docs/adr/0033 replaces that with real support, but in
+# two stages. The WIRE layer -- File::SOPS::Format::YAML->parse,
+# File::SOPS::_parse_in_document_order, and the MAC over all documents -- now
+# reads and hashes a stream correctly, which is what the first three subtests
+# below pin. The PUBLIC API (encrypt/decrypt/encrypt_file/encrypt_in_place/
+# edit) still refuses a multi-document stream at its own boundary
+# (_refuse_multidoc_pending) until the return shape (karr #31 step 4) and the
+# emitter's separators (step 5) land -- that is what the remaining subtests
+# pin, unchanged.
 #
-# When multi-document support lands, most of this file becomes the wrong
-# assertion and should be rewritten to check the round trip -- not deleted.
-# The measured sops model is recorded in File::SOPS::Format::YAML.
+# When steps 4-5 land, the refusal subtests become the wrong assertion and
+# should be rewritten to check the round trip -- not deleted. The measured
+# sops model is recorded in docs/adr/0033 and in File::SOPS::Format::YAML.
 
 my $TWO_DOCS = "alpha: one\nshared: first\n---\nbeta: two\nshared: second\n";
 
 ###############################################################################
-subtest 'parse refuses a two-document stream instead of truncating it' => sub {
-    my @got = eval { File::SOPS::Format::YAML->parse($TWO_DOCS) };
-    my $err = $@;
+subtest 'parse returns a document list for a two-document stream' => sub {
+    my ($first, $metadata, $documents) = eval {
+        File::SOPS::Format::YAML->parse($TWO_DOCS) };
+    ok(!$@, 'parse no longer dies on a multi-document stream') or diag($@);
 
-    ok($err, 'parse died')
-        or diag("parse returned instead of dying -- this is the data loss bug");
+    is(scalar @$documents, 2, 'both documents came back');
+    is_deeply($documents,
+        [ { alpha => 'one', shared => 'first' },
+          { beta  => 'two', shared => 'second' } ],
+        'each document keeps its own values, in document order');
+    is_deeply($first, $documents->[0],
+        'the first return value mirrors document 0');
+    is($metadata, undef,
+        'neither document in this fixture has a sops section, so no metadata');
 
-    # The regression, stated as the value it must never be again: the old code
-    # returned exactly the last document here.
-    is_deeply(\@got, [], 'nothing was returned');
-
-    like($err, qr/2 documents/,
-        'error names how many documents were found');
-    like($err, qr/multi-document/i,
-        'error names the unsupported feature');
+    # Metadata comes from the FIRST document only, and is stripped from every
+    # document's value tree wherever a sops section appears (docs/adr/0033
+    # point 2).
+    my ($first2, $metadata2, $documents2) = eval { File::SOPS::Format::YAML->parse(
+        "alpha: one\nsops:\n    version: 3.13.3\n---\nbeta: two\n"
+    ) };
+    ok(!$@, 'a stream carrying metadata only in its first document parses')
+        or diag($@);
+    isa_ok($metadata2, 'File::SOPS::Metadata', 'metadata built from the first document');
+    is($metadata2->version, '3.13.3', 'metadata is taken from the first document');
+    is_deeply($documents2,
+        [ { alpha => 'one' }, { beta => 'two' } ],
+        'sops is stripped from document 0, and document 1 is unaffected');
 };
 
 ###############################################################################
-subtest 'a document count above two is reported as such' => sub {
+subtest 'an empty document is a real document and reads back as {}' => sub {
     # An empty document in the middle is a real document to both YAML::XS and
-    # sops, which gives it its own metadata block and reads it back as {}.
-    my $err = do {
-        eval { File::SOPS::Format::YAML->parse("a: 1\n---\n---\nb: 2\n") };
-        $@;
-    };
-    like($err, qr/3 documents/, 'the empty middle document is counted');
+    # sops, which gives it its own metadata block and reads it back as {}
+    # (docs/adr/0033 point 6).
+    my (undef, undef, $documents) = eval {
+        File::SOPS::Format::YAML->parse("a: 1\n---\n---\nb: 2\n") };
+    ok(!$@, 'three documents, one empty, parse without dying') or diag($@);
+    is(scalar @$documents, 3, 'the empty middle document is counted');
+    is_deeply($documents, [ { a => 1 }, {}, { b => 2 } ],
+        'and it reads back as {}, not as dropped or merged');
 
     # A trailing separator opens a second, empty document. sops agrees -- it
-    # writes two metadata blocks for this input -- so refusing it is correct
-    # rather than over-strict.
-    $err = do { eval { File::SOPS::Format::YAML->parse("a: 1\n---\n") }; $@ };
-    like($err, qr/2 documents/, 'a trailing --- is a second document');
+    # writes two metadata blocks for this input.
+    (undef, undef, $documents) = eval {
+        File::SOPS::Format::YAML->parse("a: 1\n---\n") };
+    ok(!$@, 'a trailing --- parses without dying') or diag($@);
+    is(scalar @$documents, 2, 'a trailing --- is a second document');
+    is_deeply($documents, [ { a => 1 }, {} ],
+        'and it too reads back as {}');
 };
 
 ###############################################################################
@@ -147,16 +173,20 @@ YAML
 };
 
 ###############################################################################
-subtest 'the MAC reparse holds the one-document rule independently' => sub {
+subtest 'the MAC reparse pairs a multi-document stream by index' => sub {
     # _parse_in_document_order supplies the key ORDER for MAC verification
     # while the values come from the main parse. The two parsers disagree in
-    # scalar context on a multi-document stream -- YAML::PP yields the FIRST
-    # document, YAML::XS the LAST -- so a reparse that quietly accepted such a
-    # stream would pair one document's order with another's values. Format
-    # handlers reject the input before this is reached; the guard is here so
-    # the pairing cannot silently go wrong if that ever changes.
-    is(File::SOPS::_parse_in_document_order($TWO_DOCS), undef,
-        'reparse declines a multi-document stream');
+    # SCALAR context on a multi-document stream -- YAML::PP yields the FIRST
+    # document, YAML::XS the LAST -- so a reparse that read either side in
+    # scalar context would pair one document's order with another's values.
+    # docs/adr/0033 closes this by reading BOTH sides in list context, so
+    # document i's order now pairs with document i's values structurally.
+    my $ordered = File::SOPS::_parse_in_document_order($TWO_DOCS);
+    is(ref($ordered), 'ARRAY', 'reparse returns a document list for a stream');
+    is_deeply($ordered,
+        [ { alpha => 'one', shared => 'first' },
+          { beta  => 'two', shared => 'second' } ],
+        'each document keeps its own key/value pairs');
 
     my $single = File::SOPS::_parse_in_document_order("a: 1\nb: 2\n");
     is_deeply($single, { a => 1, b => 2 },

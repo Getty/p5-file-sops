@@ -9,6 +9,10 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use File::SOPS::Backend::Age;
 use Crypt::Age;
+use File::Temp qw(tempdir);
+use File::Slurp qw(write_file);
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 ###############################################################################
 # The order-preserving reparse is asked of the FORMAT, not hardwired to YAML::PP
@@ -217,19 +221,99 @@ sub has_key      { ref $_[0] eq 'HASH' && exists $_[0]->{ $_[1] } }
         'a document that is not a mapping declines');
 
     # THE trap ADR 0001 and karr #31 both name. YAML::XS::Load in scalar
-    # context returns the LAST document of a stream and YAML::PP the FIRST,
-    # and this walk takes its ORDER from one and its VALUES from the other. A
-    # reparse that quietly accepted a stream would pair one document's order
-    # with another document's values -- a wrong digest, not an error. The rule
-    # moved into the handler, so the property has to survive having moved.
+    # context returns the LAST document of a stream and YAML::PP the FIRST, so
+    # a reparse that read either side in scalar context would pair one
+    # document's order with another document's values -- a wrong digest, not
+    # an error. docs/adr/0033 closes this by reading BOTH sides in list
+    # context (parse() and parse_in_document_order alike), so document i's
+    # order now pairs with document i's values structurally instead of the
+    # whole stream being declined. _verify_mac's remaining safety net is a
+    # count-match check between the two readers, which can only make
+    # verification FAIL, never wrongly succeed -- proved against a real sops
+    # file in section 3b below.
     my $stream = "a: 1\nb: 2\n---\nc: 3\nd: 4\n";
-    is(ordered('File::SOPS::Format::YAML', $stream), undef,
-        'the YAML handler declines a multi-document stream');
-    is(File::SOPS::_parse_in_document_order($stream), undef,
-        'and so does the dispatcher over it');
-    is(ordered('File::SOPS::Format::JSON', $stream), undef,
-        'the JSON handler declines it too -- it shares the reader');
+    my $stream_ordered = ordered('File::SOPS::Format::YAML', $stream);
+    is_deeply($stream_ordered,
+        [ { a => 1, b => 2 }, { c => 3, d => 4 } ],
+        'the YAML handler returns a document LIST, one hash per document, in order');
+
+    is_deeply(File::SOPS::_parse_in_document_order($stream), $stream_ordered,
+        'and the dispatcher returns the identical list');
+
+    is_deeply(ordered('File::SOPS::Format::JSON', $stream), $stream_ordered,
+        'the JSON handler returns the same list too -- it shares the reader');
 }
+
+###############################################################################
+# 3b. The trap's replacement, proved against a REAL sops multi-document file:
+#     the ordered document list verifies by index against sops's own stored
+#     MAC, and swapping the two documents' values (not their shape) breaks
+#     verification instead of silently agreeing with the wrong pairing. This
+#     is the wire lane's own manual proof (docs/adr/0033), promoted to a test.
+#     Interop-gated like every other test that drives the real binary.
+###############################################################################
+
+subtest 'a real sops multi-document file verifies by index, and a swap fails' => sub {
+    my $sops_bin = find_sops_bin();
+    plan skip_all =>
+        "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, /tmp/sops) -- "
+      . "this proves the multi-document MAC pairing against the real binary, "
+      . "not just against this library's own two Perl readers. Fix: run "
+      . "maint/fetch-sops .sops-bin to install the pinned binary where the "
+      . "suite finds it automatically, or set SOPS_BIN=/path/to/sops."
+        unless $sops_bin;
+    diag("Using sops binary: $sops_bin");
+
+    my ($public, $secret) = Crypt::Age->generate_keypair();
+    my $tempdir = tempdir(CLEANUP => 1);
+    write_file("$tempdir/key.txt", $secret);
+    local $ENV{SOPS_AGE_KEY_FILE} = "$tempdir/key.txt";
+
+    # Two documents sharing a key NAME but not a value -- a shape mismatch
+    # would croak for an unrelated reason (_document_leaves refusing a key the
+    # paired document does not have); this makes the digest itself disagree
+    # instead, which is what the trap actually protects against.
+    write_file("$tempdir/two.yaml", "greeting: hello\n---\ngreeting: world\n");
+    my $enc = `$sops_bin --age $public -e $tempdir/two.yaml 2>&1`;
+    is($? >> 8, 0, 'sops encrypted a two-document file') or do {
+        diag("sops output: $enc");
+        return;
+    };
+
+    my ($first, $metadata, $documents) = File::SOPS::Format::YAML->parse($enc);
+    is(scalar @$documents, 2, 'we read back both documents sops wrote');
+
+    my $data_key = File::SOPS::Backend::Age->decrypt_data_key(
+        age_keys   => $metadata->age,
+        identities => [$secret],
+    );
+
+    my $ok = eval {
+        File::SOPS::_verify_mac(
+            document     => $enc,
+            data         => $documents,
+            data_key     => $data_key,
+            metadata     => $metadata,
+            format_class => 'File::SOPS::Format::YAML',
+        );
+    };
+    ok($ok, "the ordered document list matches sops's own stored MAC")
+        or diag($@);
+
+    my $swapped = eval {
+        File::SOPS::_verify_mac(
+            document     => $enc,
+            data         => [ $documents->[1], $documents->[0] ],
+            data_key     => $data_key,
+            metadata     => $metadata,
+            format_class => 'File::SOPS::Format::YAML',
+        );
+    };
+    my $swap_err = $@;
+    ok(!$swapped, 'swapping the two documents breaks verification');
+    like($swap_err, qr/MAC verification failed/,
+        'and it fails as a MAC mismatch, not a shape disagreement');
+};
 
 ###############################################################################
 # 4. A format class that cannot do this at all is LOUD.
