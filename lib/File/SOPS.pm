@@ -1030,7 +1030,12 @@ sub decrypt {
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
 
     # Parse the encrypted content
-    my ($data, $metadata) = $format_class->parse($encrypted);
+    my ($data, $metadata, $documents) = $format_class->parse($encrypted);
+
+    # A multi-document stream is read by the wire layer but not yet round-trip
+    # supported (docs/adr/0033, karr #31 steps 4-5); refuse it loudly here
+    # rather than decrypting only its first document. See _refuse_multidoc_pending.
+    _refuse_multidoc_pending($documents);
 
     # Asked here, ahead of both the metadata check and the data key, because
     # that is the order sops answers in: its unmarshalling error precedes
@@ -1311,7 +1316,8 @@ sub encrypt_file {
     # tree of ENC[...] strings -- which encrypt would happily wrap a second
     # time. $metadata being defined is exactly "the input had a top-level sops
     # entry", which is the condition sops itself refuses on.
-    my ($data, $metadata) = _format_class($format)->parse($content);
+    my ($data, $metadata, $documents) = _format_class($format)->parse($content);
+    _refuse_multidoc_pending($documents);
     croak _sops_key_reserved("input file '$input'") if $metadata;
 
     # Encrypt
@@ -1392,7 +1398,8 @@ sub encrypt_in_place {
     # Same guard as encrypt_file, and it matters more here: there is no
     # separate output file to inspect afterwards, so an unnoticed double
     # encryption would have overwritten the only copy.
-    my ($data, $metadata) = _format_class($format)->parse($content);
+    my ($data, $metadata, $documents) = _format_class($format)->parse($content);
+    _refuse_multidoc_pending($documents);
     croak _sops_key_reserved("file '$file'") if $metadata;
 
     my $encrypted = $class->encrypt(
@@ -1936,6 +1943,13 @@ sub edit {
             . "parses; this method cannot, because it may have no terminal to "
             . "return to."
             if $err;
+
+        # If the editor turned the document into a multi-document stream, refuse
+        # it for the same reason encrypt does (docs/adr/0033, karr #31 steps
+        # 4-5) rather than writing back only its first document. $parsed[2] is
+        # the document list parse() returns as its third value.
+        _refuse_multidoc_pending($parsed[2]);
+
         @parsed;
     };
 
@@ -3865,7 +3879,19 @@ sub _is_comment_leaf {
 sub _compute_mac {
     my ($data, $key, $metadata) = @_;
 
-    my $leaves = _digested_leaves(_sorted_leaves($data, [], []));
+    # $data is one document tree today, and an ArrayRef of document trees once
+    # the api lane assembles a multi-document write (docs/adr/0033, karr #31).
+    # Each document contributes its leaves in its own sorted-key order, in
+    # document order, and the digest is over the concatenation (measured: one
+    # MAC over all documents in order). Each document is entered by its OWN
+    # top-level _sorted_leaves call, so the document list is never walked as a
+    # container and no document is charged a depth level for the wrapper
+    # (docs/adr/0033 Decision 4). A single HashRef is [$data], byte-identical.
+    my @documents = ref $data eq 'ARRAY' ? @$data : ($data);
+    my @collected;
+    push @collected, @{ _sorted_leaves($_, [], []) } for @documents;
+
+    my $leaves = _digested_leaves(\@collected);
 
     # Every leaf this document will contain has to be one both implementations
     # can write and read back. Checked HERE, before anything is emitted,
@@ -3943,9 +3969,41 @@ sub _verify_mac {
     # than guessed, so the order and the values can never come from two
     # different readings of the same text.
     my $ordered = _parse_in_document_order($args{document}, $args{format_class});
-    my $leaves  = _digested_leaves(($ordered
-        ? _document_leaves($ordered, $args{data}, [], [])
-        : _sorted_leaves($args{data}, [], [])), $data_key, $metadata);
+
+    # $ordered is a HashRef for one document, an ArrayRef of ordered documents
+    # for a stream (docs/adr/0033, karr #31), or undef when order could not be
+    # recovered. $args{data} mirrors it: one tree today, a list of trees once
+    # the api lane assembles a multi-document decrypt. The three shapes are
+    # normalised to a leaf list here.
+    my @data_docs = ref $args{data} eq 'ARRAY' ? @{$args{data}} : ($args{data});
+    my @collected;
+    if (ref $ordered eq 'ARRAY') {
+        # Document order from the reparse, values from the tree, PAIRED BY
+        # INDEX -- document i's order with document i's values, each in its own
+        # key order. A count disagreement between the two readers means the
+        # order cannot be trusted, so fall back to sorted (which can make
+        # verification fail, never wrongly succeed) rather than mispair.
+        if (@$ordered == @data_docs) {
+            push @collected,
+                @{ _document_leaves($ordered->[$_], $data_docs[$_], [], []) }
+                for 0 .. $#$ordered;
+        }
+        else {
+            $ordered = undef;
+        }
+    }
+    elsif ($ordered) {
+        # One document, byte-identical to the pre-multi-document path.
+        @collected = @{ _document_leaves($ordered, $data_docs[0], [], []) };
+    }
+
+    unless (@collected || $ordered) {
+        # No recoverable order: sorted-key order, each document walked by its
+        # own top-level call so the list is never charged a wrapper depth level.
+        push @collected, @{ _sorted_leaves($_, [], []) } for @data_docs;
+    }
+
+    my $leaves = _digested_leaves(\@collected, $data_key, $metadata);
 
     my $computed = _mac_digest(
         leaves   => $leaves,
@@ -4364,10 +4422,52 @@ sub _parse_in_document_order {
         . "in this format is written in"
         unless $format_class->can('parse_in_document_order');
 
-    my $doc = eval { $format_class->parse_in_document_order($content) };
-    return unless ref $doc eq 'HASH';
+    my $ordered = eval { $format_class->parse_in_document_order($content) };
 
-    return $doc;
+    # A single document is a HashRef, byte-identical to before. A multi-document
+    # stream is an ArrayRef of ordered documents (docs/adr/0033, karr #31): the
+    # handler reads the stream in list context, so document i's order pairs with
+    # document i's values in _verify_mac. Either shape is validated here; a
+    # handler that cannot read the text returns neither and falls back to
+    # sorted order.
+    if (ref $ordered eq 'ARRAY') {
+        return unless @$ordered;
+        for my $doc (@$ordered) {
+            return unless ref $doc eq 'HASH';
+        }
+        return $ordered;
+    }
+
+    return unless ref $ordered eq 'HASH';
+    return $ordered;
+}
+
+# The temporary boundary refusal for a multi-document stream (docs/adr/0033,
+# karr #31). The wire layer -- the parse-to-document-list change and the MAC
+# over all documents -- is in place, but the public return shape, the
+# one-instance metadata attach/detach and the emitter's separators are not
+# (karr #31 steps 4-5). Until they are, a multi-document read or write is
+# refused here rather than processing only the first document, which is the
+# karr #14 data-loss defect this whole ticket exists to fix. Every public
+# entry point that hands a parsed document tree onward calls this on the
+# document list parse() now returns as its third value; a single-document file
+# (or any format that has no document stream) has a list of one, or none, and
+# passes straight through. REMOVE THIS when steps 4-5 land -- it is the only
+# thing standing between the built machinery and a multi-document round trip.
+sub _refuse_multidoc_pending {
+    my ($documents) = @_;
+
+    return unless ref $documents eq 'ARRAY' && @$documents > 1;
+
+    croak sprintf(
+        "multi-document YAML (%d documents) is not supported yet: the wire "
+        . "layer reads the stream and computes one MAC over all documents, but "
+        . "the public return shape, the per-document metadata and the emitter "
+        . "separators are still pending (karr #31 steps 4-5). Refused here "
+        . "rather than reading or writing only the first document and silently "
+        . "dropping the rest.",
+        scalar @$documents
+    );
 }
 
 # The MAC digest input for a value, which is by definition the same bytes the

@@ -127,16 +127,24 @@ sub parse {
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
 
-    # LIST context is load-bearing. YAML::XS::Load in SCALAR context returns
-    # only the LAST document of a multi-document stream, so `a: 1\n---\nb: 2`
-    # used to parse to just {b=>2} -- and encrypt_file then wrote that back as
-    # the whole file. Silent data loss on a write path, with no error.
+    # LIST context is load-bearing, and it is the whole of the trap this ADR
+    # names. YAML::XS::Load in SCALAR context returns only the LAST document of
+    # a multi-document stream, so `a: 1\n---\nb: 2` parsed to just {b=>2} -- and
+    # encrypt_file then wrote that back as the whole file. In LIST context @docs
+    # holds every document, in order.
     #
-    # sops does support multi-document YAML, but not as "several files in one":
-    # it is ONE tree with N branches, carrying ONE metadata section (written
-    # into every document) and ONE MAC spanning all documents in order.
-    # Reproducing that is a data-model change well beyond this parser, so until
-    # it exists the input is refused rather than quietly truncated.
+    # sops supports multi-document YAML as ONE tree with N branches carrying ONE
+    # metadata section (written into every document) and ONE MAC spanning all
+    # documents in order (docs/adr/0033, karr #31). This method now returns the
+    # DOCUMENT LIST rather than refusing above one document -- see
+    # _parse_multidoc. The single-document path below is untouched, so a
+    # one-document file is byte-identical to before.
+    #
+    # parse_in_document_order moved to a document list in the SAME commit, and
+    # it had to: that reparse supplies the MAC walk's key ORDER while the tree
+    # here supplies the VALUES, so if one became a list and the other did not
+    # the walk would pair one document's order with another's values -- a wrong
+    # MAC with no error. Both are lists now.
     #
     # The retries below exist for TWO tokens and run only after YAML::XS has
     # already refused the document. See _without_merge_tags and
@@ -151,12 +159,7 @@ sub parse {
         _refuse_unreadable_tag($content, $load_error) if $@;
     }
 
-    croak sprintf(
-        "YAML input has %d documents; File::SOPS handles one document per "
-        . "file. Multi-document YAML is not supported yet -- it used to be "
-        . "accepted and silently reduced to the last document.",
-        scalar @docs
-    ) if @docs > 1;
+    return _parse_multidoc($content, \@docs) if @docs > 1;
 
     my $data = $docs[0];
     croak "YAML did not parse to a hash" unless ref $data eq 'HASH';
@@ -195,7 +198,79 @@ sub parse {
     # gone: sops has one parse, and this had two.
     _restore_plain_infinities($data, $content);
 
-    return ($data, $metadata);
+    # The document list is [$data] for a single document, so a caller wanting a
+    # uniform shape (the api lane, karr #31 step 4) can read the third value
+    # without special-casing the count. The two-value unpacking every current
+    # caller uses ignores it, so the single-document path is byte-identical.
+    return ($data, $metadata, [$data]);
+}
+
+###############################################################################
+# A multi-document stream, parsed into a DOCUMENT LIST (docs/adr/0033, karr #31)
+#
+# Reached only when YAML::XS::Load returned more than one document. The wire
+# machinery below this -- the MAC over all documents (File::SOPS::_compute_mac,
+# _verify_mac) and the order-preserving reparse (parse_in_document_order) -- is
+# built to consume this list, but the public API return shape, the one-instance
+# metadata attach/detach and the emitter's separators are NOT in place yet
+# (karr #31 steps 4-5). Until they are, File::SOPS refuses a multi-document
+# read or write at its own boundary rather than processing only the first
+# document, which is the karr #14 data-loss defect this whole ticket exists to
+# fix. So this returns a correct, non-corrupting list; it does not yet round
+# trip.
+#
+# The single-document walks are run once PER DOCUMENT here, each with a fresh
+# visited set -- which is what docs/adr/0033 Decision 4 requires for the
+# overflow-literal (docs/adr/0023) and comment-leaf (docs/adr/0024) repairs.
+sub _parse_multidoc {
+    my ($content, $docs) = @_;
+
+    my @documents;
+    for my $doc (@$docs) {
+        # An empty document is a real document that reads back as {} (measured;
+        # `a: 1\n---\n---\nb: 2\n` is three documents to YAML::XS and to sops).
+        $doc = {} unless defined $doc;
+
+        # Every document must be a mapping. sops has a distinct multi-document
+        # code path with two distinct messages -- its fingerprint -- for the two
+        # non-mapping shapes; both are refused, as the single-document HashRef
+        # check refuses them.
+        croak "YAML documents that are sequences are not supported"
+            if ref $doc eq 'ARRAY';
+        croak "YAML documents that are values are not supported"
+            unless ref $doc eq 'HASH';
+
+        push @documents, $doc;
+    }
+
+    # Metadata comes from the FIRST document only (measured: a stream carrying
+    # it only in a later document is `sops metadata not found` at sops). Later
+    # documents' sops sections are stripped from the value trees so the walks
+    # see clean document contents; the read-side policy (reject metadata that is
+    # only in a later document) and the write-side one-instance attach are the
+    # api lane's, karr #31 step 4.
+    my $metadata;
+    my $first = $documents[0];
+    if (exists $first->{sops}) {
+        my $section = delete $first->{sops};
+        _warn_plain_lastmodified($section, $content);
+        $metadata = File::SOPS::Metadata->from_hash($section);
+    }
+    delete $_->{sops} for @documents[1 .. $#documents];
+
+    # Fresh visited set per document (docs/adr/0023, 0024 via 0033 Decision 4).
+    for my $doc (@documents) {
+        _restring_non_finite_leaves($doc, {});
+        _go_repair_int_leaves($doc, {});
+    }
+
+    # The plain-infinity repair (docs/adr/0026) reparses the raw text and pairs
+    # it against the value trees. On a stream that pairing has to be
+    # document-by-document -- list context yields N reparsed documents, and the
+    # single-tree pairing has no counterpart (docs/adr/0033 Decision 4).
+    _restore_plain_infinities_multi(\@documents, $content);
+
+    return ($documents[0], $metadata, \@documents);
 }
 
 ###############################################################################
@@ -904,6 +979,55 @@ sub _restore_plain_infinities {
     return;
 }
 
+# The multi-document counterpart of _restore_plain_infinities (docs/adr/0033
+# Decision 4, ADR 0026). The single-document version reparses $content in scalar
+# context, which yields the FIRST document only -- on a stream that would pair
+# the first reparsed document against every value tree. Here the reparse is in
+# LIST context, N documents, and each is paired against its own value tree by
+# index. Everything else is the single-document version's mechanism unchanged:
+# the same pre-filters, the same structural pairing that abandons the whole
+# repair on any disagreement, the same fail-safe on a document YAML::PP refuses.
+sub _restore_plain_infinities_multi {
+    my ($documents, $content) = @_;
+
+    return unless _go_non_finite_in_text($content);
+
+    my $any = 0;
+    for my $doc (@$documents) {
+        $any = 1, last if _has_plain_infinity_candidate($doc, {});
+    }
+    return unless $any;
+
+    # FAIL SAFE, as in the single-document path: a document YAML::PP refuses
+    # yields nothing, and nothing is repaired -- today's behaviour and today's
+    # MAC error, never a partially repaired tree.
+    my @theirs = eval { $PLAIN_STYLE_LOADER->load_string($content) };
+    return unless @theirs == @$documents;
+    for my $t (@theirs) {
+        # An empty document reparses to undef; treat it as {} the way the value
+        # side does, so the structural pairing lines up.
+        $t = {} unless defined $t;
+        return unless ref $t eq 'HASH';
+    }
+    # The value trees had `sops` stripped from every document; strip it from
+    # every reparsed document too, or the key-set comparison in
+    # _pair_plain_infinities would disagree on the metadata-bearing ones.
+    delete $_->{sops} for @theirs;
+
+    my @fix;
+    for my $i (0 .. $#$documents) {
+        return unless _pair_plain_infinities($documents->[$i], $theirs[$i],
+                                             \@fix, {});
+    }
+
+    for my $entry (@fix) {
+        my ($slot, $token) = @$entry;
+        $$slot = dualvar(_go_non_finite_double($token), $token);
+    }
+
+    return;
+}
+
 sub _has_plain_infinity_candidate {
     my ($node, $seen) = @_;
 
@@ -1505,37 +1629,47 @@ sub parse_in_document_order {
     my $text = $content;
     utf8::decode($text) unless utf8::is_utf8($text);
 
-    # LIST context, and exactly one document -- the same one-document rule
-    # parse() enforces, held here independently rather than assumed. The two
-    # parsers disagree in scalar context on a multi-document stream:
-    # YAML::PP->load_string returns the FIRST document, YAML::XS::Load the
-    # LAST. The walk takes its order from one and its values from the other,
-    # so on such a stream it would pair up two different documents. Declining
-    # means falling back to sorted order, which can only make verification
-    # fail, never wrongly succeed.
+    # LIST context, matching parse(): the two loaders disagree ONLY in scalar
+    # context on a multi-document stream (YAML::PP->load_string returns the
+    # FIRST document, YAML::XS::Load the LAST), and the MAC walk takes its order
+    # from here and its values from parse()'s tree. Both read the stream in list
+    # context now, so document i's order is paired with document i's values
+    # (docs/adr/0033, karr #31). A stream that cannot be read this way still
+    # declines to nothing, which falls back to sorted order -- can make
+    # verification fail, never wrongly succeed.
     my @docs = eval { $ORDERED_LOADER->load_string($text) };
-    return unless @docs == 1 && ref $docs[0] eq 'HASH';
-    my $doc = $docs[0];
+    return unless @docs;
 
-    # The metadata MAC lives here and must not hash itself. WHERE the metadata
-    # sits is format knowledge -- a `sops` mapping here, top-level `sops_*`
-    # keys in an env file, a `[sops]` section in an ini one -- so the handler
-    # drops it, the caller does not. It is dropped structurally, the same way
-    # parse() drops it, rather than by pattern-matching "mac:" in the raw text,
-    # which is what used to swallow any user key ending in "mac" (hmac,
-    # webmac).
-    delete $doc->{sops};
+    # The metadata MAC lives in the `sops` mapping and must not hash itself.
+    # WHERE it sits is format knowledge, so the handler drops it structurally
+    # (the same way parse() does) rather than by pattern-matching "mac:" in the
+    # raw text -- which used to swallow any user key ending in "mac". On a
+    # stream sops writes an identical block into every document, so it is
+    # dropped from every document here.
+    for my $doc (@docs) {
+        # An empty document reparses to undef; {} keeps it a real, empty
+        # document so its shape lines up with the value tree's.
+        $doc = {} unless defined $doc;
+        return unless ref $doc eq 'HASH';
+        delete $doc->{sops};
+    }
 
-    return $doc;
+    # A single document stays a bare HashRef, byte-identical to before, so every
+    # existing caller and test is unaffected. A stream is returned as an
+    # ArrayRef of ordered documents -- an unambiguous reference in any context,
+    # which File::SOPS::_parse_in_document_order pairs against the value trees.
+    return @docs == 1 ? $docs[0] : \@docs;
 }
 
 =method parse_in_document_order
 
     my $ordered = File::SOPS::Format::YAML->parse_in_document_order($content);
 
-Reparses C<$content> for its B<key order only> and returns the document as a
-HashRef whose mappings iterate in the order the file writes them, with the
-C<sops> section removed. Returns nothing when the text cannot be read that way.
+Reparses C<$content> for its B<key order only> and returns its mappings
+iterating in the order the file writes them, with the C<sops> section removed.
+A single document comes back as a HashRef; a B<multi-document> stream comes
+back as an ArrayRef of such HashRefs, one per document in document order
+(C<docs/adr/0033>). Returns nothing when the text cannot be read that way.
 
 This is the format half of the MAC's order recovery (C<docs/adr/0001>), and
 L<File::SOPS> asks the handler that parsed the document rather than reaching
@@ -1546,10 +1680,10 @@ the mappings, sequences and leaves are.
 
 Declining is safe and losing the order is not an error: the caller then hashes
 in sorted key order, which can make verification fail but can never make it
-wrongly succeed. A B<multi-document> stream is declined for exactly that
-reason -- L<YAML::PP> would hand back the first document where L<YAML::XS>
-hands back the last, and the walk would pair one document's order with
-another's values.
+wrongly succeed. The stream is read in B<list context>, matching L</parse>, so
+document C<i>'s order is paired with document C<i>'s values -- the scalar-context
+trap C<docs/adr/0033> names (L<YAML::PP> yielding the first document where
+L<YAML::XS> yields the last) cannot arise.
 
 =cut
 
