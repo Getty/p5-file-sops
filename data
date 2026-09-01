@@ -1,0 +1,17 @@
+---
+class: standard
+completed: 2026-09-01T05:23:19Z
+created: 2026-09-01T05:23:04Z
+id: 185
+priority: medium
+started: 2026-09-01T05:23:19Z
+status: done
+tags:
+- interop
+- test
+- tooling
+title: Interop sops binary lives in .sops-bin/ and the suite auto-detects it
+updated: 2026-09-01T05:23:19Z
+---
+
+The interop binary lived at /tmp/sops, which does not survive a /tmp wipe -- and without it the suite reports "All tests successful" having silently skipped the entire compatibility proof (measured 2026-09-01: 1429 tests with a binary, 1210 without, 219 assertions unrun). Fix: keep the binary repo-locally at .sops-bin/sops (gitignored /.sops-bin/), refetched with maint/fetch-sops .sops-bin. A shared detection helper t/lib/SopsBin.pm (find_sops_bin) replaces 35 copy-pasted detection blocks; order $SOPS_BIN -> PATH -> ./.sops-bin/sops (abs_path) -> /tmp/sops. abs_path is load-bearing: a bare relative path broke 04-interop creation-rules subtests that cd elsewhere to exercise sops cwd-relative config search.
