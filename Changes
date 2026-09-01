@@ -1,6 +1,11 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - File::SOPS::Comment is now a Moo class like every other class in this
+    distribution, reversing ADR 0041's hand-written bless (a move, not a
+    behaviour change): its three constructor refusals -- missing text, a
+    reference, an empty string -- are unchanged, and no wire byte moves.
+    See docs/adr/0068 and karr #154.
   - ARBITRATION: a rule pattern NEITHER dialect can compile is refused
     on the read path, where sops reads it, and that residue is accepted
     as a limit rather than closed. `unencrypted_regex: "fo("` is the

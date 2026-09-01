@@ -1,8 +1,7 @@
 package File::SOPS::Comment;
 # ABSTRACT: the leaf a sops comment becomes -- not a value, and not a string
 our $VERSION = '0.003';
-use strict;
-use warnings;
+use Moo;
 use Carp qw(croak);
 use namespace::clean;
 
@@ -99,11 +98,17 @@ See L<docs/adr/0041|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/004
 
 =cut
 
-sub new {
-    my ($class, %args) = @_;
-    my $text = $args{text};
+has text => (is => 'ro', required => 1);
 
-    croak "text required" unless defined $text;
+# required => 1 covers only the missing case. The reference and the empty
+# string are both defined, so they satisfy `required` and have to be refused
+# here, once the attribute is set -- BUILD runs after that. The messages are
+# the ones the hand-written constructor raised before this class became Moo
+# (docs/adr/0068); t/56 reads the empty-string one.
+sub BUILD {
+    my ($self) = @_;
+    my $text = $self->text;
+
     croak "a comment's text is a string, not a " . ref($text) . " reference"
         if ref $text;
 
@@ -118,7 +123,7 @@ sub new {
         . "than as a comment"
         unless length $text;
 
-    return bless { text => $text }, $class;
+    return;
 }
 
 =method new
@@ -138,8 +143,6 @@ no comment leaf at all, so C<type:comment> never carries an empty plaintext and
 AES-GCM has no ciphertext for one either.
 
 =cut
-
-sub text { $_[0]->{text} }
 
 =method text
 
