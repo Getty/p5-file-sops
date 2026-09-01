@@ -1,0 +1,16 @@
+---
+class: standard
+completed: 2026-09-01T14:56:11Z
+created: 2026-09-01T14:55:43Z
+id: 187
+priority: low
+started: 2026-09-01T14:56:11Z
+status: done
+tags:
+- docs
+- tooling
+title: Retrofit karr ids to kNN across the repo (skill convention)
+updated: 2026-09-01T14:56:11Z
+---
+
+The kanban-issues-karr-cli skill requires a karr id be written kNN in prose -- commit subjects, card bodies, anywhere the text travels -- never a bare #NN, because #NN resolves against GitHub/Gitea/GitLab (this repo has a public tracker at Getty/p5-file-sops). The repo used karr #NN and bare #NN throughout (~2000 refs). Swept both to kNN across ADRs, Changes, CLAUDE.md, lib comments/POD, and t. No GitHub-ref notation exists in-repo, so every bare #NN was a karr id. Two croak messages in SOPS.pm had their ticket reference respelled; the matching t/13 assertions moved with them, interop suite green (83 files/1449). Session commits already reworded to kNN via filter-branch.
