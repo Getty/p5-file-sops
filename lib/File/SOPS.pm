@@ -658,23 +658,44 @@ sub encrypt {
     my $recipients = $args{recipients} // croak "recipients required";
     my $format     = $args{format}     // 'yaml';
 
-    croak "data must be a hash ref" unless ref($data) eq 'HASH';
+    # A single document is a HashRef; a multi-document YAML stream is an ArrayRef
+    # of HashRefs, one per document (docs/adr/0033 Decision 1, karr #31). The
+    # ArrayRef form is purely additive -- until 0.003 it raised "data must be a
+    # hash ref" -- and what round-trips is the FILE: a one-element ArrayRef
+    # writes a one-document file byte-identical to the same bare HashRef.
+    croak "data must be a hash ref, or an array ref of hash refs for a "
+        . "multi-document stream"
+        unless ref($data) eq 'HASH' || ref($data) eq 'ARRAY';
     croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
+
+    my @documents = ref $data eq 'ARRAY' ? @$data : ($data);
+    croak "data must not be an empty array ref" unless @documents;
 
     # Resolved BEFORE the sops-key guard: the guard defers to the format handler
     # to decide whether a top-level `sops` entry collides with its metadata
     # namespace. YAML and JSON reserve that exact name; ENV and INI do not
     # (karr #157), so a bare `sops` data key is legitimate there.
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
-    croak _sops_key_reserved('data') if exists $data->{sops}
-        && $RESERVES_SOPS_KEY{$format_class};
 
-    # Before anything is generated or wrapped: a tree that contains itself has
-    # no document to write, and every walk below this point would recurse until
-    # the process died. The expansion guard runs second and depends on it --
-    # its census memo is filled on the way out, so a cycle would hang it.
-    _assert_acyclic($data, [], {}, {});
-    _assert_expansion_bounded($data);
+    # Per-document guards (docs/adr/0033 Decision 4). Each document is validated
+    # and walked on its own: a tree that contains itself has no document to
+    # write and would recurse until the process died, and the expansion guard
+    # runs second and depends on it (its census memo fills on the way out, so a
+    # cycle would hang it). ONE $active/$clean pair is shared across documents --
+    # the ancestor set is unwound on the way out, so a HashRef a caller
+    # legitimately shares between two documents is a DAG, not a cycle, and is not
+    # refused; sharing $clean is a win. Depth and the alias budget stay
+    # per-document because each document is entered by its own top-level call,
+    # never the document list walked as a container. A single document is one
+    # iteration, byte-identical to before.
+    my ($active, $clean) = ({}, {});
+    for my $doc (@documents) {
+        croak "each document in data must be a hash ref" unless ref $doc eq 'HASH';
+        croak _sops_key_reserved('data') if exists $doc->{sops}
+            && $RESERVES_SOPS_KEY{$format_class};
+        _assert_acyclic($doc, [], $active, $clean);
+        _assert_expansion_bounded($doc);
+    }
 
     # Generate random 256-bit data key. The one CSPRNG in this distribution
     # lives next to the per-value nonce that shares its failure mode; see the
@@ -693,12 +714,31 @@ sub encrypt {
     );
     $metadata->age($encrypted_keys);
 
-    # Compute MAC over plaintext values BEFORE encryption (SOPS behavior)
+    # Compute MAC over plaintext values BEFORE encryption (SOPS behavior).
+    # _compute_mac spans every document in the list, in document order, each
+    # contributing its own key order -- one digest over the whole stream
+    # (docs/adr/0033 point 3). This runs for a multi-document write too, so the
+    # MAC machinery is exercised and correct before the emitter step below is
+    # reached; a single document is byte-identical.
     my $mac = _compute_mac($data, $data_key, $metadata);
     $metadata->mac($mac);
 
-    # Encrypt all values in the data structure
-    my $encrypted_data = _encrypt_tree($data, $data_key, $metadata, []);
+    # The one thing still missing for a multi-document WRITE is the emitter's
+    # document separators and the one-instance metadata attached to every
+    # document (karr #31 step 5, format lane). Everything above -- the argument
+    # shape, the per-document guards and the whole-stream MAC -- is in place, so
+    # this refusal is all that stands between the built machinery and a
+    # multi-document round trip. Refused here rather than emitting only the first
+    # document, which is the karr #14 data-loss defect this ticket exists to fix.
+    _refuse_multidoc_pending(\@documents);
+
+    # Encrypt all values in the data structure. Exactly one document remains
+    # past the refusal above -- and it is @documents, not $data: a one-element
+    # ArrayRef (data => [\%h]) is NOT multi-document, so it must take the normal
+    # single-document write path and produce bytes byte-identical to the bare
+    # HashRef (data => \%h). _encrypt_tree and the emitter want that HashRef,
+    # never the wrapper (docs/adr/0033 Decision 1).
+    my $encrypted_data = _encrypt_tree($documents[0], $data_key, $metadata, []);
 
     # Serialize
     return $format_class->serialize(
@@ -730,6 +770,17 @@ Encrypts a data structure for specified recipients.
 Takes a HashRef in C<data>, encrypts all values (not keys) using AES-256-GCM,
 and encrypts the data key for each age recipient. Returns serialized encrypted
 content as a string.
+
+C<data> may also be an B<ArrayRef of HashRefs>, one per document, to write a
+multi-document YAML stream -- the inverse of what L</decrypt> returns for one
+(see L<decrypt|/A multi-document YAML stream is an ArrayRef>). This is purely
+additive: until 0.003 an ArrayRef raised C<data must be a hash ref>. B<Writing a
+stream is not yet complete> -- the argument shape, the per-document guards and
+the single whole-stream MAC are in place, but the emitter's document separators
+are still being built (karr #31 step 5), so a genuinely multi-document C<data>
+is B<refused> for now rather than written as only its first document. A
+one-element ArrayRef writes a one-document file, byte-identical to the same bare
+HashRef.
 
 Keys and values are character strings and are UTF-8 encoded on their way to the
 cipher and the digest; the returned document is UTF-8 encoded bytes, ready to
@@ -1029,13 +1080,16 @@ sub decrypt {
 
     my $format_class = $FORMATS{$format} // croak "Unknown format: $format";
 
-    # Parse the encrypted content
+    # Parse the encrypted content. The third value is the DOCUMENT LIST: one
+    # element for a single document (byte-identical to before), N for a
+    # multi-document YAML stream (docs/adr/0033, karr #31). $data is a synonym
+    # for $documents->[0]. Only the YAML handler returns the list at all -- JSON,
+    # ENV and INI have no document stream and return two values -- so a missing
+    # third value is normalised to the single-document list every walk below
+    # expects.
     my ($data, $metadata, $documents) = $format_class->parse($encrypted);
-
-    # A multi-document stream is read by the wire layer but not yet round-trip
-    # supported (docs/adr/0033, karr #31 steps 4-5); refuse it loudly here
-    # rather than decrypting only its first document. See _refuse_multidoc_pending.
-    _refuse_multidoc_pending($documents);
+    $documents = [$data] unless ref $documents eq 'ARRAY';
+    my $multi = @$documents > 1;
 
     # Asked here, ahead of both the metadata check and the data key, because
     # that is the order sops answers in: its unmarshalling error precedes
@@ -1043,9 +1097,22 @@ sub decrypt {
     # cycle rather than the missing key. Measured, the same holds for the
     # alias bomb: sops -d reports the aliasing, not the key. The order of the
     # two is load-bearing, see _expansion_census.
-    _assert_acyclic($data, [], {}, {});
-    _assert_expansion_bounded($data);
+    #
+    # One document per top-level call, never the document list as a container:
+    # each document carries its own depth and alias budget (docs/adr/0033
+    # Decision 4, N4). One $active/$clean pair is shared -- the ancestor set is
+    # unwound on the way out, so it stays correct across documents, and sharing
+    # $clean is a win. A single document is one iteration, identical to before.
+    my ($active, $clean) = ({}, {});
+    for my $doc (@$documents) {
+        _assert_acyclic($doc, [], $active, $clean);
+        _assert_expansion_bounded($doc);
+    }
 
+    # Metadata is taken from the FIRST document only (docs/adr/0033 point 2). A
+    # stream carrying a sops section only in a later document therefore surfaces
+    # no metadata and is refused right here, which is `sops metadata not found`
+    # at sops -- rather than being read as though it had none at all.
     croak "No SOPS metadata found" unless $metadata;
 
     # Decrypt data key using age backend
@@ -1054,18 +1121,28 @@ sub decrypt {
         identities => $identities,
     );
 
-    # Decrypt all values first
-    my $decrypted_data = _decrypt_tree($data, $data_key, $metadata, []);
+    # Decrypt every document's values. One metadata block, one data key, applied
+    # to each document -- the same tree walk per document.
+    my @decrypted = map { _decrypt_tree($_, $data_key, $metadata, []) } @$documents;
 
+    # One MAC over ALL documents in document order (docs/adr/0033 point 3). The
+    # document list is passed as `data`; _verify_mac pairs each document's key
+    # order (from the order-preserving reparse) with its own values by index. A
+    # single-document list is byte-identical to passing the bare HashRef.
     _verify_mac(
         document     => $encrypted,
-        data         => $data,
+        data         => $documents,
         data_key     => $data_key,
         metadata     => $metadata,
         format_class => $format_class,
     ) unless $args{ignore_mac};
 
-    return $decrypted_data;
+    # A stream really holding more than one document comes back as an ArrayRef
+    # of HashRefs; one document stays a bare HashRef (docs/adr/0033 Decision 1).
+    # What round-trips is the FILE, not the Perl container: encrypt given a
+    # one-element ArrayRef writes a one-document file that reads back here as a
+    # HashRef.
+    return $multi ? \@decrypted : $decrypted[0];
 }
 
 =method decrypt
@@ -1080,12 +1157,42 @@ sub decrypt {
 Decrypts SOPS-encrypted content.
 
 Takes encrypted content as a string, decrypts the data key using provided age
-identities, verifies the MAC, and returns the decrypted data structure as a
-HashRef.
+identities, verifies the MAC, and returns the decrypted data structure -- a
+HashRef for a single-document file, or an B<ArrayRef of HashRefs> for a
+multi-document YAML stream (see L</A multi-document YAML stream is an ArrayRef>).
 
 The returned structure holds B<character strings>, so it compares equal to the
 structure L</encrypt> was given. Do not decode it again. See
 L</Character encoding>.
+
+=head3 A multi-document YAML stream is an ArrayRef
+
+B<New in 0.003.> A YAML file holding more than one document -- documents joined
+by C<--->, as sops writes them -- is one tree with N branches carrying B<one>
+C<sops> metadata section and B<one> MAC spanning every document in order. This
+method reads such a stream and returns an ArrayRef whose elements are the
+decrypted documents in document order; a file holding a single document still
+returns a bare HashRef. Which shape you get mirrors the B<document>, not the
+call, so code that wants to be shape-agnostic writes
+
+    my @docs = ref $result eq 'ARRAY' ? @$result : ($result);
+
+The metadata is taken from the B<first> document, exactly as sops does. A stream
+carrying a C<sops> section only in a I<later> document surfaces no metadata and
+is refused with C<No SOPS metadata found> -- the same C<sops metadata not found>
+sops reports for it.
+
+B<The MAC authenticates the concatenated leaf sequence across all documents, not
+where the document boundaries fall.> Because the AAD carries no document index,
+a value can be moved from one document to another undetected as long as the
+concatenated leaf order is preserved; what the MAC does catch is a deleted,
+duplicated, reordered or altered value. This is a property of the sops format,
+not of this implementation. See L<File::SOPS::Format::YAML>.
+
+Until 0.003 a multi-document stream was refused outright -- it was
+L<File::SOPS::Format::YAML/parse> that stopped it, before C<decrypt> saw it -- so
+no caller has ever received a value from this path, and widening the return type
+over it breaks nothing.
 
 B<New in 0.003, and a change for existing callers:> a JSON number past Go's
 C<int64> comes back as a B<float>. Past C<2**64-1> it used to come back as a
@@ -1539,6 +1646,12 @@ A dotenv or INI document whose encrypted slot holds a I<plaintext> comment
 C<carp>s on the read, as L</decrypt> describes under L</A comment in a list comes
 back as a C<File::SOPS::Comment>>; the decrypted output still carries it.
 
+A B<multi-document> YAML stream (see L<decrypt|/A multi-document YAML stream is
+an ArrayRef>) is decrypted and MAC-verified, but writing it back out is not yet
+complete (the emitter's document separators are pending, karr #31), so
+C<decrypt_file> B<refuses> such an input rather than writing only its first
+document. Use L</decrypt> to read the stream into an ArrayRef in the meantime.
+
 Returns true on success.
 
 =cut
@@ -1554,6 +1667,10 @@ sub extract {
 
     my $content = _read_file($file, 'file');
 
+    my $document = $args{document} // 0;
+    croak "document must be a non-negative integer, not '$document'"
+        unless $document =~ /\A\d+\z/;
+
     my $data = $class->decrypt(
         encrypted  => $content,
         identities => $identities,
@@ -1561,14 +1678,34 @@ sub extract {
         ignore_mac => $args{ignore_mac},
     );
 
-    # Navigate to path. A float leaf goes out carrying its canonical decimal
-    # as its string form: a decrypted float is a bare NV, so printing it went
-    # through Perl's 15 significant digits and lost the digits the document
-    # actually holds (karr #61, ADR 0010). Only this leaf -- a dualvar inside a
-    # tree changes what the emitters write, so nothing that returns a tree does
-    # this, and a branch extract returns comes back untouched.
+    # A single-document file decrypts to a HashRef, a multi-document stream to an
+    # ArrayRef of them (docs/adr/0033, karr #31). The path language stays sops's
+    # -- applied to the ONE document `document` names -- because sops has no
+    # document axis and cannot grow one: a leading integer already means "the Nth
+    # key of document 0" there (docs/adr/0033 N2). So `document` is a separate
+    # argument, defaulting to 0, and it addresses the stream by index.
+    my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
+    croak sprintf(
+        "document => %d is beyond the last document of '%s': the file has %d "
+        . "document%s (indices 0..%d)",
+        $document, $file, scalar @docs,
+        (@docs == 1 ? '' : 's'), $#docs)
+        if $document > $#docs;
+
+    # Navigate WITHIN the named document; never fall through to a later one
+    # looking for a key, which would turn a caller's typo into a plausible answer
+    # from the wrong document. The path-not-found error names which document was
+    # searched, so a mistake in `document` does not read as a mistake in `path`.
+    my $where_doc = @docs > 1 ? "document $document" : undef;
+
+    # A float leaf goes out carrying its canonical decimal as its string form: a
+    # decrypted float is a bare NV, so printing it went through Perl's 15
+    # significant digits and lost the digits the document actually holds (karr
+    # #61, ADR 0010). Only this leaf -- a dualvar inside a tree changes what the
+    # emitters write, so nothing that returns a tree does this, and a branch
+    # extract returns comes back untouched.
     return File::SOPS::Encrypted->canonical_float_dualvar(
-        _extract_path($data, $path));
+        _extract_path($docs[$document], $path, $where_doc));
 }
 
 =method extract
@@ -1578,6 +1715,7 @@ sub extract {
         path       => '["database"]["password"]',
         identities => \@age_secret_keys,
         format     => 'yaml',  # optional, auto-detected from filename
+        document   => 0,       # optional, which document of a stream (default 0)
     );
 
 Extracts and decrypts a single value from an encrypted file.
@@ -1599,6 +1737,33 @@ C<["items"][0]> matched C<items> alone and returned the whole ArrayRef.
 The whole file is decrypted and MAC-verified either way. C<extract> saves you
 the navigation, not the work -- it is not a cheaper L</decrypt>.
 C<ignore_mac> is passed through to L</decrypt>.
+
+=head3 Reaching a document of a multi-document stream
+
+For a multi-document YAML stream (see L<decrypt|/A multi-document YAML stream is
+an ArrayRef>), C<path> addresses a B<single> document and C<document> names which
+one, defaulting to C<0>. The path language stays sops's, applied to the document
+you name -- C<extract> does B<not> grow a document axis into the path, because
+sops cannot: there a leading integer already means "the Nth key of document 0".
+
+Two guards, both loud:
+
+=over 4
+
+=item * C<document> beyond the last document dies naming the file's document
+count, rather than returning C<undef>.
+
+=item * A path not found dies naming B<which document> was searched.
+C<extract> never falls through to a later document looking for a key -- that
+would turn a typo in C<document> into a plausible-looking answer from the wrong
+one.
+
+=back
+
+On a single-document file, C<< document => 0 >> is a no-op and the not-found
+messages are unchanged; C<< document => 1 >> there dies, because there is no
+document 1. Whatever C<sops --extract '[1]["key"]'> does is not reproduced: it
+panics the Go binary (docs/adr/0033 N2), and a panic is not a specification.
 
 C<path> is a character string and is matched against the document's keys as
 characters, so a non-ASCII key is written in C<path> exactly as you would write
@@ -1878,8 +2043,14 @@ sub edit {
 
     my $content = _read_file($file, 'file');
 
-    my (undef, $metadata) = _format_class($format)->parse($content);
+    my (undef, $metadata, $documents) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
+
+    # edit is a WRITE path: it re-encrypts what comes back over the original. A
+    # multi-document original cannot be written yet (karr #31 step 5), so refuse
+    # it here -- before the whole file is decrypted and its plaintext serialized
+    # for the editor -- rather than at the emitter. See _refuse_multidoc_pending.
+    _refuse_multidoc_pending($documents);
 
     # Re-encryption here generates a NEW data key, exactly as rotate does, so
     # it inherits rotate's refusal: a document also wrapped for pgp or a KMS
@@ -2680,7 +2851,37 @@ sub _serialize_plaintext {
     my ($data, $format) = @_;
 
     # _format_class croaks on an unknown format, before anything is written.
-    return _format_class($format)->emit($data);
+    my $format_class = _format_class($format);
+
+    # A decrypted multi-document stream (docs/adr/0033, karr #31) is an ArrayRef
+    # of documents. This is the one boundary where a decrypted stream meets an
+    # output format, so the two refusals about writing one live here.
+    if (ref $data eq 'ARRAY' && @$data > 1) {
+        my $name = $format_class->can('format_name')
+            ? $format_class->format_name : $format;
+
+        # Decision 3, and the house-rule deviation it names: only YAML has a
+        # document stream. Converting one to a format that cannot hold it would
+        # drop all but the first document -- which sops does silently, exit 0,
+        # on read and write alike (N1), and which is the karr #14 defect class.
+        # We refuse instead, naming the count and the target.
+        croak sprintf(
+            "cannot convert a multi-document stream (%d documents) to %s: that "
+            . "format has no document stream, so all but the first document "
+            . "would be lost. sops drops them silently here; this library "
+            . "refuses instead (docs/adr/0033 Decision 3, karr #14). Keep the "
+            . "output as YAML, or select one document.",
+            scalar @$data, $name)
+            unless $name eq 'yaml';
+
+        # YAML CAN hold a stream, but the emitter's document separators are
+        # still being built (karr #31 step 5, format lane). Until they land a
+        # YAML target is refused for the same reason the encrypt write path is,
+        # rather than emitting a broken or single-document file.
+        _refuse_multidoc_pending($data);
+    }
+
+    return $format_class->emit($data);
 }
 
 # Write $content to $path, atomically: the content goes to a temporary file in
@@ -4442,30 +4643,31 @@ sub _parse_in_document_order {
     return $ordered;
 }
 
-# The temporary boundary refusal for a multi-document stream (docs/adr/0033,
-# karr #31). The wire layer -- the parse-to-document-list change and the MAC
-# over all documents -- is in place, but the public return shape, the
-# one-instance metadata attach/detach and the emitter's separators are not
-# (karr #31 steps 4-5). Until they are, a multi-document read or write is
-# refused here rather than processing only the first document, which is the
-# karr #14 data-loss defect this whole ticket exists to fix. Every public
-# entry point that hands a parsed document tree onward calls this on the
-# document list parse() now returns as its third value; a single-document file
-# (or any format that has no document stream) has a list of one, or none, and
-# passes straight through. REMOVE THIS when steps 4-5 land -- it is the only
-# thing standing between the built machinery and a multi-document round trip.
+# The temporary boundary refusal for a multi-document WRITE (docs/adr/0033,
+# karr #31). The READ path is done -- decrypt returns an ArrayRef, extract takes
+# a document argument, and the wire layer's whole-stream MAC and
+# parse-to-document-list are in place. What is NOT yet in place is the emitter:
+# the document separators and the one-instance metadata written into every
+# document (karr #31 step 5, format lane). Until that lands, every WRITE path --
+# encrypt (called directly, or via rotate), encrypt_file, encrypt_in_place and
+# edit -- refuses a multi-document stream here rather than writing only its first
+# document, which is the karr #14 data-loss defect this whole ticket exists to
+# fix. A single-document file (or any format that has no document stream) has a
+# list of one, or none, and passes straight through. REMOVE THIS when step 5
+# lands -- it is the only thing standing between the built machinery and a
+# multi-document round trip.
 sub _refuse_multidoc_pending {
     my ($documents) = @_;
 
     return unless ref $documents eq 'ARRAY' && @$documents > 1;
 
     croak sprintf(
-        "multi-document YAML (%d documents) is not supported yet: the wire "
-        . "layer reads the stream and computes one MAC over all documents, but "
-        . "the public return shape, the per-document metadata and the emitter "
-        . "separators are still pending (karr #31 steps 4-5). Refused here "
-        . "rather than reading or writing only the first document and silently "
-        . "dropping the rest.",
+        "multi-document YAML (%d documents) cannot be WRITTEN yet: reading a "
+        . "stream is supported (decrypt returns an ArrayRef, extract takes a "
+        . "document argument) and one MAC is computed over all documents, but "
+        . "the emitter's document separators are still pending (karr #31 step "
+        . "5). Refused here rather than writing only the first document and "
+        . "silently dropping the rest.",
         scalar @$documents
     );
 }
@@ -4483,9 +4685,17 @@ sub _value_to_bytes {
 }
 
 sub _extract_path {
-    my ($data, $path) = @_;
+    my ($data, $path, $doc_label) = @_;
 
     my @parts = _split_path($path);
+
+    # $doc_label names which document is being searched, and appears in every
+    # navigation failure only when a document axis is in play (a multi-document
+    # stream, docs/adr/0033). For a single-document file it is undef and the
+    # messages are byte-identical to before -- so a mistake in `document` reads
+    # as one, not as a typo in `path`, without changing the single-document
+    # wording every existing caller sees.
+    my $in_doc = defined $doc_label ? " in $doc_label" : '';
 
     # Navigation failure is an error at EVERY depth. It used to be an error
     # only when nested: a missing top-level key fell through the loop and came
@@ -4498,19 +4708,19 @@ sub _extract_path {
         my $where = @walked ? join(':', @walked) : '(document root)';
 
         if (ref $current eq 'HASH') {
-            croak "Cannot navigate path '$path': component '$part' not found "
-                . "under $where"
+            croak "Cannot navigate path '$path'$in_doc: component '$part' not "
+                . "found under $where"
                 unless exists $current->{$part};
             $current = $current->{$part};
         }
         elsif (ref $current eq 'ARRAY' && $part =~ /\A\d+\z/) {
-            croak "Cannot navigate path '$path': index $part is out of range "
-                . "at $where"
+            croak "Cannot navigate path '$path'$in_doc: index $part is out of "
+                . "range at $where"
                 unless $part <= $#$current;
             $current = $current->[$part];
         }
         else {
-            croak "Cannot navigate path '$path': $where is not a "
+            croak "Cannot navigate path '$path'$in_doc: $where is not a "
                 . (ref($current) eq 'ARRAY' ? "list index" : "collection")
                 . ", so it has no component '$part'";
         }
