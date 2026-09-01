@@ -1,19 +1,19 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
-  - Multi-document YAML is now READ: decrypt returns an ArrayRef of HashRefs
-    for a stream that really holds more than one document (a single document
-    stays a bare HashRef), with one metadata section and one MAC verified over
-    every document in order. Metadata is taken from the first document, as sops
-    does; a stream carrying it only in a later document is refused. extract
-    gains a document => $n argument (default 0) to reach a chosen document, and
-    names which document a not-found path was searched in. encrypt now accepts
-    an ArrayRef in data, purely additively. WRITING a stream is not complete
-    yet (the emitter's document separators are pending), so a multi-document
-    write is still refused loudly rather than dropping documents, and
-    converting a stream to a format that cannot hold one (JSON) is refused
-    rather than silently truncated as sops does. Single-document files are
-    byte-identical. (docs/adr/0033, karr #31)
+  - Multi-document YAML is now supported, read and written. decrypt returns an
+    ArrayRef of HashRefs for a stream that really holds more than one document
+    (a single document stays a bare HashRef); encrypt, encrypt_file,
+    encrypt_in_place and decrypt_file all handle a stream, with one metadata
+    section written byte-identically into every document and one MAC over every
+    document in order. Metadata is read from the first document, as sops does; a
+    stream carrying it only in a later document is refused. extract gains a
+    document => $n argument (default 0) to reach a chosen document, and names
+    which document a not-found path was searched in. Converting a stream to a
+    format that has no document stream (JSON, ENV, INI) is refused, naming the
+    count and the target, rather than silently dropping documents as sops does.
+    edit on a stream is deliberately not enabled yet (karr #41). Single-document
+    files are byte-identical. (docs/adr/0033, karr #31)
   - ARBITRATION: a caller-supplied integer SV in the int64..uint64 window (a
     Perl UV literal, a computed integer, or a scalar out of a YAML parse -- not
     one read through Format::JSON::parse, which docs/adr/0021 fixed) is refused

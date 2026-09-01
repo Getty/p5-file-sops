@@ -717,32 +717,27 @@ sub encrypt {
     # Compute MAC over plaintext values BEFORE encryption (SOPS behavior).
     # _compute_mac spans every document in the list, in document order, each
     # contributing its own key order -- one digest over the whole stream
-    # (docs/adr/0033 point 3). This runs for a multi-document write too, so the
-    # MAC machinery is exercised and correct before the emitter step below is
-    # reached; a single document is byte-identical.
+    # (docs/adr/0033 point 3). A single document is byte-identical.
     my $mac = _compute_mac($data, $data_key, $metadata);
     $metadata->mac($mac);
 
-    # The one thing still missing for a multi-document WRITE is the emitter's
-    # document separators and the one-instance metadata attached to every
-    # document (karr #31 step 5, format lane). Everything above -- the argument
-    # shape, the per-document guards and the whole-stream MAC -- is in place, so
-    # this refusal is all that stands between the built machinery and a
-    # multi-document round trip. Refused here rather than emitting only the first
-    # document, which is the karr #14 data-loss defect this ticket exists to fix.
-    _refuse_multidoc_pending(\@documents);
+    # Only YAML has a document stream. Writing more than one document to a format
+    # that has none would drop all but the first -- the karr #14 defect class,
+    # which sops commits silently (docs/adr/0033 Decision 3, N1). Refuse instead,
+    # naming the count and the target. A single document reaches every format.
+    _assert_format_supports_stream($format_class, scalar @documents);
 
-    # Encrypt all values in the data structure. Exactly one document remains
-    # past the refusal above -- and it is @documents, not $data: a one-element
-    # ArrayRef (data => [\%h]) is NOT multi-document, so it must take the normal
-    # single-document write path and produce bytes byte-identical to the bare
-    # HashRef (data => \%h). _encrypt_tree and the emitter want that HashRef,
-    # never the wrapper (docs/adr/0033 Decision 1).
-    my $encrypted_data = _encrypt_tree($documents[0], $data_key, $metadata, []);
+    # Encrypt every document's values under the one data key, then hand the list
+    # to the emitter, which attaches the ONE metadata block to each document
+    # byte-identically and joins them with `---` (docs/adr/0033 points 1, 5).
+    # A single document passes a bare HashRef and is byte-identical to before --
+    # serialize reduces a one-element list to the same single Dump either way,
+    # and _encrypt_tree wants the document HashRef, never the ArrayRef wrapper
+    # (docs/adr/0033 Decision 1, proven byte-identical).
+    my @encrypted = map { _encrypt_tree($_, $data_key, $metadata, []) } @documents;
 
-    # Serialize
     return $format_class->serialize(
-        data     => $encrypted_data,
+        data     => (@encrypted == 1 ? $encrypted[0] : \@encrypted),
         metadata => $metadata,
     );
 }
@@ -774,13 +769,17 @@ content as a string.
 C<data> may also be an B<ArrayRef of HashRefs>, one per document, to write a
 multi-document YAML stream -- the inverse of what L</decrypt> returns for one
 (see L<decrypt|/A multi-document YAML stream is an ArrayRef>). This is purely
-additive: until 0.003 an ArrayRef raised C<data must be a hash ref>. B<Writing a
-stream is not yet complete> -- the argument shape, the per-document guards and
-the single whole-stream MAC are in place, but the emitter's document separators
-are still being built (karr #31 step 5), so a genuinely multi-document C<data>
-is B<refused> for now rather than written as only its first document. A
+additive: until 0.003 an ArrayRef raised C<data must be a hash ref>. Every
+document is encrypted under the B<one> data key and carries the B<same> C<sops>
+metadata block, byte-identical, and the documents are joined with C<--->. A
 one-element ArrayRef writes a one-document file, byte-identical to the same bare
 HashRef.
+
+B<Only YAML has a document stream.> An ArrayRef of more than one document with a
+C<format> of C<json>, C<env> or C<ini> is B<refused>, naming the document count
+and the target -- that format cannot hold a stream, and writing one would drop
+all but the first document, which is the C<sops> behaviour this library declines
+to copy (docs/adr/0033 Decision 3).
 
 Keys and values are character strings and are UTF-8 encoded on their way to the
 cipher and the digest; the returned document is UTF-8 encoded bytes, ready to
@@ -1424,12 +1423,15 @@ sub encrypt_file {
     # time. $metadata being defined is exactly "the input had a top-level sops
     # entry", which is the condition sops itself refuses on.
     my ($data, $metadata, $documents) = _format_class($format)->parse($content);
-    _refuse_multidoc_pending($documents);
     croak _sops_key_reserved("input file '$input'") if $metadata;
 
-    # Encrypt
+    # Forward the WHOLE document list, so a multi-document YAML input is
+    # encrypted as the stream it is rather than as its first document alone
+    # (docs/adr/0033, karr #31). Only YAML returns a list; JSON, ENV and INI
+    # return no third value, so $data (the single document) is forwarded there.
+    # A single-document YAML input forwards a one-element list, byte-identical.
     my $encrypted = $class->encrypt(
-        data       => $data,
+        data       => (ref $documents eq 'ARRAY' ? $documents : $data),
         recipients => $recipients,
         format     => $format,
         _encryption_options(\%args),
@@ -1506,11 +1508,13 @@ sub encrypt_in_place {
     # separate output file to inspect afterwards, so an unnoticed double
     # encryption would have overwritten the only copy.
     my ($data, $metadata, $documents) = _format_class($format)->parse($content);
-    _refuse_multidoc_pending($documents);
     croak _sops_key_reserved("file '$file'") if $metadata;
 
+    # Forward the whole document list (see encrypt_file), so an in-place encrypt
+    # of a multi-document YAML file rewrites every document rather than replacing
+    # the file with its first one -- the karr #14 loss this ticket exists to fix.
     my $encrypted = $class->encrypt(
-        data       => $data,
+        data       => (ref $documents eq 'ARRAY' ? $documents : $data),
         recipients => $recipients,
         format     => $format,
         _encryption_options(\%args),
@@ -1647,10 +1651,8 @@ C<carp>s on the read, as L</decrypt> describes under L</A comment in a list come
 back as a C<File::SOPS::Comment>>; the decrypted output still carries it.
 
 A B<multi-document> YAML stream (see L<decrypt|/A multi-document YAML stream is
-an ArrayRef>) is decrypted and MAC-verified, but writing it back out is not yet
-complete (the emitter's document separators are pending, karr #31), so
-C<decrypt_file> B<refuses> such an input rather than writing only its first
-document. Use L</decrypt> to read the stream into an ArrayRef in the meantime.
+an ArrayRef>) is decrypted, MAC-verified and written back out as a plaintext
+multi-document YAML stream, its documents joined by C<--->.
 
 Returns true on success.
 
@@ -2046,11 +2048,14 @@ sub edit {
     my (undef, $metadata, $documents) = _format_class($format)->parse($content);
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
-    # edit is a WRITE path: it re-encrypts what comes back over the original. A
-    # multi-document original cannot be written yet (karr #31 step 5), so refuse
-    # it here -- before the whole file is decrypted and its plaintext serialized
-    # for the editor -- rather than at the emitter. See _refuse_multidoc_pending.
-    _refuse_multidoc_pending($documents);
+    # edit on a multi-document stream is deliberately NOT enabled. Reading and
+    # writing streams both work now, so the mechanics would fall out -- but edit
+    # re-encrypts under a NEW data key (unlike sops edit, karr #41), and
+    # docs/adr/0033 explicitly leaves edit-on-a-stream semantics open ("What this
+    # does not decide"). Shipping a working edit here would settle karr #41 by
+    # accident, so it is refused instead, before the whole file is decrypted and
+    # its plaintext written to a temp file for the editor. See _refuse_edit_multidoc.
+    _refuse_edit_multidoc($documents);
 
     # Re-encryption here generates a NEW data key, exactly as rotate does, so
     # it inherits rotate's refusal: a document also wrapped for pgp or a KMS
@@ -2116,10 +2121,11 @@ sub edit {
             if $err;
 
         # If the editor turned the document into a multi-document stream, refuse
-        # it for the same reason encrypt does (docs/adr/0033, karr #31 steps
-        # 4-5) rather than writing back only its first document. $parsed[2] is
-        # the document list parse() returns as its third value.
-        _refuse_multidoc_pending($parsed[2]);
+        # it for the same reason a multi-document original is refused above:
+        # edit-on-a-stream semantics are undecided (karr #41, docs/adr/0033), not
+        # that the write cannot be done. $parsed[2] is the document list parse()
+        # returns as its third value.
+        _refuse_edit_multidoc($parsed[2]);
 
         @parsed;
     };
@@ -2854,34 +2860,39 @@ sub _serialize_plaintext {
     my $format_class = _format_class($format);
 
     # A decrypted multi-document stream (docs/adr/0033, karr #31) is an ArrayRef
-    # of documents. This is the one boundary where a decrypted stream meets an
-    # output format, so the two refusals about writing one live here.
-    if (ref $data eq 'ARRAY' && @$data > 1) {
-        my $name = $format_class->can('format_name')
-            ? $format_class->format_name : $format;
-
-        # Decision 3, and the house-rule deviation it names: only YAML has a
-        # document stream. Converting one to a format that cannot hold it would
-        # drop all but the first document -- which sops does silently, exit 0,
-        # on read and write alike (N1), and which is the karr #14 defect class.
-        # We refuse instead, naming the count and the target.
-        croak sprintf(
-            "cannot convert a multi-document stream (%d documents) to %s: that "
-            . "format has no document stream, so all but the first document "
-            . "would be lost. sops drops them silently here; this library "
-            . "refuses instead (docs/adr/0033 Decision 3, karr #14). Keep the "
-            . "output as YAML, or select one document.",
-            scalar @$data, $name)
-            unless $name eq 'yaml';
-
-        # YAML CAN hold a stream, but the emitter's document separators are
-        # still being built (karr #31 step 5, format lane). Until they land a
-        # YAML target is refused for the same reason the encrypt write path is,
-        # rather than emitting a broken or single-document file.
-        _refuse_multidoc_pending($data);
-    }
+    # of documents. This is the one boundary where a decrypted stream meets a
+    # plaintext output format, so Decision 3 -- the refusal to convert a stream
+    # to a format that has no document stream (JSON, ENV, INI) rather than drop
+    # all but its first document as sops does silently -- lives here as well as
+    # on the encrypt path. A YAML target emits the stream through emit().
+    my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
+    _assert_format_supports_stream($format_class, scalar @docs);
 
     return $format_class->emit($data);
+}
+
+# Decision 3 (docs/adr/0033, karr #14): a multi-document stream can only be
+# written as YAML. Every other format has no document stream, so writing one to
+# it would drop all but the first document -- which sops does silently, exit 0
+# (N1). We refuse instead, naming the count and the target. Shared by the
+# encrypt (serialize) path and the decrypt_file (emit) path so the two agree. A
+# single document (or none) reaches every format and passes straight through.
+sub _assert_format_supports_stream {
+    my ($format_class, $count) = @_;
+
+    return if $count <= 1;
+
+    my $name = $format_class->can('format_name')
+        ? $format_class->format_name : "$format_class";
+    return if $name eq 'yaml';
+
+    croak sprintf(
+        "cannot write a multi-document stream (%d documents) as %s: that format "
+        . "has no document stream, so all but the first document would be lost. "
+        . "sops drops them silently here; this library refuses instead "
+        . "(docs/adr/0033 Decision 3, karr #14). Use YAML, or write one document "
+        . "at a time.",
+        $count, $name);
 }
 
 # Write $content to $path, atomically: the content goes to a temporary file in
@@ -4643,31 +4654,26 @@ sub _parse_in_document_order {
     return $ordered;
 }
 
-# The temporary boundary refusal for a multi-document WRITE (docs/adr/0033,
-# karr #31). The READ path is done -- decrypt returns an ArrayRef, extract takes
-# a document argument, and the wire layer's whole-stream MAC and
-# parse-to-document-list are in place. What is NOT yet in place is the emitter:
-# the document separators and the one-instance metadata written into every
-# document (karr #31 step 5, format lane). Until that lands, every WRITE path --
-# encrypt (called directly, or via rotate), encrypt_file, encrypt_in_place and
-# edit -- refuses a multi-document stream here rather than writing only its first
-# document, which is the karr #14 data-loss defect this whole ticket exists to
-# fix. A single-document file (or any format that has no document stream) has a
-# list of one, or none, and passes straight through. REMOVE THIS when step 5
-# lands -- it is the only thing standing between the built machinery and a
-# multi-document round trip.
-sub _refuse_multidoc_pending {
+# edit on a multi-document YAML stream is refused -- not because the write
+# cannot be done (it can, since karr #31 step 5), but because its semantics are
+# undecided. edit re-encrypts under a NEW data key where sops edit keeps the
+# existing one (karr #41), and docs/adr/0033 deliberately leaves edit-on-a-stream
+# open under "What this does not decide". Enabling it here would settle karr #41
+# by accident, so both edit paths -- a multi-document original, and a
+# single-document file the editor turns into a stream -- refuse here. A
+# single-document file (or a format with no document stream) has a list of one,
+# or none, and passes straight through.
+sub _refuse_edit_multidoc {
     my ($documents) = @_;
 
     return unless ref $documents eq 'ARRAY' && @$documents > 1;
 
     croak sprintf(
-        "multi-document YAML (%d documents) cannot be WRITTEN yet: reading a "
-        . "stream is supported (decrypt returns an ArrayRef, extract takes a "
-        . "document argument) and one MAC is computed over all documents, but "
-        . "the emitter's document separators are still pending (karr #31 step "
-        . "5). Refused here rather than writing only the first document and "
-        . "silently dropping the rest.",
+        "edit on a multi-document YAML stream (%d documents) is not supported: "
+        . "edit re-encrypts under a NEW data key (unlike sops edit, karr #41), "
+        . "and docs/adr/0033 deliberately leaves edit-on-a-stream semantics "
+        . "open. Reading and writing streams both work -- use decrypt and "
+        . "encrypt to change one, or resolve karr #41 first.",
         scalar @$documents
     );
 }

@@ -1692,19 +1692,41 @@ sub serialize {
     my $data     = $args{data}     // croak "data required";
     my $metadata = $args{metadata} // croak "metadata required";
 
-    # The metadata goes into `sops`, so a value already there would be
-    # overwritten -- and since the digest was computed over the tree BEFORE
-    # serialization, the document that came out failed its own MAC. Refuse
-    # instead, as sops does (exit 203). See File::SOPS::encrypt.
-    croak "data contains a top-level 'sops' entry, which is where the SOPS "
-        . "metadata section goes"
-        if exists $data->{sops};
+    # A stream is an ArrayRef of encrypted document trees; a single document is a
+    # bare HashRef and stays byte-identical -- a one-element list attaches the
+    # same one metadata block and emits through the same Dump call (docs/adr/0033
+    # Decision 1, karr #31). The SAME metadata is written into EVERY document,
+    # byte-identical (same age blob, lastmodified and mac), which is the exact
+    # inverse of the read-side detach in parse/_parse_multidoc (point 1). An
+    # empty document is a real document and STILL gets its own metadata block
+    # (point 6): here it is `{}` and comes out carrying only the `sops:` section.
+    my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
+    croak "data required" unless @docs;
 
-    my %output = %$data;
-    $output{sops} = $metadata->to_hash;
+    # to_hash once, so every document gets a byte-identical block rather than N
+    # freshly built ones that only happen to match.
+    my $section = $metadata->to_hash;
+
+    my @output;
+    for my $doc (@docs) {
+        # The metadata goes into `sops`, so a value already there would be
+        # overwritten -- and since the digest was computed over the tree BEFORE
+        # serialization, the document that came out failed its own MAC. Refuse
+        # instead, as sops does (exit 203). See File::SOPS::encrypt. Checked per
+        # document, so a `sops` key in any document of a stream is refused.
+        croak "data contains a top-level 'sops' entry, which is where the SOPS "
+            . "metadata section goes"
+            if exists $doc->{sops};
+
+        push @output, { %$doc, sops => $section };
+    }
 
     # The timestamp fixup applies to the metadata section only, so it sits here
-    # rather than in emit -- a plaintext document has no `sops:` block to fix.
+    # rather than in emit -- a plaintext document has no `sops:` block to fix. On
+    # a stream it rewrites the bare RFC3339 lastmodified inside EVERY `sops:`
+    # block: it already resets its state at each column-0 line, so a `---`
+    # separator and each later document's `sops:` are handled the same as the
+    # first.
     #
     # mac_covered turns on the foreign-resolution guard (karr #86, ADR 0013):
     # this document carries a MAC, and sops recomputes that MAC from the values
@@ -1715,7 +1737,8 @@ sub serialize {
     # refusing it would refuse a document that works today -- measured, sops -d
     # exit 0. It still reads 493 out of a `0755` this module reads as 755, so
     # the same check runs there and WARNS instead (karr #87, ADR 0018).
-    return _quote_sops_timestamp($class->emit(\%output,
+    return _quote_sops_timestamp($class->emit(
+        @output == 1 ? $output[0] : \@output,
         $metadata->mac_only_encrypted ? (warn_foreign_resolution => 1)
                                       : (mac_covered            => 1)));
 }
@@ -1767,21 +1790,34 @@ sub _quote_sops_timestamp {
 =method serialize
 
     my $yaml = File::SOPS::Format::YAML->serialize(
-        data     => \%data,
+        data     => \%data,           # one document
+        metadata => $metadata_obj,
+    );
+
+    my $stream = File::SOPS::Format::YAML->serialize(
+        data     => [ \%doc1, \%doc2 ],  # a multi-document stream
         metadata => $metadata_obj,
     );
 
 Class method to serialize data and metadata to YAML.
 
-The C<data> parameter must be a HashRef. The C<metadata> parameter must be
+The C<data> parameter is a HashRef for a single document, or an B<ArrayRef of
+HashRefs> for a multi-document stream (docs/adr/0033, karr #31); a one-element
+ArrayRef is byte-identical to the bare HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
 
-Dies if C<data> has a top-level C<sops> key: that is where the metadata section
-is written, so the value would be overwritten. Until 0.003 it was, silently,
-and the resulting document failed its own MAC because the digest had already
-covered the discarded value.
+For a stream, the B<same> metadata section is written into B<every> document,
+byte-identical (same age blob, C<lastmodified> and C<mac>) -- the exact inverse
+of the read-side detach in L</parse>, which takes the metadata from the first
+document only. The documents are joined by C<--->; an empty document in the list
+is a real document and comes out as C<{}> carrying only its own C<sops:> section.
 
-Returns a YAML string with the C<sops> section appended.
+Dies if any document has a top-level C<sops> key: that is where the metadata
+section is written, so the value would be overwritten. Until 0.003 it was,
+silently, and the resulting document failed its own MAC because the digest had
+already covered the discarded value.
+
+Returns a YAML string with the C<sops> section appended to each document.
 
 B<A leaf whose YAML spelling Go's parser resolves differently is refused here,
 and only here.> The document this method writes carries a MAC, and sops
@@ -1878,25 +1914,46 @@ sub emit {
     my ($class, $data, %args) = @_;
     croak "data required" unless defined $data;
 
-    local $YAML::XS::Boolean = $BOOLEAN_MODE;
-    return Dump(File::SOPS::Encrypted->canonical_float_tree(
-        $data,
-        roundtrips => \&_float_roundtrips,
-        carrier    => \&_float_carrier,
-        reject     => \&_reject_unwritable_leaf,
+    # A multi-document stream is an ArrayRef of document trees (docs/adr/0033,
+    # karr #31). A bare HashRef is one document and stays byte-identical: a
+    # one-element list reduces to the SAME single Dump call, so a single-document
+    # write produces exactly today's bytes. Each document is run through
+    # canonical_float_tree -- and the per-leaf foreign-resolution guard, when the
+    # caller set one -- on its own, so each keeps its own sorted key order (the
+    # MAC's encrypt side rides on that, docs/adr/0001), and YAML::XS::Dump then
+    # emits the whole list as one stream.
+    #
+    # YAML::XS::Dump prepends `---` to EVERY document it writes, so N documents
+    # come out joined by `---` with no leading empty document -- which is exactly
+    # the separator rule (docs/adr/0033 point 5: a leading `---` is dropped, a
+    # trailing one is a real empty trailing document already present in the
+    # list). An empty document in the list is a real, empty mapping and Dump
+    # writes it as `--- {}` (point 6). Separators are not authenticated (point
+    # N3), so joining with `---` moves no digest byte.
+    my @docs = ref $data eq 'ARRAY' ? @$data : ($data);
+    croak "data required" unless @docs;
 
-        # Only a document that a reader re-derives values from has anything to
-        # disagree with. serialize sets one of these; the plaintext emitters
-        # (decrypt_file, edit) set neither, and must not -- refusing there would
-        # refuse to WRITE OUT a document this module reads correctly, and
-        # warning would warn about a file with no MAC and no second reader. The
-        # two differ in the verdict only: croak where the MAC covers the leaf,
-        # carp where mac_only_encrypted means it does not. See docs/adr/0013 and
-        # docs/adr/0018.
-        ($args{mac_covered}              ? (reject_scalar => \&_reject_foreign_resolution)
-       : $args{warn_foreign_resolution}  ? (reject_scalar => \&_warn_foreign_resolution)
-       :                                   ()),
-    ));
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
+    return Dump(map {
+        File::SOPS::Encrypted->canonical_float_tree(
+            $_,
+            roundtrips => \&_float_roundtrips,
+            carrier    => \&_float_carrier,
+            reject     => \&_reject_unwritable_leaf,
+
+            # Only a document that a reader re-derives values from has anything
+            # to disagree with. serialize sets one of these; the plaintext
+            # emitters (decrypt_file, edit) set neither, and must not -- refusing
+            # there would refuse to WRITE OUT a document this module reads
+            # correctly, and warning would warn about a file with no MAC and no
+            # second reader. The two differ in the verdict only: croak where the
+            # MAC covers the leaf, carp where mac_only_encrypted means it does
+            # not. See docs/adr/0013 and docs/adr/0018.
+            ($args{mac_covered}              ? (reject_scalar => \&_reject_foreign_resolution)
+           : $args{warn_foreign_resolution}  ? (reject_scalar => \&_warn_foreign_resolution)
+           :                                   ()),
+        )
+    } @docs);
 }
 
 # A referenced leaf YAML::XS cannot write as the text the digest covers.
