@@ -33,7 +33,10 @@ Audit only — you report findings; `file-sops-wire`, `file-sops-api` or
 4. **`dzil build`** — runs clean: no missing files, no warnings. Note that `.claude/`
    and `CLAUDE.md` **are** shipped in the tarball, deliberately: this distribution
    discloses how it was built, so they carry no `gather_exclude_match` and their
-   presence is not a finding. `docs/` and `refs/` are still excluded. What *is* a
+   presence is not a finding. `docs/` **also** ships now, deliberately — the ADRs
+   are part of that same disclosure (commit `bf66e7a`, "ship the ADRs"), so their
+   presence in the tarball is likewise not a finding; only `refs/` (the karr
+   board) is still excluded. What *is* a
    finding: anything under `.claude/` that should never be published — a stray
    `settings.local.json`, credentials, session state. `.gitignore` keeps those
    untracked and `Git::GatherDir` ships tracked files only, so check that the untracked
