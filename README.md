@@ -85,7 +85,7 @@ Files encrypted with File::SOPS can be decrypted with the [reference Go implemen
 
 Verified against **sops v3.13.3** by `t/04-interop.t` and the interop subtests throughout the suite, which drive the real binary in both directions. They find sops via `$SOPS_BIN`, then your `PATH`, then the repo-local `.sops-bin/sops`, then `/tmp/sops` (shared logic in `t/lib/SopsBin.pm`).
 
-Without a binary the suite still reports success — having **silently skipped** the entire compatibility proof. Measured against sops 3.13.3 on 2026-09-01: 1429 tests with a binary, 1210 without, so a green suite at 1210 has left **219** compatibility assertions unrun. To install the pinned version where the suite finds it automatically:
+Without a binary the suite still reports success — having **silently skipped** the entire compatibility proof (measured 2026-09-01: it drops a few hundred interop assertions and still prints `All tests successful`). To install the pinned version where the suite finds it automatically:
 
 ```bash
 maint/fetch-sops .sops-bin   # gitignored, survives a /tmp wipe; needs Go or downloads a pinned build
@@ -96,7 +96,7 @@ Known limitations:
 
 - **Quoted scalars change type on a round trip.** sops types a value by what the parser produced; File::SOPS infers the type from the scalar's text. A quoted `"true"`, `"false"`, `"1"` or `"0"` therefore comes back as a boolean or an integer rather than the string it went in as. Unquoted values are unaffected.
 - **Comments are not preserved.** `YAML::XS` discards them on parse, so they are absent from the output; `sops -d` keeps them.
-- **Multi-document YAML is not supported** — only the last document survives.
+- **Multi-document YAML** is read and written: `decrypt` returns an ArrayRef of HashRefs for a stream (a single document stays a HashRef), `encrypt` accepts one, and `extract` takes `document => $n`. One metadata block and one MAC span all documents. Converting a stream to a format with no document stream (JSON, ENV, INI) is refused rather than silently truncated; `edit` on a stream is not enabled yet.
 - Backends other than age (PGP, KMS, GCP KMS, Azure Key Vault, Vault) are parsed and round-tripped in the metadata but cannot be used for encryption.
 
 ## Installation
