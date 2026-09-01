@@ -1,0 +1,29 @@
+---
+claimed_at: 2026-09-01T01:09:00Z
+claimed_by: wire-173
+class: standard
+completed: 2026-09-01T01:09:00Z
+created: 2026-08-21T11:54:18Z
+id: 173
+priority: low
+started: 2026-09-01T00:19:34Z
+status: done
+tags:
+- wire
+- comments
+- interop
+title: sops warns about a plaintext comment in an encrypted slot and we say nothing
+updated: 2026-09-01T01:09:00Z
+---
+
+Measured while landing karr #160 (docs/adr/0049).
+
+A PLAINTEXT comment at a path the encryption rule SELECTS is not refused by sops -- it is kept, at exit 0, with a warning:
+
+    level=warning msg="Found possibly unencrypted comment in file. This is to be expected if the file being decrypted was created with an older version of SOPS." comment=" note"
+
+Measured in yaml; the same shape exists in ini and dotenv. docs/adr/0049 reproduces the OUTCOME (the comment is kept, not refused -- it is one of the four exceptions) and deliberately does not reproduce the warning, because every OTHER bare shape in a selected slot is a hard refusal there and a warning is a third answer.
+
+Worth deciding: is a plaintext comment in an encrypted slot worth a carp? It can hold a secret, and this distribution has a carp precedent (File::SOPS::Format::YAML, docs/adr/0018). Against: it is advisory rather than a divergence, and File::SOPS.pm carps nowhere today.
+
+IMPLEMENTIERT + COMMITTET f227890. carp im _decrypt_tree-Lesepfad bei Klartext-Kommentar im verschluesselten Slot, matcht sops 3.13.3 Warnung. Advisory: keine Refusal, kein MAC/Digest bewegt, Kommentartext nie zitiert. Greift dotenv+ini; yaml unerreichbar (YAML::XS verwirft Klartext-Kommentare, adr 0060) -- ehrlich vermerkt, kein Ticket-Gap. t/80 neu. docs/adr/0067. Kombinierter Lauf main: 82 Dateien/1429 Tests PASS, Interop 32/32 PASS, keine Skips. Nicht gepusht.
