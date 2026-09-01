@@ -1,0 +1,18 @@
+---
+class: standard
+completed: 2026-09-01T03:27:55Z
+created: 2026-09-01T03:07:18Z
+id: 184
+priority: low
+started: 2026-09-01T03:27:55Z
+status: done
+tags:
+- docs
+- pod
+title: 'File::SOPS::Comment POD: text attribute uses method instead of attr'
+updated: 2026-09-01T03:27:55Z
+---
+
+lib/File/SOPS/Comment.pm:101 declares has text (is ro, required 1) but documents it at line 147 with =method text rather than =attr text. Every other has in this distribution (Encrypted.pm, Metadata.pm) is followed by =attr name. Cosmetic inconsistency with house convention, not a factual error. Found during pre-release audit at HEAD 57f8258.
+
+ERLEDIGT 5967ccc (mit #181): Comment::text POD von =method auf =attr, da jetzt Moo-Attribut.
