@@ -144,7 +144,7 @@ AES-GCM has no ciphertext for one either.
 
 =cut
 
-=method text
+=attr text
 
     $comment->text;   # => ' a comment'
 

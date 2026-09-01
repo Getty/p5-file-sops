@@ -1198,6 +1198,28 @@ this library at all: it stays a comment line, which L<YAML::XS> discards on the
 way in and cannot write on the way out. See
 L<docs/adr/0041|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0041-a-sops-comment-is-a-leaf-of-its-own-not-a-value-and-not-a-refusal.md>.
 
+B<New in 0.003: a I<plaintext> comment in an encrypted slot is warned about.>
+Distinct from the encrypted C<type:comment> entry above: where a
+C<File::SOPS::Comment> stands B<bare> in a slot the document's encryption rule
+B<selects>, this method C<carp>s. That is the third of the four bare shapes
+L</The rule decides what a value is, in both directions> tolerates in a selected
+slot -- the document is still read, the comment comes back unchanged and stays
+out of the MAC, exactly as C<sops -d> reads the same document at exit 0 and warns
+the same way (its message quotes sops's own C<Found possibly unencrypted comment
+in file>). The warning is advisory -- such a comment is neither encrypted nor
+authenticated and may hold a secret in the clear -- and B<its text is not put in
+the warning>, for that same reason: a value that lands in a log was not
+encrypted for any practical purpose. Any re-encryption of the document
+(L</rotate>, L</edit>, L</encrypt_in_place>, or L</decrypt_file> then
+L</encrypt_file>) turns the comment into an encrypted C<type:comment> leaf and
+silences it.
+
+This reaches B<dotenv and INI only>. A plaintext comment has to survive parsing
+into a C<File::SOPS::Comment> before there is anything to warn about, and
+L<YAML::XS> discards one before this library sees the tree -- so a YAML document
+never gets here, though C<sops> itself warns for YAML as well. See
+L<docs/adr/0067|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0067-a-plaintext-comment-in-an-encrypted-slot-is-warned-about-not-silenced.md>.
+
 =head3 A YAML literal that overflows a double comes back as a string
 
 B<New in 0.003, and a change for existing callers.> From an B<unencrypted>
@@ -1505,6 +1527,10 @@ written>, which also covers what mode the output file gets.
 
 C<ignore_mac> is passed through to L</decrypt>; read the warning there before
 using it.
+
+A dotenv or INI document whose encrypted slot holds a I<plaintext> comment
+C<carp>s on the read, as L</decrypt> describes under L</A comment in a list comes
+back as a C<File::SOPS::Comment>>; the decrypted output still carries it.
 
 Returns true on success.
 
@@ -1824,6 +1850,11 @@ not, and sops reads both: one whose stored MAC really is over the literal, and
 C<ignore_mac> is passed through to L</decrypt>; rotating a file you could not
 verify re-signs whatever it contained, so prefer to fail.
 
+A dotenv or INI document whose encrypted slot holds a I<plaintext> comment
+C<carp>s on the L</decrypt> this does first (see L</A comment in a list comes
+back as a C<File::SOPS::Comment>>); the rotation then re-encrypts that comment
+into a C<type:comment> leaf, so a second rotation is silent.
+
 Returns true on success.
 
 =cut
@@ -2036,6 +2067,11 @@ not affect the MAC.
 
 C<ignore_mac> is passed through to L</decrypt>; editing a file you could not
 verify re-signs whatever it contained, so prefer to fail.
+
+A dotenv or INI document whose encrypted slot holds a I<plaintext> comment
+C<carp>s on the L</decrypt> this does first (see L</A comment in a list comes
+back as a C<File::SOPS::Comment>>); re-keying the file then re-encrypts that
+comment into a C<type:comment> leaf.
 
 =head3 What the round trip through the editor keeps, and what it does not
 
