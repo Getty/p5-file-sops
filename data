@@ -1,0 +1,31 @@
+---
+claimed_at: 2026-09-01T16:58:27Z
+claimed_by: opus-orchestrator
+class: standard
+completed: 2026-09-02T01:27:43Z
+created: 2026-09-01T07:37:55Z
+id: 186
+priority: low
+started: 2026-09-01T16:39:29Z
+status: done
+tags:
+- wire
+- yaml
+- interop
+- emitter
+title: decrypt_file writes a quoted non-finite str leaf back as a bare token
+updated: 2026-09-02T01:27:43Z
+---
+
+Found while measuring karr #99 / docs/adr/0070 (sops 3.13.3, .sops-bin/sops). Same root cause as #99 (no per-scalar quote), but on the PLAINTEXT emit path, which installs no foreign-resolution guard -- so it is out of #99/ADR 0070 scope and filed separately.
+
+Measured, one document: sops -e of a QUOTED non-finite string in an unencrypted slot, then sops -d vs File::SOPS->decrypt_file:
+
+  sops -d          x_unencrypted: ".inf"   (str, quoted)
+  decrypt_file     x_unencrypted: .inf     (bare)
+
+The read is correct -- the library reads str ".inf" with the MAC verified (quoted source is not plain style, so _restore_plain_infinities leaves it a string). The plaintext WRITE-BACK loses the quoting: YAML::XS emits str ".inf" bare, and the plaintext emitter has no guard to catch it. So a decrypt_file -> re-encrypt round trip flips such a leaf from string to float (a bare .inf resolves to +Inf at the next parse, ADR 0026), where the original document sops wrote held a string.
+
+Narrow (a string spelled exactly like a YAML 1.2 non-finite constant), but a real fidelity gap: decrypt_file is not a faithful inverse for this leaf class. The general fix is the same missing capability #99/ADR 0070 propose (force-quote one scalar), extended to the plaintext emit path. Blocked-by #99 in spirit; do not start before the #99 mechanism exists.
+
+IMPLEMENTED + interop-proven, ready for review. Extends the k99/ADR 0070 sentinel quoting to the plaintext emit path (decrypt_file/edit) so decrypt_file is a faithful inverse -- a quoted non-finite str / True-False leaf is written quoted, not bare. One-line gate change (mac_covered -> !warn_foreign_resolution), all helpers reused, mac_only_encrypted path untouched, ADR 0071 accepted. Pinned by t/82 (4 interop subtests) + t/35 assertion update. Suite 84 files/1453 PASS.
