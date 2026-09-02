@@ -8,6 +8,8 @@ use JSON::MaybeXS qw(JSON);
 
 use File::SOPS::Metadata;
 use File::SOPS::Metadata::Flat;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # The flat metadata encoding (sops_age__list_0__map_enc) is the ENV and INI
 # formats' way of carrying the `sops` section, and it is a second metadata wire
@@ -282,10 +284,10 @@ subtest 'a real sops 3.13.3 layout round-trips through Metadata unchanged' => su
 # Interop -- the only half that proves anything about sops
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "flat metadata encoding was NOT proven against sops, only against "
-       . "itself. Run maint/fetch-sops or set SOPS_BIN.", 1
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- the flat metadata encoding was NOT proven against "
+       . "sops, only against itself. Run maint/fetch-sops or set SOPS_BIN.", 1
         unless $sops_bin;
 
     require Crypt::Age;
@@ -352,19 +354,6 @@ sub exception_from {
     my $error = '';
     eval { $code->(); 1 } or $error = $@;
     return $error;
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 # Each returns: the document text before the metadata, the flat key/value pairs,

@@ -10,6 +10,8 @@ use File::SOPS::Metadata;
 use File::SOPS::Metadata::Flat;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k77 / docs/adr/0035 -- the per-format type policy for the two untyped
 # stores, ENV and INI, and with it k124 (an unencrypted boolean) and
@@ -150,10 +152,11 @@ subtest 'the bytes ADR 0035 writes survive the ENV escape' => sub {
 # Interop -- the only half that proves anything about sops
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "ENV/INI type ladder was NOT measured against sops, so ADR 0035's "
-       . "premise went unchecked. Run maint/fetch-sops or set SOPS_BIN.", 5
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- the ENV/INI type ladder was NOT measured against "
+       . "sops, so ADR 0035's premise went unchecked. Run maint/fetch-sops "
+       . "or set SOPS_BIN.", 5
         unless $sops_bin;
 
     require Crypt::Age;
@@ -362,19 +365,6 @@ done_testing;
 ###############################################################################
 # Helpers
 ###############################################################################
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
-}
 
 sub write_bytes {
     my ($path, $bytes) = @_;

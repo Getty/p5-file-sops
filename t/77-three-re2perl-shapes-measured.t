@@ -9,6 +9,8 @@ use Crypt::Age;
 
 use File::SOPS;
 use File::SOPS::Metadata;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k165 -- docs/adr/0065.
 #
@@ -131,16 +133,16 @@ subtest 'shape 3 -- \p{Word} / "Word": Perl matches, RE2 rejects the rule' => su
 # bare.
 #
 # Skipped (not failed) when no sops binary is found at SOPS_BIN / PATH /
-# /tmp/sops -- without it the Perl-side measurements still pin the limit
-# IN THIS DISTRIBUTION, and SOPS_BIN that names a non-executable file is
-# still a hard failure.
+# .sops-bin/sops / /tmp/sops -- without it the Perl-side measurements still
+# pin the limit IN THIS DISTRIBUTION, and SOPS_BIN that names a
+# non-executable file is still a hard failure.
 
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- what "
-       . "sops classifies these keys as was NOT measured, so the three "
-       . "shapes above are pinned against nothing on the sops side. Run "
-       . "maint/fetch-sops or set SOPS_BIN.", 4
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- what sops classifies these keys as was NOT "
+       . "measured, so the three shapes above are pinned against nothing "
+       . "on the sops side. Run maint/fetch-sops or set SOPS_BIN.", 4
         unless $sops_bin;
 
     diag("Using sops binary: $sops_bin");
@@ -229,19 +231,6 @@ sub run {
     my $prefix = defined $cwd ? "cd '$cwd' && " : '';
     my $out = `$prefix$sops_bin $args 2>&1`;
     return ($out, $? >> 8);
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 sub write_bytes {

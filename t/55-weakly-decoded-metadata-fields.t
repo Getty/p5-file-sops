@@ -14,6 +14,8 @@ use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k138, handed over from k77 -- docs/adr/0042.
 #
@@ -323,11 +325,11 @@ subtest 'to_hash writes a real boolean, and omits it when off' => sub {
 # 6. Interop -- the only half that proves anything about sops
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "weak-decoding tables above were NOT measured against sops, so what "
-       . "from_hash reproduces went unchecked. Run maint/fetch-sops or set "
-       . "SOPS_BIN.", 2
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- the weak-decoding tables above were NOT measured "
+       . "against sops, so what from_hash reproduces went unchecked. Run "
+       . "maint/fetch-sops or set SOPS_BIN.", 2
         unless $sops_bin;
 
     diag("Using sops binary: $sops_bin");
@@ -418,19 +420,6 @@ sub probe {
     write_bytes("$dir/probe.yaml", $doc);
     my $out = `$sops_bin -d --output-type json '$dir/probe.yaml' 2>&1`;
     return $? >> 8;
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 sub write_bytes {

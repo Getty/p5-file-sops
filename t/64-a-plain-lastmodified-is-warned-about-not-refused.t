@@ -11,6 +11,8 @@ use File::SOPS::Metadata;
 use File::SOPS::Format::YAML;
 use File::SOPS::Backend::Age;
 use File::SOPS::Encrypted;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k159 -- docs/adr/0050. The open half of k144 (docs/adr/0044).
 #
@@ -349,11 +351,11 @@ subtest 'rotate repairs a document that came in plain' => sub {
 # 5. Interop -- the only half that proves what sops does
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "whole premise of this file, that sops refuses a plain lastmodified "
-       . "and reads a quoted one, went unmeasured. Run maint/fetch-sops or "
-       . "set SOPS_BIN.", 3
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- the whole premise of this file, that sops refuses a "
+       . "plain lastmodified and reads a quoted one, went unmeasured. Run "
+       . "maint/fetch-sops or set SOPS_BIN.", 3
         unless $sops_bin;
 
     diag("Using sops binary: $sops_bin");
@@ -431,19 +433,6 @@ sub run_sops_out {
     write_bytes("$where/probe.yaml", $doc);
     my $out = `$sops_bin -d --input-type yaml --output-type json '$where/probe.yaml' 2>&1`;
     return ($? >> 8, $out);
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $path (split /:/, $ENV{PATH} // '') {
-        next unless length $path;
-        return "$path/sops" if -x "$path/sops" && !-d "$path/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 sub write_bytes {

@@ -9,6 +9,8 @@ use Crypt::Age;
 
 use File::SOPS;
 use File::SOPS::Metadata;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k145 and k146 -- docs/adr/0043, the third answer out of the sweep
 # that produced docs/adr/0042.
@@ -170,11 +172,11 @@ subtest 'rotate refuses the document instead of writing it in plaintext' => sub 
 # 5. Interop -- the only half that proves anything about sops
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- the "
-       . "refusal above was NOT measured against sops, so whether it refuses "
-       . "the same documents went unchecked. Run maint/fetch-sops or set "
-       . "SOPS_BIN.", 2
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- the refusal above was NOT measured against sops, so "
+       . "whether it refuses the same documents went unchecked. Run "
+       . "maint/fetch-sops or set SOPS_BIN.", 2
         unless $sops_bin;
 
     diag("Using sops binary: $sops_bin");
@@ -257,19 +259,6 @@ sub probe {
     write_bytes("$dir/probe.yaml", $doc);
     my $out = `$sops_bin -d --output-type json '$dir/probe.yaml' 2>&1`;
     return ($? >> 8, $out);
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 sub write_bytes {

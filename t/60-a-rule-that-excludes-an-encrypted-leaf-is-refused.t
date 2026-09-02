@@ -9,6 +9,8 @@ use Encode qw(encode_utf8);
 use Crypt::Age;
 
 use File::SOPS;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # k150 -- docs/adr/0046, then k160 -- docs/adr/0049.
 #
@@ -193,11 +195,11 @@ subtest 'a bare leaf the rule selects is refused, not encrypted silently' => sub
 # 5. Interop -- the only half that says anything about sops
 ###############################################################################
 SKIP: {
-    my $sops_bin = find_sops();
-    skip "No sops binary found (checked \$SOPS_BIN, PATH, /tmp/sops) -- what "
-       . "sops does with these documents was NOT measured, so the refusal "
-       . "above is pinned against nothing. Run maint/fetch-sops or set "
-       . "SOPS_BIN.", 2
+    my $sops_bin = find_sops_bin();
+    skip "No sops binary found (checked \$SOPS_BIN, PATH, .sops-bin/sops, "
+       . "/tmp/sops) -- what sops does with these documents was NOT "
+       . "measured, so the refusal above is pinned against nothing. Run "
+       . "maint/fetch-sops or set SOPS_BIN.", 2
         unless $sops_bin;
 
     diag("Using sops binary: $sops_bin");
@@ -308,19 +310,6 @@ sub run {
     my ($sops_bin, $args) = @_;
     my $out = `$sops_bin $args 2>&1`;
     return ($out, $? >> 8);
-}
-
-sub find_sops {
-    if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-        die "SOPS_BIN is set to '$ENV{SOPS_BIN}' but that is not executable.\n"
-            unless -x $ENV{SOPS_BIN};
-        return $ENV{SOPS_BIN};
-    }
-    for my $dir (split /:/, $ENV{PATH} // '') {
-        next unless length $dir;
-        return "$dir/sops" if -x "$dir/sops" && !-d "$dir/sops";
-    }
-    return -x '/tmp/sops' ? '/tmp/sops' : undef;
 }
 
 sub write_bytes {

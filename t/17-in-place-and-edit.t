@@ -8,6 +8,8 @@ use YAML::XS qw(Load);
 
 use File::SOPS;
 use Crypt::Age;
+use lib 't/lib';
+use SopsBin qw(find_sops_bin);
 
 # encrypt_in_place and edit both replace a file that may be the only copy of
 # what is in it, so what they do when something goes wrong matters more than
@@ -627,26 +629,11 @@ subtest 'edit needs a file, identities and a sops section' => sub {
 # What sops makes of the files these two wrote
 ###############################################################################
 SKIP: {
-    my $sops_bin = do {
-        my $found;
-        if (defined $ENV{SOPS_BIN} && length $ENV{SOPS_BIN}) {
-            $found = -x $ENV{SOPS_BIN} ? $ENV{SOPS_BIN} : undef;
-        }
-        else {
-            for my $d (split /:/, $ENV{PATH} // '') {
-                next unless length $d;
-                next unless -x "$d/sops" && !-d "$d/sops";
-                $found = "$d/sops";
-                last;
-            }
-            $found //= (-x '/tmp/sops' ? '/tmp/sops' : undef);
-        }
-        $found;
-    };
+    my $sops_bin = find_sops_bin();
 
-    skip 'no sops binary found (checked $SOPS_BIN, PATH, /tmp/sops) -- '
-       . 'the files encrypt_in_place and edit wrote were NOT checked against '
-       . 'the reference implementation', 2
+    skip 'no sops binary found (checked $SOPS_BIN, PATH, .sops-bin/sops, '
+       . '/tmp/sops) -- the files encrypt_in_place and edit wrote were NOT '
+       . 'checked against the reference implementation', 2
         unless $sops_bin;
 
     my $keyfile = "$dir/age-key.txt";
