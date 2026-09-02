@@ -1,0 +1,37 @@
+---
+claimed_at: 2026-09-02T01:51:17Z
+claimed_by: opus-orchestrator
+class: standard
+completed: 2026-09-02T01:51:17Z
+created: 2026-09-01T16:07:03Z
+id: 188
+priority: low
+started: 2026-09-02T01:27:53Z
+status: done
+tags:
+- test
+- tooling
+title: Consolidate the 15 remaining test files onto SopsBin (inline detection ignores
+  .sops-bin and a relative SOPS_BIN)
+updated: 2026-09-02T01:51:17Z
+---
+
+A relative SOPS_BIN (e.g. .sops-bin/sops) silently fails the interop subtests that do "cd $dir && $sops_bin ..." to exercise sops cwd-relative .sops.yaml / RE2 behaviour -- it resolves against the wrong directory. It caused two false "suite is red" alarms (the wire agent on t/04, the k99 reviewer on t/04/t/62/t/79). t/lib/SopsBin.pm now abs_paths SOPS_BIN, fixing the 38 helper-using files. 16 files still carry their own inline detection that returns SOPS_BIN verbatim: t/06 t/17 t/38 t/48 t/50 t/55 t/57 t/58 t/60 t/62 t/64 t/65 t/66 t/71 t/77 t/79. Consolidate them onto find_sops_bin() (finishing Block 0 dedup) so all detection abs_paths in one place. Verify with SOPS_BIN=.sops-bin/sops (relative) prove -lr t/ going fully green.
+
+INSTRUCTIONS VERIFIED against the tree (orchestrator review, 2026-09-01) -- four corrections before anyone picks this up:
+
+1. t/06-wire-format-regressions.t is a FALSE POSITIVE. It mentions SOPS_BIN only in a comment (line 16) and runs without the binary ON PURPOSE. Leave it alone. The real list is 15 files: t/17 t/38 t/48 t/50 t/55 t/57 t/58 t/60 t/62 t/64 t/65 t/66 t/71 t/77 t/79.
+
+2. Two inline variants, not one. 14 files carry an identical 'sub find_sops' (die if SOPS_BIN is set but not executable, then PATH, then /tmp/sops). t/17-in-place-and-edit.t (~line 630) instead SKIPS silently when SOPS_BIN points at a non-executable. Consolidating makes t/17 die there like the rest -- that is the intended fail-loud direction; say so in the commit message.
+
+3. None of the 15 knows .sops-bin/sops (k185 only taught t/lib/SopsBin.pm). Measured under pure auto-detect (SOPS_BIN unset, sops not on PATH): t/62 diags 'Using sops binary: /tmp/sops' while t/04 uses .sops-bin/sops. Both are 3.13.3 today, so nothing is red -- but once /tmp is wiped those 15 files silently SKIP their interop subtests while the other 39 run. That is a stronger reason for this ticket than the relative-path papercut. The 14 skip messages saying '(checked $SOPS_BIN, PATH, /tmp/sops)' become wrong too; update them to name .sops-bin/sops.
+
+4. 'prove -lr t/ going fully green' is NOT the acceptance test -- a skipped interop subtest is green too (house rule: a green suite is not a proof). Acceptance is both of:
+   (a) SOPS_BIN=.sops-bin/sops prove -lrv t/ 2>&1 | grep -E 'Using sops|skip.*sops' -- same count of 'Using sops' lines as with an absolute SOPS_BIN, zero sops-related skips;
+   (b) env -u SOPS_BIN prove -lrv t/ 2>&1 | grep 'Using sops' -- every line points at .sops-bin/sops, none at /tmp/sops.
+
+Premise re-confirmed: SOPS_BIN=.sops-bin/sops prove -lv t/62 fails 'the ticket, end to end' LOUDLY (not silently as the body says) but with a misleading cause.
+
+Shape of the change (lane: file-sops-test-writer, one commit): in each of the 15 files replace the inline detection with the three lines the 39 helper files already use -- "use lib 't/lib'; use SopsBin qw(find_sops_bin); my $sops_bin = find_sops_bin();" (see t/04-interop.t lines 13-26) -- and delete the file-local 'sub find_sops'. Keep every file's own skip message wording (they name what goes unmeasured), only fix the location list. No behaviour under test changes; the files must produce the same 'Using sops binary' line as t/04 under both acceptance runs.
+
+file-sops-test-writer: consolidated all 15 files, commit 77ad74b. Both acceptance runs verified (repo root cwd, .sops-bin/sops and /tmp/sops both present, 3.13.3): (a) SOPS_BIN=.sops-bin/sops prove -lrv t/ -> 1453 tests, 61 'Using sops binary' lines, same as absolute-path baseline, 0 sops-related skips. (b) env -u SOPS_BIN prove -lrv t/ -> 1453 tests, all 61 'Using sops binary' lines point at .sops-bin/sops, none at /tmp/sops. t/17 confirmed fail-loud: a non-executable SOPS_BIN now dies with the same message as the other 14 files (exit 255), where it used to skip silently. Not moving status -- orchestrator reviews the diff first.
