@@ -1826,55 +1826,74 @@ bytes -- so a leaf that libyaml and Go read differently makes the file
 disagree with its own MAC. C<mode: 0755> is the realistic case: this module
 reads 755, Go reads 493, and the file was written silently and rejected later
 with C<MAC mismatch>. Refused as well: C<0o10>, C<0x1f>, C<0b101>, C<1_000>,
-C<.inf>, C<.nan>, C<Null>, C<TRUE> and a date that is not already exactly
-RFC3339 -- all spellings libyaml leaves a string and Go resolves to something
-else. C<007>, C<08>, C<1e3>, C<True>, C<null>, C<yes>, C<1:30> and
-C<2015-01-01T12:00:00Z> are B<not> refused: measured, the two resolvers derive
-the same digest bytes from each of them.
+C<Null>, C<TRUE> and a date that is not already exactly RFC3339 -- all spellings
+libyaml leaves a string and Go resolves to something else. C<007>, C<08>,
+C<1e3>, C<True>, C<null>, C<yes>, C<1:30> and C<2015-01-01T12:00:00Z> are B<not>
+refused: measured, the two resolvers derive the same digest bytes from each of
+them. C<.inf> and C<.nan> are B<no longer> refused either -- since
+C<docs/adr/0070> they belong to the nine-leaf safe set this emitter force-quotes
+instead (see below).
 
-B<Where the refused leaf is already a string, the refusal is this
-distribution's limitation and the message says so.> sops does not resolve a
-string away: given the string C<".inf">, C<"1_000"> or C<"2015-01-01"> it writes
-it double-quoted and reads it back -- measured against sops 3.13.3, 22 such
-spellings, C<sops -d> exit 0 for every one, and this module reads all 22 of
-those documents correctly, in both slots, with the MAC verified. It cannot
-B<write> one: L<YAML::XS> has no per-scalar style control, so the only token
-this emitter produces for such a leaf is the bare one Go resolves into
-something else, and a document carrying it would fail its own MAC. The leaf is
-therefore refused rather than written, and the message names the two remedies
-that are measured to work for all 22 -- encrypt the leaf, or write the document
-as JSON. Quoting it here regardless is B<not> the fix, and the reason is
-measured: a bare C<2015-01-01> and a quoted C<"2015-01-01"> arrive as the same
-Perl string, while sops writes C<2015-01-01T00:00:00Z> for the first and
-C<"2015-01-01"> for the second, so quoting would turn a loud refusal into a
-silent divergence for 15 of the 22. See
-L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>
-and k135.
+B<Where the refused leaf is already a string, fifteen of these spellings stay
+refused as a limitation this distribution states; the seven parse-unambiguous
+non-finite ones are the exception and are written double-quoted.> sops does not
+resolve a string away: given the string C<".inf">, C<"1_000"> or C<"2015-01-01">
+it writes it double-quoted and reads it back -- measured against sops 3.13.3, 22
+such spellings, C<sops -d> exit 0 for every one, and this module reads all 22 of
+those documents correctly, in both slots, with the MAC verified. For fifteen of
+them it cannot B<write> the leaf: a bare C<2015-01-01> and a quoted
+C<"2015-01-01"> arrive as the same Perl string, while sops writes
+C<2015-01-01T00:00:00Z> for the first and C<"2015-01-01"> for the second, so
+quoting a leaf whose source may have been bare would turn a loud refusal into a
+silent value divergence. Those fifteen stay refused, and the message names the
+two remedies measured to work for them -- encrypt the leaf, or write the
+document as JSON. The other seven -- the non-finite str spellings C<.inf>,
+C<.Inf>, C<.INF>, C<+.inf>, C<-.inf>, C<.nan> and C<.NaN> -- parse
+B<unambiguously>: a bare one is resolved to a float at parse (C<docs/adr/0026>),
+so a leaf still holding the string can only have come from a quoted source or a
+caller's own Perl string, and double-quoting it states the type it already has.
+Since C<docs/adr/0070> this emitter writes those seven double-quoted through a
+fail-closed sentinel substitution -- the same nine-leaf safe set as C<True> and
+C<False> below -- byte-identical to what sops writes. See
+L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>,
+k135,
+L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>
+and k99.
 
-B<A C<True> or C<False> string is warned about instead, in both MAC modes.>
-The digest bytes agree -- sops renders a boolean Title-cased, which is the same
-text this module derives from the string -- so the MAC holds and C<sops -d>
-exits 0. What differs is the B<type>: L<YAML::XS> writes the string as a bare
-C<True> because libyaml's resolver knows only C<true> and C<false>, and Go's
-yaml.v3 reads a boolean out of it. Measured, sops 3.13.3: C<sops -d> hands the
-value on as C<true>, and C<sops rotate>, C<sops set> and C<sops edit> each
-rewrite the leaf to a bare C<true>, after which this module reads a
-C<JSON::PP::Boolean> where the caller put a string. Nothing fails at any point,
-which is why it is a C<carp> and not a refusal -- refusing it would refuse a
-document sops reads. The two remedies that work are in the message: encrypt the
-leaf, or write the document as JSON, where every string is quoted. Neighbours
-that look like this one do B<not> warn, because measured they do not diverge:
-C<Yes>, C<No>, C<on>, C<off>, C<y>, C<n> and the rest of YAML 1.1's boolean
-family are strings to yaml.v3 and to libyaml alike, C<~> and C<null> are
-written quoted, and an RFC3339 timestamp -- a string here and a C<time.Time> to
-Go -- comes back from C<sops rotate> as the identical token. See
-L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>
-and k92.
+B<A C<True> or C<False> string is written double-quoted where the MAC covers
+it, and warned about where it does not.> The digest bytes agree -- sops renders
+a boolean Title-cased, which is the same text this module derives from the
+string -- so the MAC holds and C<sops -d> exits 0. What differs is the B<type>:
+L<YAML::XS> writes the string as a bare C<True> because libyaml's resolver knows
+only C<true> and C<false>, and Go's yaml.v3 reads a boolean out of it. Measured,
+sops 3.13.3: from a bare C<True> C<sops -d> hands the value on as C<true>, and
+C<sops rotate>, C<sops set> and C<sops edit> each rewrite the leaf to a bare
+C<true>, after which this module reads a C<JSON::PP::Boolean> where the caller
+put a string. Until C<docs/adr/0019> this was a C<carp> in both MAC modes;
+since C<docs/adr/0070> the MAC-covered path double-quotes the leaf instead --
+through the same fail-closed sentinel substitution as the seven non-finite
+spellings above -- so it stays a string on both sides and a sops write-back
+keeps it (C<sops -e "True"> writes C<"True">). In a C<mac_only_encrypted>
+document the leaf is B<not> MAC-covered and the document already works, so the
+safe-set force-quoting is deliberately not run there and the C<carp> remains:
+its message names the two remedies -- encrypt the leaf, or write the document as
+JSON, where every string is quoted. Neighbours that look like this one do
+B<not> warn or quote, because measured they do not diverge: C<Yes>, C<No>,
+C<on>, C<off>, C<y>, C<n> and the rest of YAML 1.1's boolean family are strings
+to yaml.v3 and to libyaml alike, C<~> and C<null> are written quoted, and an
+RFC3339 timestamp -- a string here and a C<time.Time> to Go -- comes back from
+C<sops rotate> as the identical token. See
+L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>,
+k92,
+L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>
+and k99.
 
-The rule does not apply to an B<encrypted> slot (an C<ENC[...]> string carries
-any spelling verbatim), to L</emit> on its own (a plaintext document has no MAC
-for a reader to disagree with), or to the C<sops> metadata section (the digest
-does not cover it). See
+The refuse-or-warn rule does not apply to an B<encrypted> slot (an C<ENC[...]>
+string carries any spelling verbatim), to L</emit> on its own (a plaintext
+document has no MAC for a reader to disagree with -- though the nine-leaf
+safe-set force-quoting still runs there, so that C<decrypt_file> and C<edit>
+write what sops writes, C<docs/adr/0071>; see L</emit>), or to the C<sops>
+metadata section (the digest does not cover it). See
 L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
 and k86.
 
