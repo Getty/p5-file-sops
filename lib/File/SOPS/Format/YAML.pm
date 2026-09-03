@@ -2898,19 +2898,29 @@ kept rather than stripped, since the MAC's encrypt side rides on this emitter
 (C<docs/adr/0001>). See L<File::SOPS/Every YAML file starts with C<--->, where
 sops writes none> and k83.
 
-Called on its own -- which is what the plaintext emitters do -- it writes every
-YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included. The
-guard L</serialize> installs against those is deliberately not here: a plaintext
-document carries no MAC for a reader to disagree with, and refusing them would
-refuse to write out documents this module reads correctly. L</serialize> turns
-it on with one of the two arguments this method takes beyond the tree --
-C<< mac_covered => 1 >> to refuse such a leaf, or
-C<< warn_foreign_resolution => 1 >> to warn about it, which is what a
-C<mac_only_encrypted> document gets. They install the same check and differ only
-in the verdict -- and B<either> of them warns about a leaf whose spelling Go
-resolves to a boolean where this module holds a string (C<True>, C<False>),
-because there the digest bytes agree and there is nothing for the first one to
-refuse. See L</serialize>.
+Called on its own -- which is what the plaintext emitters do -- it writes most
+YAML spellings unchanged, C<0755> and C<2015-01-01> included, and a bare
+C<type:float> C<.inf> stays bare. What it does B<not> pass through untouched is
+the safe set L</serialize> force-quotes: a C<True> or C<False> string and the
+seven parse-unambiguous non-finite C<str> spellings (C<.inf>, C<.Inf>, C<.INF>,
+C<+.inf>, C<-.inf>, C<.nan>, C<.NaN>) are double-quoted here too. That is what
+sops itself writes for those leaves, so C<decrypt_file> and C<edit> are faithful
+inverses of it: a decrypt then re-encrypt round trip no longer flips such a leaf
+from string to float or bool (a bare C<.inf> would resolve to C<+Inf> at the
+next parse). It reuses ADR 0070's fail-closed sentinel mechanism unchanged. See
+L<docs/adr/0071|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0071-the-plaintext-emitter-quotes-the-same-safe-set-so-it-is-a-faithful-inverse.md>
+and k186.
+
+The refuse-or-warn guard L</serialize> installs against the rest of the divergent
+class is deliberately still not here: a plaintext document carries no MAC for a
+reader to disagree with, and refusing them would refuse to write out documents
+this module reads correctly. L</serialize> turns it on with one of the two
+arguments this method takes beyond the tree -- C<< mac_covered => 1 >> to refuse
+such a leaf, or C<< warn_foreign_resolution => 1 >> to warn about it, which is
+what a C<mac_only_encrypted> document gets. Force-quoting the safe set runs on
+every path B<except> the warn one, so a C<True>/C<False> leaf is quoted under
+C<mac_covered> and on this plaintext path but still reaches the guard, and is
+warned about, under C<warn_foreign_resolution>. See L</serialize>.
 
 L</serialize> is this method plus the metadata section, so both go through the
 same emitter options rather than two copies of them. Those options are not
