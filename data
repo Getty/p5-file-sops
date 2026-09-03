@@ -1,0 +1,28 @@
+---
+class: standard
+completed: 2026-09-03T03:17:25Z
+created: 2026-09-03T02:59:27Z
+id: 191
+priority: medium
+started: 2026-09-03T03:17:25Z
+status: done
+tags:
+- docs
+- changes
+- release-prep
+title: 'Changes {{$NEXT}}: redundant multi-doc bullet, imprecise sops-key bullet,
+  missing deep-recursion/perf entry'
+updated: 2026-09-03T03:17:25Z
+---
+
+Pre-release Changes audit, 2026-09-03. Three concrete items in the {{$NEXT}} section of /home/getty/dev/p5-file-sops/Changes:
+
+1. REDUNDANT bullet: "DATA LOSS: multi-document YAML used to be silently reduced to its last document on write; now fully supported (see above)." literally says "(see above)" and adds nothing beyond the DATA-LOSS framing already implied by the first bullet ("Multi-document YAML is read and written..." k31). Fold the DATA-LOSS framing into the first bullet and drop this one.
+
+2. IMPRECISE bullet: "The top-level sops key is reserved: encrypt refuses a structure carrying it, encrypt_file refuses an already-encrypted input." states this as true for every format. Since commit f652e19 (k157) this is true only for YAML and JSON -- ENV and INI do NOT reserve a bare `sops` data key (their metadata lives in `sops_*` flat keys / a `[sops]` section respectively), so a `format => \x27env\x27` or `format => \x27ini\x27` document with a literal `sops` key is legitimate and accepted. Reword to qualify: "...for the formats that reserve the name -- YAML and JSON; a bare sops key is an ordinary value in ENV and INI."
+
+3. MISSING entry: commits bc72979 and 294f0aa (k117/k120/k179) silence Perl's "Deep recursion on subroutine" STDERR warning across the recursive tree walks (verified: `no warnings \x27recursion\x27` now present in lib/File/SOPS.pm x7 and lib/File/SOPS/Encrypted.pm) and fix a quadratic-in-depth bug in _canonical_floats (measured: a 10000-level document went from 101s/410MB to 17ms/24MB). This is user-visible -- any accepted-but-deep document (under the 10000-container refusal ceiling) used to spam STDERR and could be pathologically slow. The existing bullet about refusing >10000 containers (k110, k117) is a different mechanism (a refusal guard) and does not cover this. No bullet mentions the warning-noise fix or the perf fix anywhere in {{$NEXT}}. Needs a new bullet, e.g.: "Deep nesting under the refusal ceiling no longer spams `Deep recursion on subroutine` warnings, and a 10000-level document walks in milliseconds instead of ~100s (was quadratic in depth). (k117, k120, k179)"
+
+Lane: prose-only change to Changes, no code -- can be done directly, does not need file-sops-wire/api/format. Cross-checked the full {{$NEXT}} section against `git log --oneline 0.002..HEAD` (222 commits); every other BEHAVIOUR CHANGE/SECURITY/DATA LOSS/Fix-tagged commit already has a matching bullet.
+
+Fixed in d45edae: redundant DATA-LOSS multi-doc bullet folded into the multi-doc bullet (label + warning kept); sops-key bullet qualified to YAML/JSON with the ENV/INI carve-out (k157); missing quadratic float-walk / Deep-recursion entry added (k120, k179).
