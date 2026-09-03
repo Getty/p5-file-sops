@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-09-03T03:17:13Z
+created: 2026-09-03T02:59:17Z
+id: 190
+priority: high
+started: 2026-09-03T03:17:13Z
+status: done
+tags:
+- docs
+- pod
+- release-blocker
+title: Format::YAML emit() POD is stale re ADR 0071 force-quoting on the plaintext
+  path
+updated: 2026-09-03T03:17:13Z
+---
+
+lib/File/SOPS/Format/YAML.pm, =method emit (around line 2901-2905): "Called on its own -- which is what the plaintext emitters do -- it writes every YAML spelling it is given, C<0755>, C<.inf> and C<2015-01-01> included." This is now wrong for a `str` `.inf`/`.Inf`/`.INF`/`+.inf`/`-.inf`/`.nan`/`.NaN`/`True`/`False` leaf: since commit 0964780 (k186, docs/adr/0071), a standalone emit() call (force_quote = !$args{warn_foreign_resolution}, true when called with no args) now force-quotes exactly that 9-row safe set even on the plaintext path, so a str ".inf" comes out as `"."inf""`, not bare `.inf` as the POD claims. The commit updated the code comment above emit() but never touched the =method emit POD block itself -- verified via `git show 0964780 -- lib/File/SOPS/Format/YAML.pm`, the POD hunk is absent from that diff. The POD also nowhere documents that plaintext/no-args emit() now force-quotes the safe set at all (SOPS.pm decrypt_file POD alludes to it generally -- "cannot disagree about quoting" -- but the low-level emit() method POD, which is what a direct caller of Format::YAML->emit would read, does not). Fix: reword the "Called on its own" paragraph to except the 9 safe rows (or point at L</serialize> and ADR 0070/0071), and add a short paragraph documenting the force-quote default. Lane: file-sops-format owns Format/*.pm POD. Found during pre-release audit 2026-09-03.
+
+Fixed in e265d12 (emit() POD), dfb14c5 (serialize() POD) and d19237d (the three internal guard comments). Full-file re-scan found no other pre-0070 stale spots. perl -c OK; author-pod-syntax/links green under dzil test.
