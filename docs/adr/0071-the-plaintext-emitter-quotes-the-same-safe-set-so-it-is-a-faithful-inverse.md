@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-09-01
 - Tags: yaml, emitter, wire-format, interop, plaintext
-- Resolves karr #186
+- Resolves k186
 - Extends ADR 0070 (the scoped per-scalar quote), which deliberately scoped the
   plaintext path **out** and named this gap for a follow-up. This is that
   follow-up, and it reuses ADR 0070's mechanism unchanged
@@ -20,7 +20,7 @@ spellings (`.inf .Inf .INF +.inf -.inf .nan .NaN`) — but only on the
 It scoped the plaintext emitters (`decrypt_file`, `edit`) out, because there is
 no MAC there to protect.
 
-karr #186 measured the cost of that scope-out. sops writes such a string
+k186 measured the cost of that scope-out. sops writes such a string
 double-quoted; the plaintext emitter wrote it **bare**:
 
 ```
@@ -64,7 +64,7 @@ my $force_quote = !$args{warn_foreign_resolution};
 - **MAC-covered** (ADR 0070): unchanged — quoting is what lets a document that
   would fail its own MAC be written.
 - **Plaintext** — `decrypt_file`, `edit`, which call `emit($data)` with no
-  arguments (karr #186): now quotes the same safe set, so the emitter writes what
+  arguments (k186): now quotes the same safe set, so the emitter writes what
   sops writes.
 - **mac_only_encrypted** (warn): the one exception, kept as ADR 0070 left it. The
   document already works and the leaf is not MAC-covered, so its bytes are
@@ -122,11 +122,11 @@ reused **unchanged**.
 
 **Record this as an addendum inside ADR 0070.** ADR 0070 is accepted and its
 scope is deliberate; folding a scope change into it would blur what it decided.
-A short ADR that references it is the house pattern and keeps karr #186's
+A short ADR that references it is the house pattern and keeps k186's
 motivation (faithful inverse, no digest) discoverable on its own.
 
 **Quote on the warn path too, for uniformity.** ADR 0070 kept
 `mac_only_encrypted` unchanged because the document already works and the leaf is
-not MAC-covered; karr #186 is about the plaintext emitters being a faithful
+not MAC-covered; k186 is about the plaintext emitters being a faithful
 inverse, which the warn path is not in the business of. Leaving it untouched
 keeps the change to the two paths the ticket measured.

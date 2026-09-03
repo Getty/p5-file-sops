@@ -1949,7 +1949,7 @@ sub emit {
     #     own MAC (the non-finite class) or silently retypes a caller's string
     #     (the True/False class), and quoting the safe subset is what lets such a
     #     document be written at all.
-    #   * Plaintext -- decrypt_file, edit (karr #186): sops writes `".inf"` and
+    #   * Plaintext -- decrypt_file, edit (k186): sops writes `".inf"` and
     #     `"True"` double-quoted, and without this the plaintext emitter wrote
     #     them bare, so a decrypt_file -> re-encrypt round trip flipped the leaf
     #     from string to float/bool (a bare `.inf` resolves to +Inf at the next

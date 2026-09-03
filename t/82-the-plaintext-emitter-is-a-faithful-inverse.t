@@ -12,7 +12,7 @@ use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # ----------------------------------------------------------------------------
-# karr #186 / docs/adr/0071: the plaintext emitter (decrypt_file, edit) now
+# k186 / docs/adr/0071: the plaintext emitter (decrypt_file, edit) now
 # force-quotes the same safe set docs/adr/0070 quotes on the MAC-covered path
 # -- the True/False type divergence and the seven parse-unambiguous non-finite
 # str spellings -- so that `decrypt_file` is a faithful inverse of what `sops
@@ -59,7 +59,7 @@ sub yaml_leaf {
 }
 
 # The four safe-set spellings docs/adr/0070/0071 make writable and that karr
-# #186 names explicitly: the three non-finite str tokens and the True/False
+# k186 names explicitly: the three non-finite str tokens and the True/False
 # type divergence.
 my @SPELLINGS = ('.inf', '.nan', '-.inf', 'True');
 

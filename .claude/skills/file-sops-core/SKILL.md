@@ -53,7 +53,7 @@ library's own tests, and fails against the real `sops` binary.
    scalar is a string end to end. Verified against sops 3.13.3: bare `false` →
    `type:bool`, but quoted `"false"`, `"true"`, `"1"`, `"0"`, `"007"`, `"1.50"` are all
    `type:str`. Perl's own literals set the same flags, so `5432` is int and `'5432'` is
-   str for a structure passed straight to `encrypt`. Decided in **ADR 0002** (karr #15);
+   str for a structure passed straight to `encrypt`. Decided in **ADR 0002**;
    read it before changing any of this.
 
    Two things follow, and both are load-bearing:
@@ -86,7 +86,7 @@ library's own tests, and fails against the real `sops` binary.
    the file as `caf\xc3\xa9`. Anything that consults the flag disagrees with the bytes
    our own emitter wrote, and the document fails *its own* MAC on the next read.
 
-   Both halves were flag-guarded once and both were bugs (**ADR 0003**, karr #27; the
+   Both halves were flag-guarded once and both were bugs (**ADR 0003**; the
    AAD half landed a release earlier). Measured with an unflagged `"caf\x{e9}"`:
    an **unencrypted** value went into the document as UTF-8 and into the digest as
    Latin-1, so `sops -d` reported `MAC mismatch`; an **encrypted** one was
@@ -221,29 +221,29 @@ claims.
 
 `CLAUDE.md` is the original design document and still describes a little more than
 exists. Not implemented today: every backend other than age — PGP, KMS, GCP KMS,
-Azure KV, Vault (karr #39; the metadata fields for them exist and round-trip, the
+Azure KV, Vault (the metadata fields for them exist and round-trip, the
 encryption does not), and that gap is **parked on a maintainer decision**, not merely
-undone. All four format handlers exist: YAML, JSON, ENV/dotenv (karr #36) and INI
-(karr #37), the last two since 2026-08-21. Treat `CLAUDE.md` as a roadmap, not as a
+undone. All four format handlers exist: YAML, JSON, ENV/dotenv and INI,
+the last two since 2026-08-21. Treat `CLAUDE.md` as a roadmap, not as a
 description of the code.
 
-`.sops.yaml` creation rules **do** exist now (`creation_rules_for`, karr #38). Two
+`.sops.yaml` creation rules **do** exist now (`creation_rules_for`). Two
 things about them are easy to get wrong: `path_regex` matches the path relative to
 the **config file's directory**, not the absolute path, and the search for the
 config runs upward from the **file's** directory where sops searches upward from
 the **working directory**. The second is a deliberate divergence and the only one
 in this distribution that can change *who can read a secret* — it is pinned in
 `t/04-interop.t`, which asserts both behaviours side by side, and is open for the
-maintainer to confirm or revert (karr #55).
+maintainer to confirm or revert.
 
 `encrypt_in_place` and `edit` do exist. **Every** method that writes a file now goes
 through `_replace_file` — temp file next to the target, then `rename` — so a failure
-part-way leaves the original intact (karr #40 closed this for `encrypt_file`,
+part-way leaves the original intact (this closed a real bug: `encrypt_file`,
 `decrypt_file` and `rotate`, which used to open the target with `>` and check neither
 the `print` nor the `close`). The cost is a new inode: hard links keep the old
 content, and replacing a file needs write permission on the *directory*. A target
 that exists and is not a regular file (`/dev/stdout`, a fifo) is written through
 directly instead.
-`edit` re-encrypts under a **new data key**, where `sops edit` keeps the existing one
-(karr #41), which is why it refuses the same foreign-key-material documents `rotate`
+`edit` re-encrypts under a **new data key**, where `sops edit` keeps the existing one,
+which is why it refuses the same foreign-key-material documents `rotate`
 refuses.
