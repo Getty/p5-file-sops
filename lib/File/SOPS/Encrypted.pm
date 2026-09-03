@@ -1,6 +1,6 @@
 package File::SOPS::Encrypted;
 # ABSTRACT: Parse and generate SOPS encrypted values
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use Moo;
 use B ();
 use Carp qw(croak);

@@ -1,6 +1,6 @@
 package File::SOPS::Format::INI;
 # ABSTRACT: INI format handler for SOPS
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use Moo;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);

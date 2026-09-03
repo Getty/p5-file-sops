@@ -1,5 +1,7 @@
 Revision history for File-SOPS
 
+{{$NEXT}}
+
 0.003     2026-09-03 16:02:56Z
   - DATA LOSS: multi-document YAML is read and written: decrypt returns an
     ArrayRef of HashRefs for a stream (one document stays a HashRef), encrypt

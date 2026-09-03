@@ -1,6 +1,6 @@
 package File::SOPS::Comment;
 # ABSTRACT: the leaf a sops comment becomes -- not a value, and not a string
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use Moo;
 use Carp qw(croak);
 use namespace::clean;
