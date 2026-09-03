@@ -1,9 +1,10 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
-  - Multi-document YAML is read and written: decrypt returns an ArrayRef of
-    HashRefs for a stream (one document stays a HashRef), encrypt accepts one,
-    extract takes document => $n, and one MAC spans all documents. (k31)
+  - DATA LOSS: multi-document YAML is read and written: decrypt returns an
+    ArrayRef of HashRefs for a stream (one document stays a HashRef), encrypt
+    accepts one, extract takes document => $n, and one MAC spans all documents.
+    A stream used to be silently reduced to its last document on write. (k31)
   - New ENV (dotenv) and INI format handlers (format => 'env' | 'ini'), full
     round-trips against sops in both directions, comments included. (k36, k37)
   - A "True"/"False" string and the non-finite spellings .inf/.Inf/.INF/+.inf/
@@ -40,8 +41,6 @@ Revision history for File-SOPS
     used to truncate the target first and ignore write errors, so a failed write
     left an empty file and still returned true. A written file gets a new inode.
     (k46)
-  - DATA LOSS: multi-document YAML used to be silently reduced to its last
-    document on write; now fully supported (see above).
   - Fix MAC verification of a document with values excluded from encryption --
     the default _unencrypted suffix made the library reject its own output.
   - Fix encryption rules being applied one key level at a time instead of to the
@@ -61,8 +60,9 @@ Revision history for File-SOPS
     written as an unreadable heap address or Perl tag. (k65)
   - An integer outside Go's int64 range is refused, naming the key path; store
     the digits as a string to keep them.
-  - The top-level sops key is reserved: encrypt refuses a structure carrying it,
-    encrypt_file refuses an already-encrypted input.
+  - The top-level sops key is reserved in YAML and JSON: encrypt refuses a
+    structure carrying it, encrypt_file refuses an already-encrypted input (ENV
+    and INI do not reserve a bare sops key). (k157)
   - A YAML leaf whose spelling Go resolves differently from libyaml (0755, 010,
     0x1f, 1_000, .inf, a bare timestamp, ...) is refused at write time, naming
     the key path, instead of written and rejected later by its own MAC. (k86)
@@ -100,6 +100,9 @@ Revision history for File-SOPS
   - A document that contains itself is refused by path instead of hanging; so is
     one acyclic but exponentially shared beyond go-yaml's aliasing budget, or
     nested deeper than 10000 containers. (k110, k117)
+  - Fix a quadratic-in-depth slowdown and "Deep recursion" STDERR noise in the
+    float-canonicalisation walk over an accepted but deeply nested document (a
+    10000-level document went from 101s/410MB to 17ms/24MB). (k120, k179)
   - A plaintext YAML scalar tagged !!bool is encrypted (the tag carries no type);
     every other yaml.org scalar tag is refused by name. (k118)
   - A MAC-verification failure now appends a hedged, value-free hint for two
