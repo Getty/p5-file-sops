@@ -2639,11 +2639,14 @@ sub _go_might_look_at {
 #
 # ONE check, three verdicts. What a document does with the answer depends on
 # whether its MAC covers the leaf (refuse: the file would fail its own MAC) or
-# not (warn: the two implementations simply read different values) -- and a
-# 'type' disagreement is warned about in BOTH modes, because the MAC covers the
-# same bytes either way and there is nothing for it to refuse. A second copy of
-# the check for a second verdict is the defect class this whole layer keeps
-# producing, so there is one. See docs/adr/0018 and docs/adr/0019.
+# not (warn: the two implementations simply read different values). A 'type'
+# disagreement is never refused -- the MAC covers the same bytes either way and
+# there is nothing to refuse -- and since docs/adr/0070 the mac_covered path
+# force-quotes the safe set (True/False among it) BEFORE this check runs, so a
+# 'type' leaf reaches the check, and is warned about, only under
+# mac_only_encrypted. A second copy of the check for a second verdict is the
+# defect class this whole layer keeps producing, so there is one. See
+# docs/adr/0018, docs/adr/0019 and docs/adr/0070.
 #
 # Runs on the encrypt path only, and never over the `sops` branch: the digest
 # does not cover the metadata, and the one leaf there that Go resolves
@@ -2713,9 +2716,13 @@ sub _go_retypes {
 }
 
 # The MAC holds and the two implementations still read different things, so
-# there is nothing to refuse and something to say. Identical in both modes --
-# the digest covers the same bytes either way -- which is why one sub serves
-# both verdicts. See docs/adr/0019 and k92.
+# there is nothing to refuse and something to say. The message does not depend
+# on the MAC mode, which is why one sub serves both call sites. Since
+# docs/adr/0070 the mac_covered path force-quotes a True/False leaf before the
+# guard runs, so in normal operation this carp fires only under
+# mac_only_encrypted; the mac_covered site (_reject_foreign_resolution) reaches
+# it only on the fail-closed fallback, when the sentinel surgery is abandoned.
+# See docs/adr/0019, docs/adr/0070 and k92.
 sub _carp_foreign_retyping {
     my ($where) = @_;
 
@@ -2747,11 +2754,15 @@ sub _carp_foreign_retyping {
 # but this bare token, which YAML::XS does not have (no tag, no forced-quote
 # hook -- probed over every SV shape and every setting of
 # $YAML::XS::QuoteNumericStrings; a dualvar carrier makes it WORSE, writing even
-# `0755` bare). So the leaf stays refused, per docs/adr/0008, until the emitter
-# can write it -- and the message says what is true of it and names the two
-# remedies that are measured to work: encrypt it (22 of 22 sops -d exit 0) or
-# write the document as JSON (22 of 22). See docs/adr/0039 and k135, and
-# k99 for the emitter that would end the refusal.
+# `0755` bare). YAML::XS cannot quote it directly, so the fifteen ambiguous
+# spellings of this class -- whose bare and quoted sources are indistinguishable
+# -- stay refused (docs/adr/0008), and this message names the two remedies
+# measured to work for all 22 of the class: encrypt it (22 of 22 sops -d exit 0)
+# or write the document as JSON (22 of 22). The other seven -- the
+# parse-unambiguous non-finite str spellings -- no longer reach this message:
+# since k99/docs/adr/0070 the emitter force-quotes them through a fail-closed
+# sentinel substitution and writes them, rather than refusing. See
+# docs/adr/0039, k135, docs/adr/0070 and k99.
 #
 # detect_type is the ladder the digest already goes through, not a second
 # opinion about what the leaf is -- and not a pattern on its text.
