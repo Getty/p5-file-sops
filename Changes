@@ -1,6 +1,17 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - SECURITY: the Crypt::Age prerequisite is raised to 0.004, which caps the
+    number of stanzas in an age header (CVE-2026-85783: an unbounded stanza
+    count costs an X25519 scalar multiplication each before the header is
+    authenticated). (k192)
+  - SECURITY: the age backend now bounds the number of age stanzas (entries in
+    a document's sops.age list) it will attempt on decrypt, via a new
+    max_stanzas parameter to decrypt_data_key/can_decrypt. The default is 64, a
+    deliberately conservative limit; a document presenting more age stanzas is
+    refused before any of them is decrypted, closing the entries x stanzas x
+    identities amplification of the same DoS. Raise max_stanzas for a document
+    that legitimately carries more recipients. (k192)
 
 0.003     2026-09-03 16:02:56Z
   - DATA LOSS: multi-document YAML is read and written: decrypt returns an

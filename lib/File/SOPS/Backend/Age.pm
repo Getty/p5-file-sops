@@ -112,6 +112,21 @@ sub decrypt_data_key {
     croak "age_keys must be an array ref" unless ref($age_keys) eq 'ARRAY';
     croak "identities must be an array ref" unless ref($identities) eq 'ARRAY';
 
+    # k192 / CVE-2026-85783 -- Crypt::Age's per-blob stanza DoS (capped upstream
+    # in 0.004) is amplified on this path: the loop below tries every age entry
+    # in the document, and each try costs an X25519 scalar multiplication per
+    # stanza before the header is authenticated, so a document carrying many age
+    # entries multiplies the cost by entries x stanzas x identities. Nothing
+    # before us bounds the entry count, so bound it here, ahead of any age work.
+    # 64 is a deliberately conservative default -- real documents carry a handful
+    # of recipients; a caller that legitimately has more may raise it.
+    my $max_stanzas = $args{max_stanzas} // 64;
+    croak sprintf(
+        "SOPS document has %d age stanzas, exceeding the max_stanzas limit of %d; refusing to decrypt",
+        scalar(@$age_keys),
+        $max_stanzas,
+    ) if @$age_keys > $max_stanzas;
+
     # The data key the SOPS data path consumes is exactly 32 bytes -- the
     # AES-256 key every value in the document is encrypted under. A short
     # return is silently accepted by CryptX as a working AES-128/192 key
@@ -166,6 +181,14 @@ the SOPS metadata (as returned by L</encrypt_data_key>).
 The C<identities> parameter must be an ArrayRef of age secret keys (e.g.,
 C<AGE-SECRET-KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZ...>).
 
+The optional C<max_stanzas> parameter bounds the number of age stanzas (entries
+in the document's C<sops.age> list) that will be attempted, and defaults to
+B<64> -- a deliberately conservative limit. A document presenting more age
+stanzas than this is refused with a C<croak> before any of them is decrypted,
+because each attempt costs work before the age header is authenticated
+(CVE-2026-85783). Raise it explicitly for a document that legitimately carries
+more recipients.
+
 Tries each encrypted key until one can be decrypted with the provided identities.
 
 Returns the decrypted data key (32 bytes) on success.
@@ -184,8 +207,9 @@ sub can_decrypt {
 
     my $data_key = eval {
         $class->decrypt_data_key(
-            age_keys   => $age_keys,
-            identities => $identities,
+            age_keys    => $age_keys,
+            identities  => $identities,
+            max_stanzas => $args{max_stanzas},
         );
     };
 
