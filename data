@@ -1,0 +1,59 @@
+---
+claimed_at: 2026-09-10T03:41:20Z
+claimed_by: worker-c
+class: standard
+completed: 2026-09-10T03:41:20Z
+created: 2026-09-04T21:06:42Z
+id: 192
+priority: high
+started: 2026-09-10T03:35:56Z
+status: done
+tags:
+- security
+- cve
+- upstream
+title: 'CVE-2026-85783 (Crypt::Age): the stanza DoS hits the age backend amplified'
+updated: 2026-09-10T03:41:26Z
+---
+
+Upstream CVE in Crypt::Age, reported by CPANSec on 2026-09-04, publication
+planned for 2026-09-18. The fix is tracked in p5-crypt-age as k45.
+
+UPSTREAM PROBLEM
+Crypt::Age did not bound the number of X25519 stanzas in an age header. Every
+stanza costs a scalar multiplication on decrypt before anything is
+authenticated -- the header MAC key is derived from the file key, which does
+not exist until a stanza has been unwrapped. Measured on Crypt-Age 0.003: 4000
+stanzas (382 KB) = 15.7 s of CPU, then rejection. Linear, ~3.9 ms per stanza.
+
+WHY IT IS WORSE HERE
+File/SOPS/Backend/Age.pm loops over @$age_keys in decrypt_data_key and passes
+each entry separately to Crypt::Age->decrypt. A SOPS document carries any
+number of age entries, so the cost is entries x stanzas x identities rather
+than just stanzas x identities -- whoever may hand us a SOPS document
+multiplies both factors themselves. Nothing on the path bounds the size first.
+
+TO DO once the upstream fix is out
+1. Raise the cpanfile pin from Crypt::Age 0.003 to 0.004, which carries the cap.
+2. Decide whether the age backend additionally bounds the number of age entries
+   per document. The upstream cap applies per blob, not per document -- the
+   outer loop stays unbounded otherwise.
+3. Crypt::Age gained a max_stanzas parameter (default 128). Decide whether the
+   age backend should pass it through.
+
+No edits from p5-crypt-age; this ticket is the handover.
+
+--- 2026-09-05
+The CPANSec reply for CVE-2026-85783 promises that a File::SOPS upload follows
+shortly -- at minimum to move the Crypt::Age pin to 0.004. That makes it a
+commitment made to CPANSec rather than an internal tidiness item; prioritise
+accordingly.
+
+--- 2026-09-05, correction
+An earlier note here claimed the kNNN references in this repository were a
+File::SOPS-local finding numbering whose space should not be allocated from
+another repo. That was wrong: kNNN is simply how karr tickets are referenced,
+and the k52 in Backend/Age.pm is a ticket on this board. This ticket is k192;
+reference it that way from the code comment when the work is picked up.
+
+Done by worker-c (commit 9a9ab53). (a) cpanfile: Crypt::Age 0.003 -> 0.004. (b) Backend::Age: max_stanzas limit, conservative default 64, croaks before the decrypt loop; can_decrypt threads it. POD + Changes/{{$NEXT}} document the 64 default. Offline regression t/83 proves the bound (Crypt::Age never called when over the limit). Full suite green: 85 files / 1458 tests, interop ran against .sops-bin/sops (t/04 = 32 tests, no skip_all). ADDED: passing max_stanzas through can_decrypt so the non-throwing path shares the bound; the guard lives in the backend (the choke point), not in SOPS::decrypt.
