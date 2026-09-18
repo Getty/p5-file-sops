@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
-use File::Slurp qw(read_file write_file);
+use File::Slurper qw(read_binary write_binary);
 use File::Path qw(make_path);
 use File::Spec;
 use Cwd ();
@@ -69,7 +69,7 @@ sub tree {
         my $path = "$root/$rel";
         my ($vol, $dirs) = File::Spec->splitpath($path);
         make_path(File::Spec->catpath($vol, $dirs, ''));
-        write_file($path, $files{$rel});
+        write_binary($path, $files{$rel});
     }
     return $root;
 }
@@ -677,7 +677,7 @@ subtest 'the arguments splat into encrypt_in_place and take effect' => sub {
     my %args = File::SOPS->creation_rules_for(file => "$root/secrets/prod.yaml");
     File::SOPS->encrypt_in_place(file => "$root/secrets/prod.yaml", %args);
 
-    my $doc = read_file("$root/secrets/prod.yaml");
+    my $doc = read_binary("$root/secrets/prod.yaml");
     like($doc, qr/^plain: hello$/m, 'the rule from the config left plain alone');
     like($doc, qr/^secret_enc: ENC\[/m, 'and encrypted the _enc key');
     like($doc, qr/encrypted_suffix: _enc/, 'the rule is recorded in the document');
