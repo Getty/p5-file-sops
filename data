@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-09-18T01:48:49Z
+claimed_by: orchestrator
+class: standard
+completed: 2026-09-18T01:48:49Z
+created: 2026-09-17T22:43:13Z
+id: 195
+priority: high
+started: 2026-09-18T01:48:49Z
+status: done
+tags:
+- release
+- blocker
+- cpanfile
+title: cpanfile pins Crypt::Age 0.004, not yet released on CPAN (release blocker)
+updated: 2026-09-18T01:48:49Z
+---
+
+File-SOPS cpanfile (commit 9a9ab53, k192) requires Crypt::Age 0.004 for CVE-2026-85783. Checked cpanm --info Crypt::Age and the MetaCPAN release API directly: the latest indexed release is still Crypt-Age-0.003.tar.gz, dated 2026-09-01. The sibling repo p5-crypt-age has a local git tag v0.004 and a post-release version-bump commit, and a built tarball sits in that working tree, but none of that is visible on CPAN yet -- the actual upload for Crypt::Age 0.004 has apparently not completed or not indexed.
+
+Per house convention: pinning to a next/unreleased version across two repos is only correct once the dependency is actually released first. Until then, cpanm cannot resolve File::SOPS install deps and the distribution is not installable from CPAN.
+
+Action: confirm Crypt::Age 0.004 is live on CPAN before releasing File::SOPS 0.004. If it has not been uploaded, that upload needs to happen first.
+
+Verifiziert 2026-09-18: Crypt::Age 0.004 ist live auf CPAN (MetaCPAN status=latest/released, Upload 2026-09-17T22:35Z). cpanfile pinnt '0.004', cpanm --info loest auf GETTY/Crypt-Age-0.004.tar.gz. Der beschriebene Release-Blocker (0.004 nicht indexiert) existiert nicht mehr. Blocker aufgeloest.
