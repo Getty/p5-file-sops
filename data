@@ -1,0 +1,22 @@
+---
+class: standard
+completed: 2026-09-18T04:58:36Z
+created: 2026-09-10T03:41:41Z
+id: 193
+priority: low
+started: 2026-09-18T04:58:36Z
+status: done
+tags:
+- upstream
+- needs-review
+title: 'Getty countercheck: GitHub issue #1 (perl 5.32) appears fixed'
+updated: 2026-09-18T04:58:36Z
+---
+
+Note only, raised while closing k192 -- NOT acted on and the GitHub issue was NOT touched (house rule: public tracker, maintainer account, never acted on without explicit instruction).
+
+The public GitHub issue Getty/p5-file-sops #1 (perl 5.32) looks resolved against the current tree, but this needs Gettys own countercheck before anything is done on the GitHub side (comment/close). This ticket is the reminder to run that countercheck; it does not authorise any GitHub write.
+
+Countercheck ausgefuehrt (nur lesend, GitHub NICHT angefasst): Issue #1 (mrmuskrat, perl 5.32) bestaetigt behoben. (1) Keine Bareword JSON::PP::true/false mehr in lib/; Ersatz JSON->true/false in Encrypted.pm. (2) Fix-Commit 11658c3 (2026-08-09) ist Vorfahre von main UND des 0.003-Tags b5663dc -> in 0.003 ausgeliefert. (3) Kompiliert unter Cpanel::JSON::XS-Backend (die urspruengliche Fehlkonfiguration). (4) CPAN latest = 0.003, traegt den Fix. Damit ist die im Issue gesetzte Schliessbedingung ('until a release carrying it is on CPAN') erfuellt. GitHub-Schreiben (Kommentar/Close) steht noch aus und braucht Gettys explizite Anweisung.
+
+Erledigt auf Gettys explizite Anweisung: Issue #1 mit Fix-Info (0.003 auf CPAN) + Entschuldigung fuer die Verzoegerung kommentiert und als 'completed' geschlossen. Kommentar: github.com/Getty/p5-file-sops/issues/1#issuecomment-5725386344
