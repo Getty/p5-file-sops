@@ -1,0 +1,27 @@
+---
+claimed_at: 2026-09-18T04:08:47Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-09-18T04:08:47Z
+created: 2026-09-17T22:42:54Z
+id: 194
+priority: high
+started: 2026-09-18T01:51:31Z
+status: done
+tags:
+- release
+- api
+- security
+title: max_stanzas not reachable through the public File::SOPS API
+updated: 2026-09-18T04:08:47Z
+---
+
+k192 (commit 9a9ab53) added a max_stanzas parameter to File::SOPS::Backend::Age->decrypt_data_key and ->can_decrypt, defaulting to 64, to bound age-stanza-count DoS (CVE-2026-85783). The {{$NEXT}} Changes entry says "Raise max_stanzas for a document that legitimately carries more recipients" without qualification.\n\nVerified in lib/File/SOPS.pm: there is exactly ONE call site of Backend::Age->decrypt_data_key (around line 1118, inside decrypt()), and it does NOT forward a max_stanzas argument -- it always uses the hardcoded default of 64. decrypt() itself only reads %args{encrypted,identities,format} and silently ignores any other key (no unknown-arg guard), so a caller who tries File::SOPS->decrypt(..., max_stanzas => 200) gets no error and no effect: the limit stays 64. The same applies to decrypt_file, extract, rotate and edit, which all funnel through this path. t/83-too-many-age-stanzas-are-refused.t only exercises File::SOPS::Backend::Age directly, so this gap has no test coverage at the public-API level.\n\nEffect: any real document with more than 64 age recipients is UNCONDITIONALLY unreadable through the documented public API (File::SOPS->decrypt/decrypt_file/extract/rotate/edit) -- there is no supported way to raise the limit except bypassing File::SOPS entirely and calling File::SOPS::Backend::Age plus re-implementing metadata parsing by hand. This is a functional dead end for legitimate large-recipient-list documents, and the Changes/POD text overstates what a caller can actually do.\n\nFix belongs to file-sops-api lane: either thread max_stanzas through decrypt/decrypt_file/extract/rotate/edit (%args pass-through to the one Backend::Age->decrypt_data_key call site), or correct the Changes/POD wording to state plainly that raising the limit requires calling File::SOPS::Backend::Age directly.
+
+Maintainer-Entscheidung 2026-09-18: Option A (Durchreichung), NICHT Doku-Korrektur. max_stanzas soll ueber die oeffentliche API (decrypt/decrypt_file/extract/rotate/edit) nutzbar werden -- die Faehigkeit gab es vorher gar nicht. Default bleibt 64. An file-sops-api-Lane delegiert.
+
+file-sops-api fertig: max_stanzas durchgereicht durch decrypt/decrypt_file/extract/rotate/edit (analog ignore_mac), Default 64 unveraendert, Abwesenheit byte-identisch. POD + Changes aktualisiert. prove -lr t/ PASS (85 files/1458 tests), Interop lief (.sops-bin/sops 3.13.3, t/04 PASS). Offen fuer Maintainer: POD als Prosa statt =opt (Begruendung: =opt->=head2, kein =opt in lib/, ignore_mac ist Prosa). Naechste Lane: test-writer fuer Public-API-Regression.
+
+test-writer fertig: t/84-max-stanzas-public-api.t (6 subtests/29 assertions) deckt alle 4 Punkte ab (decrypt direkt + decrypt_file/extract/rotate/edit + Byte-Identitaet), offline, Fixture per t/83+t/15-Muster (MAC bleibt valide). Vakuum-Pruefung: Durchreichung temporaer entfernt -> t/84 rot, wiederhergestellt, lib-Diff identisch. Orchestrator hat unabhaengig verifiziert: SOPS_BIN gesetzt, prove -lr t/ = 86 files/1464 tests PASS, Interop lief (nicht skipped). lib/ Endzustand = API-Lane-Diff. Kein Commit. OFFEN fuer Maintainer: POD als Prosa statt =opt (Agent-Begruendung: =opt->=head2, kein =opt in lib/, ignore_mac ist Prosa) -- Orchestrator empfiehlt Prosa.
+
+Committet als 038651a auf main (POD als Prosa, per Maintainer bestaetigt). Nicht gepusht.
