@@ -1,24 +1,14 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
-  - SECURITY: the Crypt::Age prerequisite is raised to 0.004, which caps the
-    number of stanzas in an age header (CVE-2026-85783: an unbounded stanza
-    count costs an X25519 scalar multiplication each before the header is
-    authenticated). (k192)
-  - SECURITY: decrypt, and with it decrypt_file, extract, rotate and edit,
-    bounds the number of age stanzas (entries in a document's sops.age list)
-    attempted on decrypt, via a new optional max_stanzas argument forwarded to
-    the age backend (decrypt_data_key/can_decrypt). The default is 64, a
-    deliberately conservative limit; a document presenting more age stanzas is
-    refused before any of them is decrypted, closing the entries x stanzas x
-    identities amplification of the DoS. Pass max_stanzas => N to any of those
-    methods to raise it for a document that legitimately carries more
-    recipients. (k192, k194)
-  - creation_rules_for no longer emits "Unrecognized escape \Q/\E passed
-    through" warnings on STDERR before refusing a path_regex that Perl and
-    Go's RE2 read apart; the RE2-divergence check now runs, and croaks,
-    before any live Perl match is attempted. The croak itself is unchanged.
-    (k197)
+  - SECURITY: fixes CVE-2026-85783, an unbounded age-header stanza count that
+    let a single document force expensive work per decrypt attempt. Crypt::Age
+    is raised to 0.004; decrypt (and decrypt_file/extract/rotate/edit) also caps
+    age entries processed per document at 64 by default, raise-able via the new
+    max_stanzas argument. (k192, k194)
+  - creation_rules_for no longer prints a spurious escape-sequence warning to
+    STDERR before refusing a path_regex that Perl and Go RE2 read apart; the
+    refusal itself is unchanged. (k197)
 
 0.003     2026-09-03 16:02:56Z
   - DATA LOSS: multi-document YAML is read and written: decrypt returns an
