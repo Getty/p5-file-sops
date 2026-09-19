@@ -2691,14 +2691,6 @@ sub _first_matching_rule {
         # .sops.yaml is usually written. Same in sops.
         return ($rule, $index) unless defined $regex && length $regex;
 
-        my $matched = eval { $subject =~ /$regex/ ? 1 : 0 };
-        croak "Cannot use the path_regex of creation rule $index in '$config' "
-            . "as a regular expression (" . _reason($@) . "). It is compiled as "
-            . "a Perl regex here and with Go's RE2 by sops, which accept "
-            . "different things -- sops reports this one too, as \"error "
-            . "parsing regexp\"."
-            if $@;
-
         # sops compiles the same string with Go RE2, which is not the same
         # dialect. A pattern the two dialects do not agree on -- one RE2
         # rejects, or one both take and read differently -- silently selects
@@ -2710,6 +2702,12 @@ sub _first_matching_rule {
         # because sops's behaviour here is different -- it REPORTS the
         # unsupported case as "error parsing regexp" rather than discarding
         # the compile error -- and the two croaks describe different things.
+        # This runs BEFORE the real Perl match attempt below (mirroring
+        # Metadata::_rule_verdict's order, k197), so a divergent construct
+        # such as \Q/\E never reaches a live regex compile/match here -- that
+        # would otherwise warn ("Unrecognized escape \Q passed through...")
+        # on STDERR for a pattern Perl merely tolerates rather than reads the
+        # way RE2 does.
         my ($construct, $kind) = _re2_path_regex_diagnosis($regex);
         if ($construct) {
             my $shown = length($regex) > 60
@@ -2727,6 +2725,14 @@ sub _first_matching_rule {
                 . "agree on, or drop the rule. See the POD on "
                 . "creation_rules_for.";
         }
+
+        my $matched = eval { $subject =~ /$regex/ ? 1 : 0 };
+        croak "Cannot use the path_regex of creation rule $index in '$config' "
+            . "as a regular expression (" . _reason($@) . "). It is compiled as "
+            . "a Perl regex here and with Go's RE2 by sops, which accept "
+            . "different things -- sops reports this one too, as \"error "
+            . "parsing regexp\"."
+            if $@;
 
         return ($rule, $index) if $matched;
     }

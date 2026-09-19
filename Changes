@@ -14,6 +14,11 @@ Revision history for File-SOPS
     identities amplification of the DoS. Pass max_stanzas => N to any of those
     methods to raise it for a document that legitimately carries more
     recipients. (k192, k194)
+  - creation_rules_for no longer emits "Unrecognized escape \Q/\E passed
+    through" warnings on STDERR before refusing a path_regex that Perl and
+    Go's RE2 read apart; the RE2-divergence check now runs, and croaks,
+    before any live Perl match is attempted. The croak itself is unchanged.
+    (k197)
 
 0.003     2026-09-03 16:02:56Z
   - DATA LOSS: multi-document YAML is read and written: decrypt returns an

@@ -476,8 +476,22 @@ subtest 'a path_regex both dialects accept but read apart is refused (k164)' => 
             '.sops.yaml' => config_with(rule($pattern, $pub_a, '')),
             's.yaml'     => "k: v\n",
         );
-        my $err = exception(sub {
-            File::SOPS->creation_rules_for(file => "$root/s.yaml") });
+
+        # \Q and \E are constructs a live Perl match would warn about
+        # ("Unrecognized escape \Q passed through...") -- the RE2-divergence
+        # scan must run and croak BEFORE creation_rules_for ever attempts
+        # that match, mirroring Metadata::_rule_verdict's order (k197).
+        my @warnings;
+        my $err;
+        {
+            local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+            $err = exception(sub {
+                File::SOPS->creation_rules_for(file => "$root/s.yaml") });
+        }
+        is(scalar(@warnings), 0,
+            "$name: no warnings emitted (the RE2 scan runs before any Perl "
+            . "match attempt, k197)")
+            or diag("warnings: @warnings");
         like($err, qr/path_regex/, "$name is refused, naming the field");
         like($err, qr/read DIFFERENTLY/,
             "$name: wording names the 'different' kind, not 'sops will refuse'")
