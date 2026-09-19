@@ -1,0 +1,30 @@
+---
+claimed_at: 2026-09-19T17:39:52Z
+claimed_by: opus
+class: standard
+created: 2026-09-19T16:50:13Z
+id: 198
+priority: medium
+started: 2026-09-19T17:39:52Z
+status: review
+tags:
+- changes
+- release
+- docs
+title: Tighten NEXT Changes wording before 0.004 release
+updated: 2026-09-19T17:39:52Z
+---
+
+Pre-release audit (0.003..HEAD) found the NEXT-release Changes block accurate: k192, k194 and k197 are all represented, nothing stale, nothing missing, nothing duplicated (checked against commits 9a9ab53, 038651a, 7578171). But the maintainer asked specifically whether it is compact, and it is not.
+
+Problem 1: the two SECURITY bullets covering the age-stanza DoS fix (lines 4-16 of Changes) are one topic split across two verbose bullets, 12 lines total. House rule is one topic, one bullet - a later commit on the same area should rewrite the existing bullet, not add a second. Both bullets also explain internal mechanism (scalar multiplication cost, entries times stanzas times identities, the backend method names) where house style is what changed, not why.
+
+Suggested replacement, about 6 lines:
+SECURITY: fixes CVE-2026-85783, an unbounded age-header stanza count that let a single document force expensive work per decrypt attempt. Crypt::Age is raised to 0.004; decrypt and decrypt_file/extract/rotate/edit also cap age entries processed per document at 64 by default, raise-able via the new max_stanzas argument. (k192, k194)
+
+Problem 2: the k197 bullet (lines 17-21) is 5 lines for what is really a one-line fix (a spurious STDERR warning before a refusal). Suggested replacement, about 3 lines:
+creation_rules_for no longer prints a spurious escape-sequence warning to STDERR before refusing a path_regex that Perl and Go RE2 read apart; the refusal itself is unchanged. (k197)
+
+Net effect: roughly 17 lines down to 9, same facts kept. This is a Changes-wording-only fix, not behavior-relevant, so no wire/api/format lane needed - just an edit plus the maintainer's sign-off before dzil release.
+
+Changes {{$NEXT}} strafft: die zwei SECURITY-Bullets (CVE age-stanza) zu einem zusammengefuehrt, k197-Bullet auf 3 Zeilen; 18 -> 8 Zeilen, alle Fakten erhalten (CVE-ID, Pin 0.004, Default 64, max_stanzas, k-Tags). Wortarbeit, nicht behaviorrelevant.
