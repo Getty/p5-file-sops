@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-09-19T17:39:59Z
+claimed_by: opus
+class: standard
+created: 2026-09-19T17:38:13Z
+id: 199
+priority: medium
+started: 2026-09-19T17:39:59Z
+status: review
+tags:
+- adr
+- docs
+- security
+title: 'ADR: the age-stanza read-path cap is a deliberate divergence from sops'
+updated: 2026-09-19T17:39:59Z
+---
+
+The k192/k194 age-stanza DoS fix (CVE-2026-85783) caps age entries processed per document at 64 by default (raise-able via max_stanzas). This means a document with >64 age recipients that sops -d accepts is refused here by default. That is exactly the class of deliberate read-path divergence this repo records in ADRs (cf 0007, 0064-0066, 0069), but no ADR covers it. Write ADR 0072: context (sops imposes no cap on the sops.age entry count; Crypt::Age 0.004 caps per-header recipient stanzas at 128; File::SOPS caps entries at 64), decision, tunability via max_stanzas, consequence (>64-recipient documents need an explicit raise). Moves no bytes; pinned by t/83 and t/84. Flagged by the file-sops-wire review of 9a9ab53.
+
+ADR 0072 geschrieben: docs/adr/0072-the-age-stanza-count-is-capped-on-the-read-path-and-that-divergence-from-sops-is-accepted-as-a-limit.md . Dokumentiert die >64-Empfaenger-Read-Path-Divergenz aus k192/k194, pinned durch t/83/t/84, moves no bytes.
