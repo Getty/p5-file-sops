@@ -1,0 +1,63 @@
+---
+claimed_at: 2026-09-18T16:06:47Z
+claimed_by: file-sops-api
+class: standard
+completed: 2026-09-19T03:13:17Z
+created: 2026-09-18T16:01:39Z
+id: 197
+priority: medium
+started: 2026-09-18T16:01:49Z
+status: done
+tags:
+- file-sops-api
+- creation-rules
+title: path_regex matcher warns before diagnosing \Q/\E divergence
+updated: 2026-09-19T03:13:17Z
+---
+
+In lib/File/SOPS.pm around line 2694 (creation_rules_for's path_regex matcher),
+the code does:
+
+    my $matched = eval { $subject =~ /$regex/ ? 1 : 0 };   # compiles/matches FIRST
+    ...
+    my ($construct, $kind) = _re2_path_regex_diagnosis($regex);  # diagnoses AFTER
+
+For a path_regex containing \Q or \E (both dialects accept it, RE2 reads it as
+a quoted-literal run, Perl reads it as nothing at all -- see ADR 0048/0051 and
+t/22-creation-rules.t "a path_regex both dialects accept but read apart is
+refused (k164)"), this order means Perl actually attempts the real match
+BEFORE the RE2-divergence scan runs, which triggers:
+
+    Unrecognized escape \Q passed through in regex; marked by <-- HERE ...
+    Unrecognized escape \E passed through in regex; marked by <-- HERE ...
+
+on STDERR -- reproducible directly from `prove -lr t/22-creation-rules.t`.
+
+The library still ends up croak-ing with the correct, friendly "read
+DIFFERENTLY" message afterward (t/22 passes, full suite is green: 86 files /
+1464 tests), so this is NOT a correctness bug. But it's an inconsistency with
+the twin check in Metadata.pm's _rule_verdict (used for encrypted_regex /
+unencrypted_regex), which runs the RE2-divergence scan (_re2_divergent_construct)
+BEFORE ever calling `eval { qr/$pattern/ }` (see Metadata.pm ~line 1640-1666) --
+that path never warns, because a divergent pattern returns early and the
+compile attempt is skipped entirely.
+
+Fix: in SOPS.pm's creation-rule matcher, call _re2_path_regex_diagnosis($regex)
+BEFORE the `eval { $subject =~ /$regex/ }` line, mirroring Metadata.pm's order,
+so a divergent/unsupported path_regex never reaches a real Perl regex
+compile/match attempt. Keep the existing croak wording and behavior for both
+the 'different' and 'unsupported' kinds, and keep the "not a valid Perl regex
+at all" croak (currently lines ~2695-2700) for patterns that pass the
+whitelist scan but still fail to compile.
+
+Regression test: assert no warnings are emitted (e.g. via warnings captured
+with Test::Warnings or local $SIG{__WARN__}) when creation_rules_for is given
+a path_regex of \Qa.b\E or a\E, while the existing t/22 assertions on the
+croak message keep passing.
+
+Found while investigating a user question about spurious "Unrecognized
+escape" warnings in the t/22-creation-rules.t output; full suite run
+(prove -lr t/, sops binary present at /home/getty/bin/sops) confirmed
+green -- this is cosmetic/order-of-operations, not a test failure.
+
+2026-09-18 16:06 Reordered SOPS.pm _first_matching_rule: the RE2-divergence scan (_re2_path_regex_diagnosis) now runs and croaks before the live Perl match attempt, mirroring Metadata _rule_verdict order. Croak wording for both kinds unchanged; the not-a-valid-Perl-regex croak stays, now after the RE2 scan. Added SIG WARN capture to the existing t/22 subtest for the quoted-literal cases (Q..E, lone E, backslash-v): confirms zero warnings now, versus Unrecognized escape warnings before. Added a Changes bullet under NEXT naming the effect. Evidence: t/22-creation-rules.t green, 29 subtests, zero Unrecognized escape lines confirmed via grep. Full suite via SOPS_BIN pointing at the sops binary is green: 86 files, 1464 tests, same counts as baseline, interop tests executed not skipped. No other files touched, no release run.
