@@ -121,6 +121,7 @@ sub decrypt_data_key {
     # 64 is a deliberately conservative default -- real documents carry a handful
     # of recipients; a caller that legitimately has more may raise it.
     my $max_stanzas = $args{max_stanzas} // 64;
+    _check_max_stanzas($args{max_stanzas});
     croak sprintf(
         "SOPS document has %d age stanzas, exceeding the max_stanzas limit of %d; refusing to decrypt",
         scalar(@$age_keys),
@@ -187,7 +188,8 @@ B<64> -- a deliberately conservative limit. A document presenting more age
 stanzas than this is refused with a C<croak> before any of them is decrypted,
 because each attempt costs work before the age header is authenticated
 (CVE-2026-85783). Raise it explicitly for a document that legitimately carries
-more recipients.
+more recipients. A C<max_stanzas> that is defined but not a positive integer is
+a caller error and C<croak>s before any document is inspected.
 
 Tries each encrypted key until one can be decrypted with the provided identities.
 
@@ -204,6 +206,11 @@ sub can_decrypt {
 
     return 0 unless ref($age_keys) eq 'ARRAY' && @$age_keys;
     return 0 unless ref($identities) eq 'ARRAY' && @$identities;
+
+    # A bad max_stanzas is a caller error, not a "can't decrypt" answer: validate
+    # it here, ahead of the eval below, so it croaks clearly instead of being
+    # swallowed into a false result (k200).
+    _check_max_stanzas($args{max_stanzas});
 
     my $data_key = eval {
         $class->decrypt_data_key(
@@ -229,9 +236,29 @@ Class method to check if any of the provided identities can decrypt the data key
 
 Returns true if decryption is possible, false otherwise.
 
-This is a non-throwing version of L</decrypt_data_key>.
+The optional C<max_stanzas> parameter is forwarded to L</decrypt_data_key> and
+carries the same meaning and default (B<64>): an over-limit document answers
+false rather than throwing. As with L</decrypt_data_key>, a C<max_stanzas> that
+is defined but not a positive integer is a caller error and C<croak>s.
+
+This is a non-throwing version of L</decrypt_data_key> for the decryption
+outcome; a malformed C<max_stanzas> argument still C<croak>s.
 
 =cut
+
+# k200 -- validate max_stanzas the way Crypt::Age does (a positive integer),
+# ahead of the count guard. Absent/undef means the default and is not an error
+# here (unlike Crypt::Age); a defined non-positive-integer is. Without this,
+# max_stanzas => 0/negative refuses every non-empty document with a confusing
+# "exceeding the limit" message, and a non-numeric value numifies to 0 with a
+# Perl warning. The message names neither recipients nor blobs.
+sub _check_max_stanzas {
+    my ($max_stanzas) = @_;
+    return unless defined $max_stanzas;
+    croak "max_stanzas must be a positive integer"
+        unless $max_stanzas =~ m{\A[0-9]+\z} && $max_stanzas > 0;
+    return;
+}
 
 sub _armor {
     my ($data) = @_;

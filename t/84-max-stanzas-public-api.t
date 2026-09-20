@@ -6,6 +6,7 @@ use File::Temp qw(tempdir);
 use YAML::XS qw(Load Dump);
 
 use File::SOPS;
+use File::SOPS::Backend::Age;
 use Crypt::Age;
 
 # ----------------------------------------------------------------------------
@@ -304,6 +305,116 @@ subtest 'edit forwards max_stanzas through its own decrypt() call' => sub {
     close $fh2;
     is $after_yaml, $before_yaml,
         '  ... file untouched, exactly as edit() promises when nothing changed';
+};
+
+###############################################################################
+# k200 -- max_stanzas is validated as a positive integer, ahead of the count
+# guard. Before this fix a DEFINED but invalid max_stanzas (0, negative or
+# non-numeric) did not croak on its own: it flowed into the count check, where
+# 0/negative refused every non-empty document with the confusing
+# "exceeding the max_stanzas limit of 0" message, and a non-numeric value
+# additionally tripped a Perl "isn't numeric" warning under (> ). can_decrypt
+# swallowed that croak and answered a plain false, hiding the bad argument.
+# Both are now a clear croak. Absent/undef still means the default (64).
+###############################################################################
+subtest 'invalid max_stanzas croaks clearly through the public decrypt() API' => sub {
+    my (undef, $yaml) = stanza_fixture(data => { secret => 'shh' });
+
+    for my $bad (0, -3, 'abc', 1.5) {
+        my $err = do {
+            local $@;
+            eval {
+                File::SOPS->decrypt(
+                    encrypted   => $yaml,
+                    identities  => [$secret],
+                    max_stanzas => $bad,
+                );
+            };
+            $@;
+        };
+        like $err, qr/max_stanzas must be a positive integer/,
+            "decrypt(max_stanzas => '$bad') croaks with the positive-integer message";
+        unlike $err, qr/exceeding the max_stanzas limit/,
+            "  ... not the confusing over-limit message ('$bad')";
+    }
+};
+
+subtest 'Backend::Age validates max_stanzas on both entry points' => sub {
+    # One real, decryptable entry -- enough to exercise both success and the
+    # validation croak; the count guard is never the thing under test here.
+    my $keys = File::SOPS::Backend::Age->encrypt_data_key(
+        data_key   => "\0" x 32,
+        recipients => [$public],
+    );
+
+    for my $bad (0, -1, 'nope', 2.5) {
+        my $derr = do {
+            local $@;
+            eval {
+                File::SOPS::Backend::Age->decrypt_data_key(
+                    age_keys    => $keys,
+                    identities  => [$secret],
+                    max_stanzas => $bad,
+                );
+            };
+            $@;
+        };
+        like $derr, qr/max_stanzas must be a positive integer/,
+            "decrypt_data_key croaks on max_stanzas => '$bad'";
+
+        # The regression proper: this used to be swallowed into a false answer.
+        my $cerr = do {
+            local $@;
+            eval {
+                File::SOPS::Backend::Age->can_decrypt(
+                    age_keys    => $keys,
+                    identities  => [$secret],
+                    max_stanzas => $bad,
+                );
+            };
+            $@;
+        };
+        like $cerr, qr/max_stanzas must be a positive integer/,
+            "can_decrypt croaks on max_stanzas => '$bad' (no longer a silent false)";
+    }
+
+    # A non-numeric value used to trip a Perl "isn't numeric" warning at the
+    # count guard; the positive-integer check now fires first, silently.
+    my @warnings;
+    do {
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        eval {
+            File::SOPS::Backend::Age->decrypt_data_key(
+                age_keys    => $keys,
+                identities  => [$secret],
+                max_stanzas => 'abc',
+            );
+        };
+    };
+    is scalar(@warnings), 0,
+        'no Perl warning is emitted for a non-numeric max_stanzas';
+
+    # A valid positive integer is accepted and still decrypts.
+    is +File::SOPS::Backend::Age->can_decrypt(
+        age_keys    => $keys,
+        identities  => [$secret],
+        max_stanzas => 1,
+    ), 1, 'a valid positive integer (1) is accepted and can_decrypt succeeds';
+
+    # Absent and explicit-undef both use the default (64), byte-identical to
+    # today -- and return the same 32-byte data key.
+    my $dk_default = File::SOPS::Backend::Age->decrypt_data_key(
+        age_keys   => $keys,
+        identities => [$secret],
+    );
+    my $dk_undef = File::SOPS::Backend::Age->decrypt_data_key(
+        age_keys    => $keys,
+        identities  => [$secret],
+        max_stanzas => undef,
+    );
+    is $dk_undef, $dk_default,
+        'absent and explicit-undef max_stanzas both default to 64 and decrypt';
+    is length($dk_default), 32, '  ... returning the 32-byte data key';
 };
 
 done_testing;
