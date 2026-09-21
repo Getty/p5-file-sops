@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-09-20T02:50:26Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-09-21T20:54:35Z
+created: 2026-09-20T02:22:00Z
+id: 201
+priority: low
+started: 2026-09-20T02:22:38Z
+status: done
+tags:
+- docs
+- pod
+title: 'can_decrypt POD: document that it forwards max_stanzas'
+updated: 2026-09-21T20:54:35Z
+---
+
+can_decrypt (Backend::Age) forwards max_stanzas to the count guard (max_stanzas => \$args{max_stanzas}) and inherits the same refusal, but its POD does not mention the argument. Add a line documenting that can_decrypt also accepts/forwards max_stanzas (default 64), consistent with decrypt_data_key. Flagged by the k192/k194 review.
+
+can_decrypt POD documents max_stanzas (forwarded, default 64; defined non-positive-integer croaks); matching sentence added to decrypt_data_key POD. Backend/Age.pm + t/84 only. Not committed.
+
+can_decrypt POD documents max_stanzas; committed with k200
+
+Mit k200 in 5ece757 committet; POD auf can_decrypt+decrypt_data_key. Interop diese Session grün (siehe #200). Geschlossen.
