@@ -1,0 +1,24 @@
+---
+claimed_at: 2026-09-20T02:50:19Z
+claimed_by: file-sops-wire
+class: standard
+completed: 2026-09-21T20:54:35Z
+created: 2026-09-20T02:21:54Z
+id: 200
+priority: low
+started: 2026-09-20T02:22:32Z
+status: done
+tags:
+- backend
+- robustness
+title: Validate max_stanzas as a positive integer in Backend::Age
+updated: 2026-09-21T20:54:35Z
+---
+
+The k192/k194 review (file-sops-wire on 9a9ab53) found max_stanzas is not range-validated in Backend::Age. max_stanzas => 0 or negative refuses every non-empty document; a non-numeric value numifies to 0 with a Perl warning under (@\$age_keys > \$max_stanzas). Direction is fail-closed (over-refuses, never under-refuses) so it is safe, but the message is confusing. Crypt::Age itself croaks if max_stanzas is not a positive integer. Fix: mirror that in decrypt_data_key/can_decrypt -- croak clearly on a non-positive-integer max_stanzas. Keep the default 64 and the behaviour for valid values unchanged. Add a regression test (extend t/84).
+
+Implemented: _check_max_stanzas validates a positive integer (mirrors Crypt::Age) in decrypt_data_key (ahead of count guard) and can_decrypt (ahead of eval, so it is not swallowed into false). Default 64 unchanged. Regression in t/84. Full suite + interop green (sops 3.13.3, 1466 tests). Not committed; orchestrator to review/commit.
+
+max_stanzas positive-integer validation implemented + tested (t/84), committed; suite 1466 green incl. interop vs sops 3.13.3
+
+Interop in dieser Session verifiziert (nicht nur Agent-Notiz): SOPS_BIN=/home/getty/bin/sops, sops 3.13.3. t/04-interop.t 32 echte Tests (kein skip_all) + t/84 8 Subtests = 40 grün. Committet in 5ece757. Geschlossen.
