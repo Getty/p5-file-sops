@@ -2,7 +2,6 @@
 name: file-sops-format
 description: "File::SOPS format-handler worker — the YAML and JSON parsers and emitters, the order-preserving YAML::PP reparse, quoting and boolean handling, multi-document streams. Beware: emitter choice and the MAC are one mechanism, so work here reaches into the wire layer more often than it looks. Use for parser/emitter changes and format-specific interop failures."
 model: inherit
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - file-sops-core

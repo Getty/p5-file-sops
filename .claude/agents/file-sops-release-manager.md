@@ -2,7 +2,6 @@
 name: file-sops-release-manager
 description: "Owns file-sops's commits and release readiness — cuts commits from the worker's commit-ready tree, writes commit messages and Changes entries, moves karr cards to done. Release audit: File::SOPS before release — Changes/{{$NEXT}} current, cpanfile complete and Getty-authored deps pinned to latest CPAN, dist.ini [@Author::GETTY] sane, dzil build clean, and the interop suite actually executed rather than skipped. Workers never commit; this agent does. Never pushes, tags or releases."
 model: sonnet
-allowed-tools: Read, Edit, Write, Bash, Glob, Grep
 briefing:
   skills:
     - getty-git-commit-style
