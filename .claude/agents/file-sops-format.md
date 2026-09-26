@@ -8,7 +8,7 @@ briefing:
     - file-sops-core
     - getty-perl-core
     - getty-perl-moo
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the file-sops-format worker for **File::SOPS**. You own how a document becomes

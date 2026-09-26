@@ -7,7 +7,7 @@ briefing:
   skills:
     - file-sops-core
     - getty-perl-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the file-sops-wire worker for **File::SOPS**. You own the layer where a Perl

@@ -7,7 +7,7 @@ briefing:
   skills:
     - file-sops-core
     - getty-perl-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
 ---
 
 You are the file-sops-test-writer.

@@ -33,7 +33,7 @@ Depends on whether the Agent/Task tool is available to you.
 
 - **You can spawn subagents** (orchestrating main agent): Do NOT touch behavior-relevant
   code yourself — delegate. Your lane: coordinate, inspect, plan, review diffs, run
-  tests, manage git, edit non-behavioral docs. Why: only the `file-sops-*` agents get
+  tests, edit non-behavioral docs. Why: only the `file-sops-*` agents get
   their skills force-loaded via `briefing.skills`; you get no briefing and would touch
   format-critical internals with too little context.
 
@@ -43,7 +43,7 @@ Depends on whether the Agent/Task tool is available to you.
   | Public API, guards, error behaviour, rule policy | `file-sops-api` |
   | Parsers, emitters, quoting, the order-preserving reparse | `file-sops-format` |
   | Write/extend tests, reproduce interop bugs | `file-sops-test-writer` |
-  | Pre-release audit | `file-sops-release-checker` |
+  | Commits, `Changes`, card → done, pre-release audit | `file-sops-release-manager` |
 
   Pick the lane by what the change *moves*, not by which file it starts in: a two-line
   edit in `Format/YAML.pm` that changes what gets hashed belongs to `file-sops-wire`.
@@ -57,6 +57,9 @@ Depends on whether the Agent/Task tool is available to you.
 Behavior-relevant = anything under `lib/`, the tests, and any change to the encrypted
 wire format, MAC computation, AAD derivation, type detection, or serialization. Prose
 docs, `README.md` and `Changes` wording are not.
+
+**Only `file-sops-release-manager` commits.** A worker leaves a commit-ready tree and hands its card
+to `review`; you then dispatch `file-sops-release-manager` to cut the commit and close the card.
 
 ## Interop is the product — a green suite is not a proof
 
@@ -96,7 +99,7 @@ repo.
 - `karr edit ID -a "note"` · `--claim NAME` · `--block "why"` — update
 - `karr move ID in-progress --claim NAME` — start · `karr handoff ID --claim NAME --note "…"` — to review
 
-Full command surface: skill `kanban-issues-karr-cli`.
+Full command surface: skill `kanban-issues-karr-coordination`.
 
 ## Release — never without permission
 

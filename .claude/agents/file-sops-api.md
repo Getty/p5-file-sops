@@ -7,9 +7,9 @@ briefing:
   skills:
     - getty-perl-core
     - getty-perl-moo
-    - getty-perl-release-author-getty
     - file-sops-core
-    - kanban-issues-karr-cli
+    - kanban-issues-karr-ticket
+    - getty-perl-pod
 ---
 
 You are the file-sops-api worker for **File::SOPS**. You own the surface a caller
