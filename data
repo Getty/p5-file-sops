@@ -1,0 +1,26 @@
+---
+class: standard
+created: 2026-10-06T19:19:50Z
+id: 203
+priority: low
+status: backlog
+tags:
+- hygiene
+- cpanfile
+- crypt-age
+- review-2026-10-06
+title: 'cpanfile: raise Crypt::Age to 0.005, the release that stops decrypt from overwriting
+  the caller''s $_'
+updated: 2026-10-06T19:19:50Z
+---
+
+`cpanfile:3` requires `Crypt::Age 0.004`. The sibling `~/dev/p5-crypt-age` is at 0.005, whose only change is a bug that was found through this dist (Crypt::Age `Changes`, 0.005: "Reading a header no longer overwrites the caller's $_ ... A caller decrypting inside for (@files) had the array element itself rewritten ... Found through File::SOPS").
+
+`File::SOPS::Backend::Age` calls `Crypt::Age->decrypt` directly (`lib/File/SOPS/Backend/Age.pm:150`) and neither it nor `lib/File/SOPS.pm` localizes `$_` (`grep -n 'local \$_' lib` is empty), so with the still-permitted Crypt::Age 0.004 every `File::SOPS->decrypt`, `decrypt_file`, `extract`, `rotate` and `edit` inherits the defect: `for (@files) { File::SOPS->decrypt_file(input => $_, ...) }` rewrites the list, and a loop over literals dies with "Modification of a read-only value attempted".
+
+Not reproduced here because the installed Crypt::Age is already 0.005 (with it `$_` survives a `File::SOPS->decrypt`, checked).
+
+Done: `requires 'Crypt::Age', '0.005';`, a Changes line under `{{$NEXT}}`, and a small test (in the style of Crypt::Age's `t/08-topic-preserved.t`) asserting that `decrypt`, `decrypt_file` and `extract` leave `$_` alone, so the guarantee is checked on this side too.
+
+---
+Fleet review 2026-10-06 · kind: hygiene · confidence: plausible
