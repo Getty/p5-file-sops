@@ -1,0 +1,23 @@
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":199,"ts":"2026-09-19T17:38:13Z"}
+{"action":"handoff","agent":"opus","detail":"review","task_id":198,"ts":"2026-09-19T17:39:52Z"}
+{"action":"handoff","agent":"opus","detail":"review","task_id":199,"ts":"2026-09-19T17:39:59Z"}
+{"action":"edit","agent":"opus","detail":"review","task_id":198,"ts":"2026-09-19T21:22:17Z"}
+{"action":"move","agent":"opus","detail":"done","task_id":198,"ts":"2026-09-19T21:22:24Z"}
+{"action":"edit","agent":"opus","detail":"review","task_id":199,"ts":"2026-09-19T21:22:30Z"}
+{"action":"move","agent":"opus","detail":"done","task_id":199,"ts":"2026-09-19T21:22:36Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":200,"ts":"2026-09-20T02:21:54Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":201,"ts":"2026-09-20T02:22:00Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":202,"ts":"2026-09-20T02:22:07Z"}
+{"action":"move","agent":"file-sops-wire","detail":"in-progress","task_id":200,"ts":"2026-09-20T02:22:32Z"}
+{"action":"move","agent":"file-sops-wire","detail":"in-progress","task_id":201,"ts":"2026-09-20T02:22:38Z"}
+{"action":"edit","agent":"file-sops-wire","detail":"in-progress","task_id":200,"ts":"2026-09-20T02:30:17Z"}
+{"action":"edit","agent":"file-sops-wire","detail":"in-progress","task_id":201,"ts":"2026-09-20T02:30:23Z"}
+{"action":"handoff","agent":"file-sops-wire","detail":"review","task_id":200,"ts":"2026-09-20T02:50:19Z"}
+{"action":"handoff","agent":"file-sops-wire","detail":"review","task_id":201,"ts":"2026-09-20T02:50:26Z"}
+{"action":"edit","agent":"file-sops-wire","detail":"review","task_id":200,"ts":"2026-09-21T20:54:16Z"}
+{"action":"edit","agent":"file-sops-wire","detail":"review","task_id":201,"ts":"2026-09-21T20:54:22Z"}
+{"action":"edit","agent":"Torsten Raudssus","detail":"backlog","task_id":202,"ts":"2026-09-21T20:54:29Z"}
+{"action":"move","agent":"file-sops-wire","detail":"done","task_id":200,"ts":"2026-09-21T20:54:35Z"}
+{"action":"move","agent":"file-sops-wire","detail":"done","task_id":201,"ts":"2026-09-21T20:54:35Z"}
+{"action":"move","agent":"Torsten Raudssus","detail":"done","task_id":202,"ts":"2026-09-21T20:54:35Z"}
+{"action":"create","agent":"Torsten Raudssus","detail":"backlog","task_id":203,"ts":"2026-10-06T19:19:50Z"}
