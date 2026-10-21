@@ -1,5 +1,7 @@
 Revision history for File-SOPS
 
+{{$NEXT}}
+
 0.005     2026-10-21 18:35:30Z
   - Crypt::Age is raised to 0.005, the release whose header parser no longer
     overwrites the caller's $_; with 0.004 a decrypt inside for (@files)

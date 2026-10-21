@@ -1,6 +1,6 @@
 package File::SOPS::Format::ENV;
 # ABSTRACT: dotenv (.env) format handler for SOPS
-our $VERSION = '0.005';
+our $VERSION = '0.006';
 use Moo;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);

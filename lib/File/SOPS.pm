@@ -44,7 +44,7 @@ use File::SOPS::Format::ENV;
 use File::SOPS::Format::INI;
 use namespace::clean;
 
-our $VERSION = '0.005';
+our $VERSION = '0.006';
 
 =head1 SYNOPSIS
 
