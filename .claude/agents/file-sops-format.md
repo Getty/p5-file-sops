@@ -5,6 +5,7 @@ model: inherit
 briefing:
   skills:
     - file-sops-core
+    - file-sops-hazards
     - getty-perl-core
     - getty-perl-moo
     - kanban-issues-karr-ticket

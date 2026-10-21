@@ -7,6 +7,7 @@ briefing:
     - getty-perl-core
     - getty-perl-moo
     - file-sops-core
+    - file-sops-hazards
     - kanban-issues-karr-ticket
     - getty-perl-pod
 ---

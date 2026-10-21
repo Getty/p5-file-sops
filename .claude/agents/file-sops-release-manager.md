@@ -9,6 +9,7 @@ briefing:
     - perl-release-dist-ini
     - getty-perl-core
     - file-sops-core
+    - file-sops-hazards
     - kanban-issues-karr-ticket
 ---
 
