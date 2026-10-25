@@ -32,7 +32,8 @@ Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 ## Delegation
 
 Delegate behavior-relevant code to the right agent instead of touching it yourself —
-principle and lane are in `.claude/rules/file-sops-rules.md`.
+principle in the shared rule `getty-agent-delegation` (skilletor bundle
+`getty-cpan-dist@getty`), lanes and hazards in `.claude/rules/file-sops-rules.md`.
 
 | Task | Agent | Owns |
 |---|---|---|
