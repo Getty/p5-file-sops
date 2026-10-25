@@ -152,7 +152,12 @@ subtest 'rotate keeps sops fields this distribution does not model' => sub {
 # Key material for a backend we cannot re-encrypt for
 ###############################################################################
 subtest 'rotate refuses a file holding foreign key material' => sub {
-    for my $field (qw(pgp kms gcp_kms azure_kv hc_vault)) {
+    # hc_vault is NOT in this list any more (k39): rotate re-wraps it through
+    # Vault, see t/86-hc-vault-backend.t. It stays here as the company the
+    # still-refused backends keep: a document holding hc_vault AND one of
+    # them is refused for the one we cannot re-wrap, and the message must not
+    # blame hc_vault.
+    for my $field (qw(pgp kms gcp_kms azure_kv)) {
         my $file = encrypted_file(
             data   => { secret => 'shh' },
             mangle => sub { $_[0]->{$field} = [ { enc => 'WRAPPED-FOR-SOMEONE-ELSE' } ] },
@@ -172,6 +177,37 @@ subtest 'rotate refuses a file holding foreign key material' => sub {
         my ($after) = sops_section($file);
         is_deeply($after->{$field}, $before->{$field},
             "and leaves the $field entries untouched on disk");
+    }
+};
+
+subtest 'rotate still refuses foreign key material next to hc_vault' => sub {
+    for my $field (qw(pgp kms gcp_kms azure_kv)) {
+        my $file = encrypted_file(
+            data   => { secret => 'shh' },
+            mangle => sub {
+                $_[0]->{hc_vault} = [ {
+                    created_at    => '2026-10-25T02:57:10Z',
+                    enc           => 'vault:v1:AAAA',
+                    engine_path   => 'transit',
+                    key_name      => 'k',
+                    vault_address => 'http://127.0.0.1:1',
+                } ];
+                $_[0]->{$field} = [ { enc => 'WRAPPED-FOR-SOMEONE-ELSE' } ];
+            },
+        );
+        my (undef, $before) = sops_section($file);
+
+        my $err = do {
+            local $@;
+            eval { File::SOPS->rotate(file => $file, identities => [$secret],
+                vault_token => 'tok') };
+            $@;
+        };
+        like($err, qr/key material.*\Q$field\E/s, "hc_vault + $field: refused for $field");
+        unlike($err, qr/key material[^(]*\([^)]*hc_vault/s, '... without blaming hc_vault');
+
+        my (undef, $after) = sops_section($file);
+        is($after, $before, '... and the file is untouched');
     }
 };
 

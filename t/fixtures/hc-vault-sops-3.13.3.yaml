@@ -1,0 +1,14 @@
+a: ENC[AES256_GCM,data:P8vrjzfy,iv:RGWTxYD1OBpYBMUzod5LO44opcYv4Sw29nPY6OJqVJ4=,tag:XuhwTS+T805MtKK2Zhab6g==,type:str]
+b:
+    c: ENC[AES256_GCM,data:GQ==,iv:IMJReMTgNIHKwPiQgIMgqqnnBOLBqxS1b38bene2djI=,tag:C/rlIY8wsr7b8DP+GdbwZw==,type:int]
+sops:
+    hc_vault:
+        - created_at: "2026-10-25T02:57:10Z"
+          enc: vault:v1:NzhQhhpUeUAevYWigXeQUOYH/EcsAL0ov4jtfVJO7A0sxjV+aBH7b+UBkzPu9b9sWMh1XbgN76/MPQ6b
+          engine_path: transit
+          key_name: sops-key
+          vault_address: http://127.0.0.1:18201
+    lastmodified: "2026-10-25T02:57:10Z"
+    mac: ENC[AES256_GCM,data:tyJYIpaY1DsjfE/7CnP4f051LZ7gYelr6IwcdzCYXxyhbd6sv4ZvJ+mIeX79BX4KjW+ep8EXtdWl+AbWJxpsUJDxxeWaY7JDaUh9RFoRaK0OWLgiwW/EEkhYlAFVD9aqDJ+NBLsOHpfcs03M983UseIMsCNUYQi3sYx2u4ZN6+M=,iv:1hB5x5weYNBkx9P6t+W8tynSMMMaI9f3JxrH2bg9oiA=,tag:/mWrBYM/xntTpiVcJg909Q==,type:str]
+    unencrypted_suffix: _unencrypted
+    version: 3.13.3

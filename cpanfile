@@ -15,6 +15,7 @@ requires 'YAML::PP';
 # JSON::MaybeXS itself asks for, so this is usually already installed.
 requires 'JSON::MaybeXS';
 requires 'Cpanel::JSON::XS', '4.38';
+requires 'HTTP::Tiny';
 requires 'Moo';
 requires 'namespace::clean';
 

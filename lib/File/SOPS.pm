@@ -38,6 +38,7 @@ use YAML::XS ();
 use File::SOPS::Encrypted;
 use File::SOPS::Metadata;
 use File::SOPS::Backend::Age;
+use File::SOPS::Backend::HCVault;
 use File::SOPS::Format::YAML;
 use File::SOPS::Format::JSON;
 use File::SOPS::Format::ENV;
@@ -181,7 +182,67 @@ covered by the MAC. See L</Choosing what gets encrypted>
 
 =item * B<Multiple recipients> - Encrypt once, multiple recipients can decrypt
 
+=item * B<Two backends> - age, and the HashiCorp Vault transit engine; see
+L</HashiCorp Vault transit>
+
 =back
+
+=head2 HashiCorp Vault transit
+
+The data key can be wrapped by a Vault transit key as well as, or instead of,
+age recipients. This is the second backend, implemented in
+L<File::SOPS::Backend::HCVault>; PGP, AWS KMS, GCP KMS and Azure Key Vault are
+not implemented, and a document holding them is still refused, loudly, wherever
+a new data key would have to be made for it.
+
+The arguments are additive -- nothing changes for a caller that does not pass
+them:
+
+=over 4
+
+=item C<hc_vault_transit_uris>
+
+ArrayRef of transit key URIs in the form C<sops --hc-vault-transit> takes,
+C<http(s)://host[:port]/v1/E<lt>engineE<gt>/keys/E<lt>keyE<gt>>. Accepted by
+L</encrypt>, L</encrypt_file>, L</encrypt_in_place> and L</rotate>. When given,
+C<recipients> may be left out; at least one of the two is needed. A URI is
+checked before the first request is sent. A document may carry both, as sops
+writes it (measured, 3.13.3): either one opens it.
+
+=item C<vault_token>
+
+The Vault token. Defaults to C<$ENV{VAULT_TOKEN}>; without either, anything
+that has to talk to Vault dies before it writes anything. The token is never
+part of an error message.
+
+=item C<vault_allowed_addresses>
+
+ArrayRef of exact C<vault_address> strings (C<http://host:port>). Optional but
+worth setting, see below.
+
+=item C<vault_transport>
+
+An object with an C<HTTP::Tiny>-style C<post($url, \%options)> method. It
+exists as a test seam so that no network is needed; leave it alone otherwise.
+
+=back
+
+B<The document decides where the token goes.> The Vault address is read from
+the C<sops> section of the file being opened, as sops does, so whoever can edit
+that file can name the server that receives your token (and, when re-keying,
+the new data key). The backend only speaks C<http> and C<https>, refuses
+addresses with userinfo, path, query or fragment, never follows a redirect and
+verifies TLS; C<vault_allowed_addresses> additionally refuses every address not
+on the list before a request is made, in L</decrypt> as well as in the re-keying
+L</rotate> and L</edit> do. A caller that knows where its Vault is should pass
+it. Plain C<http> is permitted (sops writes it for dev servers) and sends the
+token in the clear.
+
+Where C<identities> are accepted they may be left out when a token is available
+(C<vault_token> or C<$ENV{VAULT_TOKEN}>) and the document has C<hc_vault>
+entries. A document with only age entries and no C<identities> is still an
+error. Given both, L</decrypt> tries age first -- it is local -- and then Vault,
+and takes the first that works; if neither does, the error names both failures.
 
 =head2 Character encoding
 
@@ -655,8 +716,12 @@ my @ENCRYPTION_OPTIONS = (
 sub encrypt {
     my ($class, %args) = @_;
     my $data       = $args{data}       // croak "data required";
-    my $recipients = $args{recipients} // croak "recipients required";
+    my $recipients = $args{recipients};
+    my $vault_uris = $args{hc_vault_transit_uris};
     my $format     = $args{format}     // 'yaml';
+
+    croak "recipients required"
+        unless defined $recipients || defined $vault_uris;
 
     # A single document is a HashRef; a multi-document YAML stream is an ArrayRef
     # of HashRefs, one per document (docs/adr/0033 Decision 1, k31). The
@@ -666,7 +731,10 @@ sub encrypt {
     croak "data must be a hash ref, or an array ref of hash refs for a "
         . "multi-document stream"
         unless ref($data) eq 'HASH' || ref($data) eq 'ARRAY';
-    croak "recipients must be an array ref" unless ref($recipients) eq 'ARRAY';
+    croak "recipients must be an array ref"
+        if defined $recipients && ref($recipients) ne 'ARRAY';
+    croak "hc_vault_transit_uris must be an array ref"
+        if defined $vault_uris && ref($vault_uris) ne 'ARRAY';
 
     my @documents = ref $data eq 'ARRAY' ? @$data : ($data);
     croak "data must not be an empty array ref" unless @documents;
@@ -707,12 +775,23 @@ sub encrypt {
     my $metadata = _metadata_for_encrypt(\%args);
     $metadata->update_lastmodified;
 
-    # Encrypt data key for each recipient
-    my $encrypted_keys = File::SOPS::Backend::Age->encrypt_data_key(
-        data_key   => $data_key,
-        recipients => $recipients,
-    );
-    $metadata->age($encrypted_keys);
+    # Encrypt data key for each recipient: age for `recipients`, Vault transit
+    # for `hc_vault_transit_uris`. A backend nobody asked for is not called.
+    if (defined $recipients) {
+        my $encrypted_keys = File::SOPS::Backend::Age->encrypt_data_key(
+            data_key   => $data_key,
+            recipients => $recipients,
+        );
+        $metadata->age($encrypted_keys);
+    }
+    if (defined $vault_uris) {
+        $metadata->hc_vault(File::SOPS::Backend::HCVault->encrypt_data_key(
+            data_key   => $data_key,
+            recipients => $vault_uris,
+            token      => $args{vault_token},
+            transport  => $args{vault_transport},
+        ));
+    }
 
     # Compute MAC over plaintext values BEFORE encryption (SOPS behavior).
     # _compute_mac spans every document in the list, in document order, each
@@ -786,7 +865,10 @@ cipher and the digest; the returned document is UTF-8 encoded bytes, ready to
 write to a C<:raw> handle. See L</Character encoding>.
 
 The C<recipients> parameter must be an ArrayRef of age public keys (starting
-with C<age1...>).
+with C<age1...>). It may be left out if C<hc_vault_transit_uris> is given
+(L</HashiCorp Vault transit>), together with C<vault_token> and, optionally,
+C<vault_allowed_addresses>; the data key is then wrapped by Vault. With neither
+the call dies with C<recipients required>.
 
 B<Dies if C<data> has a top-level C<sops> key, in YAML or JSON.> That name is
 where those formats put the metadata section, so a caller-supplied value at
@@ -1069,10 +1151,17 @@ L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-
 sub decrypt {
     my ($class, %args) = @_;
     my $encrypted  = $args{encrypted}  // croak "encrypted required";
-    my $identities = $args{identities} // croak "identities required";
+    my $identities = $args{identities};
     my $format     = $args{format};
 
-    croak "identities must be an array ref" unless ref($identities) eq 'ARRAY';
+    # Identities may be left out only when a Vault token is at hand: a
+    # document with hc_vault entries can then be opened without them. Whether
+    # THIS document has any is known only after the parse below, and an age-only
+    # one is refused there with the same message.
+    croak "identities required"
+        unless defined $identities || _has_vault_token(\%args);
+    croak "identities must be an array ref"
+        if defined $identities && ref($identities) ne 'ARRAY';
 
     # Auto-detect format if not specified
     $format //= _detect_format($encrypted);
@@ -1118,11 +1207,7 @@ sub decrypt {
     # the caller does not pass it, it arrives here as undef and the backend applies
     # its own default of 64 (CVE-2026-85783), so the absent-argument path stays
     # byte-identical. A caller with a legitimately large recipient list raises it.
-    my $data_key = File::SOPS::Backend::Age->decrypt_data_key(
-        age_keys    => $metadata->age,
-        identities  => $identities,
-        max_stanzas => $args{max_stanzas},
-    );
+    my $data_key = _unwrap_data_key($metadata, \%args);
 
     # Decrypt every document's values. One metadata block, one data key, applied
     # to each document -- the same tree walk per document.
@@ -1213,7 +1298,13 @@ the bytes the emitters write. See
 L<File::SOPS::Encrypted/canonical_float_dualvar>.
 
 The C<identities> parameter must be an ArrayRef of age secret keys (starting
-with C<AGE-SECRET-KEY-1...>).
+with C<AGE-SECRET-KEY-1...>). It may be left out when the document has
+C<hc_vault> entries and a Vault token is available (C<vault_token> or
+C<$ENV{VAULT_TOKEN}>); C<vault_allowed_addresses> and C<vault_transport> are
+accepted as well. See L</HashiCorp Vault transit>, in particular that the
+document names the server your token goes to. Both ways are tried, age first,
+and the first that works wins; when neither does, the error carries one
+reason for each (C<age: ...; hc_vault: ...>) and no secret.
 
 If C<format> is not specified, it will be auto-detected from the content.
 
@@ -1424,8 +1515,11 @@ sub encrypt_file {
     my ($class, %args) = @_;
     my $input      = $args{input}      // croak "input required";
     my $output     = $args{output}     // $args{input};
-    my $recipients = $args{recipients} // croak "recipients required";
+    my $recipients = $args{recipients};
     my $format     = $args{format};
+
+    croak "recipients required"
+        unless defined $recipients || defined $args{hc_vault_transit_uris};
 
     # Auto-detect format from filename
     $format //= _detect_format_from_filename($input);
@@ -1449,9 +1543,10 @@ sub encrypt_file {
     # A single-document YAML input forwards a one-element list, byte-identical.
     my $encrypted = $class->encrypt(
         data       => (ref $documents eq 'ARRAY' ? $documents : $data),
-        recipients => $recipients,
+        (defined $recipients ? (recipients => $recipients) : ()),
         format     => $format,
         _encryption_options(\%args),
+        _vault_encrypt_args(\%args),
     );
 
     _replace_file($output, $encrypted);
@@ -1468,7 +1563,10 @@ sub encrypt_file {
         format     => 'yaml',              # optional, auto-detected from filename
     );
 
-Encrypts a file.
+Encrypts a file. C<hc_vault_transit_uris>, C<vault_token>,
+C<vault_allowed_addresses> and C<vault_transport> are passed through to
+L</encrypt>, and C<recipients> may then be left out; see
+L</HashiCorp Vault transit>.
 
 Reads the input file, encrypts it for the specified recipients, and writes the
 encrypted content to the output file. If C<output> is not specified, encrypts
@@ -1516,8 +1614,11 @@ Returns true on success.
 sub encrypt_in_place {
     my ($class, %args) = @_;
     my $file       = $args{file}       // croak "file required";
-    my $recipients = $args{recipients} // croak "recipients required";
+    my $recipients = $args{recipients};
     my $format     = $args{format} // _detect_format_from_filename($file);
+
+    croak "recipients required"
+        unless defined $recipients || defined $args{hc_vault_transit_uris};
 
     my $content = _read_file($file, 'file');
 
@@ -1532,9 +1633,10 @@ sub encrypt_in_place {
     # the file with its first one -- the k14 loss this ticket exists to fix.
     my $encrypted = $class->encrypt(
         data       => (ref $documents eq 'ARRAY' ? $documents : $data),
-        recipients => $recipients,
+        (defined $recipients ? (recipients => $recipients) : ()),
         format     => $format,
         _encryption_options(\%args),
+        _vault_encrypt_args(\%args),
     );
 
     _replace_file($file, $encrypted);
@@ -1580,7 +1682,9 @@ sub decrypt_file {
     my ($class, %args) = @_;
     my $input      = $args{input}      // croak "input required";
     my $output     = $args{output}     // croak "output required";
-    my $identities = $args{identities} // croak "identities required";
+    my $identities = $args{identities};
+    croak "identities required"
+        unless defined $identities || _has_vault_token(\%args);
     my $format     = $args{format};
 
     $format //= _detect_format_from_filename($input);
@@ -1594,6 +1698,7 @@ sub decrypt_file {
         format      => $format,
         ignore_mac  => $args{ignore_mac},
         max_stanzas => $args{max_stanzas},
+        _vault_call_args(\%args),
     );
 
     my $decrypted = _serialize_plaintext($data, $format);
@@ -1614,7 +1719,8 @@ sub decrypt_file {
 
 Decrypts a SOPS-encrypted file.
 
-Reads the encrypted input file, decrypts it using the provided identities,
+Reads the encrypted input file, decrypts it using the provided identities (or a
+Vault token, see L</HashiCorp Vault transit>),
 and writes the decrypted content to the output file.
 
 The output is UTF-8 encoded, so a file round-tripped through L</encrypt_file>
@@ -1681,7 +1787,9 @@ sub extract {
     my ($class, %args) = @_;
     my $file       = $args{file}       // croak "file required";
     my $path       = $args{path}       // croak "path required";
-    my $identities = $args{identities} // croak "identities required";
+    my $identities = $args{identities};
+    croak "identities required"
+        unless defined $identities || _has_vault_token(\%args);
     my $format     = $args{format};
 
     $format //= _detect_format_from_filename($file);
@@ -1698,6 +1806,7 @@ sub extract {
         format      => $format,
         ignore_mac  => $args{ignore_mac},
         max_stanzas => $args{max_stanzas},
+        _vault_call_args(\%args),
     );
 
     # A single-document file decrypts to a HashRef, a multi-document stream to an
@@ -1740,7 +1849,9 @@ sub extract {
         document   => 0,       # optional, which document of a stream (default 0)
     );
 
-Extracts and decrypts a single value from an encrypted file.
+Extracts and decrypts a single value from an encrypted file. As in L</decrypt>,
+C<identities> may be left out for a document with C<hc_vault> entries when a
+Vault token is available.
 
 Path can be specified in two formats:
 
@@ -1879,9 +1990,11 @@ really is null. sops reports C<component ['nope'] not found> at every level.
 sub rotate {
     my ($class, %args) = @_;
     my $file       = $args{file}       // croak "file required";
-    my $identities = $args{identities} // croak "identities required";
-    my $recipients = $args{recipients};
+    my $identities = $args{identities};
     my $format     = $args{format};
+
+    croak "identities required"
+        unless defined $identities || _has_vault_token(\%args);
 
     $format //= _detect_format_from_filename($file);
 
@@ -1891,6 +2004,8 @@ sub rotate {
     croak "No SOPS metadata found in '$file'" unless $metadata;
 
     _assert_rekeyable($metadata, $file, verb => 'rotate', noun => 'Rotation');
+    _assert_vault_rekeyable($metadata, \%args, $file,
+        verb => 'rotate', noun => 'Rotation');
 
     # Same question as edit's, and asked in the same place: the read below no
     # longer refuses a rule RE2 cannot compile, so the refusal for writing
@@ -1898,10 +2013,9 @@ sub rotate {
     # been decrypted. docs/adr/0051.
     $metadata->assert_rule_regexes_agree;
 
-    # Get current recipients if not specified
-    unless ($recipients) {
-        $recipients = [ map { $_->{recipient} } @{$metadata->age} ];
-    }
+    # Get current recipients if not specified: the age recipients, and the Vault
+    # transit keys rebuilt from the entries the document already carries.
+    my %wrap = _rewrap_targets($metadata, \%args, \%args);
 
     # Decrypt
     my $data = $class->decrypt(
@@ -1910,6 +2024,7 @@ sub rotate {
         format      => $format,
         ignore_mac  => $args{ignore_mac},
         max_stanzas => $args{max_stanzas},
+        _vault_call_args(\%args),
     );
 
     # docs/adr/0046's guard stood here and is gone: the decryption above is
@@ -1922,9 +2037,10 @@ sub rotate {
     # Re-encrypt with new data key, under the rules this document already had
     my $encrypted = $class->encrypt(
         data       => $data,
-        recipients => $recipients,
+        %wrap,
         format     => $format,
         metadata   => $metadata,
+        _vault_call_args(\%args),
     );
 
     _replace_file($file, $encrypted);
@@ -1942,6 +2058,14 @@ sub rotate {
     );
 
 Rotates the data key (re-encrypts all values with a new key).
+
+A document with C<hc_vault> entries is rotated through Vault: the new data key
+is wrapped again for the same transit keys, rebuilt from the existing entries
+(C<hc_vault_transit_uris> names a different set instead), and C<identities> may
+be left out if a token is available. Without a token the call dies before
+anything is decrypted or written. The addresses come from the document -- pass
+C<vault_allowed_addresses> so that a document cannot send your token and the new
+data key somewhere else. See L</HashiCorp Vault transit>.
 
 This operation:
 
@@ -1991,9 +2115,10 @@ L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-
 =head3 Files rotate refuses
 
 Rotation makes a new data key, and this distribution can only wrap one for age
-recipients. A file whose C<sops> section holds key material for another
-backend -- C<pgp>, C<kms>, C<gcp_kms>, C<azure_kv>, C<hc_vault> or
-C<key_groups> -- is therefore B<refused> rather than rotated:
+recipients and Vault transit keys. A file whose C<sops> section holds key
+material for another backend -- C<pgp>, C<kms>, C<gcp_kms>, C<azure_kv> or
+C<key_groups> -- is therefore B<refused> rather than rotated (C<hc_vault> is no
+longer on that list: it is re-wrapped, see above):
 
     Refusing to rotate 'shared.yaml': its sops section holds key material
     this distribution cannot re-encrypt (pgp). ...
@@ -2059,8 +2184,11 @@ Returns true on success.
 sub edit {
     my ($class, %args) = @_;
     my $file       = $args{file}       // croak "file required";
-    my $identities = $args{identities} // croak "identities required";
+    my $identities = $args{identities};
     my $format     = $args{format} // _detect_format_from_filename($file);
+
+    croak "identities required"
+        unless defined $identities || _has_vault_token(\%args);
 
     # Resolved BEFORE anything is decrypted: an unusable editor must not be
     # discovered with a plaintext copy of the document already on disk.
@@ -2084,6 +2212,8 @@ sub edit {
     # it inherits rotate's refusal: a document also wrapped for pgp or a KMS
     # would come back out with those recipients silently dropped.
     _assert_rekeyable($metadata, $file, verb => 'edit', noun => 'Editing');
+    _assert_vault_rekeyable($metadata, \%args, $file,
+        verb => 'edit', noun => 'Editing');
 
     # And the document's own rule has to be one we can write under, asked HERE
     # rather than left to the re-encryption at the bottom. The read below now
@@ -2098,6 +2228,7 @@ sub edit {
         format      => $format,
         ignore_mac  => $args{ignore_mac},
         max_stanzas => $args{max_stanzas},
+        _vault_call_args(\%args),
     );
 
     # docs/adr/0046's guard stood here too and is gone for rotate's reason
@@ -2158,9 +2289,10 @@ sub edit {
 
     my $encrypted = $class->encrypt(
         data       => $edited,
-        recipients => [ map { $_->{recipient} } @{ $metadata->age } ],
+        _rewrap_targets($metadata, {}, \%args),
         format     => $format,
         metadata   => $metadata,
+        _vault_call_args(\%args),
     );
 
     _replace_file($file, $encrypted);
@@ -2258,11 +2390,15 @@ B<new data key> -- the wrapped copies in the C<sops> section change on every
 edit, and so does the diff. Nothing is lost by it: the age recipients and the
 encryption policy (the rules, C<mac_only_encrypted>, and any C<sops> field this
 distribution does not model) are carried over exactly as L</rotate> carries
-them.
+them. Vault transit entries are carried over like age ones: the new data key is
+wrapped again for the same keys, which needs a token (C<vault_token> or
+C<$ENV{VAULT_TOKEN}>; checked before the editor opens, and C<identities> may be
+left out then), and C<vault_allowed_addresses> pins the servers it may be sent
+to. See L</HashiCorp Vault transit>.
 
 What it does mean is that C<edit> refuses the same files L</rotate> refuses: a
 document whose C<sops> section also holds C<pgp>, C<kms>, C<gcp_kms>,
-C<azure_kv>, C<hc_vault> or C<key_groups> material cannot be re-encrypted for
+C<azure_kv> or C<key_groups> material cannot be re-encrypted for
 those recipients here, and dropping them silently would revoke their access
 while reporting success. See L</Files rotate refuses>.
 
@@ -2331,20 +2467,26 @@ our $CONFIG_FILE_NAME = '.sops.yaml';
 # Creation-rule fields that name key material this distribution cannot produce.
 #
 # These are the CONFIG file's names, which are NOT the sops section's names:
-# `azure_keyvault` and `hc_vault_transit_uri` here against `azure_kv` and
-# `hc_vault` there. Measured against sops 3.13.3 by putting an unusable key in
-# each field of a matching rule -- these five make it try to wrap the data key
-# and fail on the key, while `aws_kms`, `azure_kv` and `hc_vault` in a creation
-# rule are ignored entirely. Taking the list from
+# `azure_keyvault` here against `azure_kv` there. Measured against sops 3.13.3
+# by putting an unusable key in each field of a matching rule -- these four make
+# it try to wrap the data key and fail on the key, while `aws_kms`, `azure_kv`
+# and `hc_vault` in a creation rule are ignored entirely. Taking the list from
 # @File::SOPS::Metadata::KEY_MATERIAL_FIELDS instead would therefore have let
-# azure_keyvault and hc_vault_transit_uri walk straight through the guard.
+# azure_keyvault walk straight through the guard.
+#
+# `hc_vault_transit_uri` used to be on this list and is not any more: the Vault
+# transit backend exists (File::SOPS::Backend::HCVault), and the field comes
+# back as `hc_vault_transit_uris`. Measured on 3.13.3 against a dev Vault: a rule
+# with `age` AND `hc_vault_transit_uri` wraps the data key for both; the field
+# is a comma-separated string, whitespace around each URI is ignored, and a
+# YAML list is accepted too.
 #
 # key_groups and shamir_threshold are here for the same reason one step on:
 # both change how the data key is split and wrapped, sops writes
 # shamir_threshold into the document it produces (measured), and a document
 # this encrypted while ignoring them would be wrapped for age alone.
 my @UNIMPLEMENTED_RULE_FIELDS = qw(
-    pgp kms gcp_kms azure_keyvault hc_vault_transit_uri
+    pgp kms gcp_kms azure_keyvault
     key_groups shamir_threshold
 );
 
@@ -2391,8 +2533,9 @@ sub creation_rules_for {
     );
 
 Reads the C<.sops.yaml> that governs a file and returns the L</encrypt>
-arguments its first matching creation rule asks for: C<recipients>, plus
-whichever of the four encryption rules and C<mac_only_encrypted> that rule
+arguments its first matching creation rule asks for: C<recipients> (the rule's
+C<age>) and C<hc_vault_transit_uris> (its C<hc_vault_transit_uri>) -- whichever
+of the two it names -- plus whichever of the four encryption rules and C<mac_only_encrypted> that rule
 carries. The returned list is meant to be splatted straight into L</encrypt>,
 L</encrypt_file> or L</encrypt_in_place>, which is where the actual encrypting
 still happens -- this method decides B<for whom and under which rules>, and
@@ -2471,12 +2614,12 @@ Each of these dies, naming the config file and which rule in it:
 
 =over 4
 
-=item * A rule naming B<key material for a backend other than age> --
-C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault>, C<hc_vault_transit_uri> -- or
-C<key_groups> or C<shamir_threshold>. sops wraps the data key for every backend
-the rule names; age is the only one implemented here, so honouring such a rule
-would write a document the config says several parties can read and only the
-age recipients actually can, and report success. This is the refusal
+=item * A rule naming B<key material for a backend other than age and Vault
+transit> -- C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault> -- or C<key_groups>
+or C<shamir_threshold>. sops wraps the data key for every backend the rule
+names; age and Vault transit are the only ones implemented here, so honouring
+such a rule would write a document the config says several parties can read and
+only the others actually can, and report success. This is the refusal
 L</rotate> makes for the same reason. Those are the config file's field names
 and not the C<sops> section's, which differ.
 
@@ -2491,8 +2634,8 @@ C<encrypted_comment_regex>. Neither parser here keeps comments, so every value
 would be classified wrongly -- the refusal L</encrypt> makes for a document
 carrying one.
 
-=item * A matching rule with B<no age recipient>, which leaves nothing to
-encrypt for. sops stops on the same rule with C<Could not generate data key:
+=item * A matching rule with B<no age recipient and no Vault transit key>,
+which leaves nothing to encrypt for. sops stops on the same rule with C<Could not generate data key:
 [empty key group provided]>.
 
 =back
@@ -2504,6 +2647,13 @@ decrypt -- or, since L</encrypt> refuses an empty recipient list, an error
 naming neither the file nor the config that failed to produce one.
 
 =head3 The rule's own fields
+
+C<hc_vault_transit_uri> is read the same way and returned as
+C<hc_vault_transit_uris>. A rule naming both C<age> and C<hc_vault_transit_uri>
+yields both, and sops wraps the data key for both (measured, 3.13.3). The URIs
+are not checked here; L</encrypt> checks every one before sending a request.
+The token is never part of a rule -- it comes from C<vault_token> or
+C<$ENV{VAULT_TOKEN}> when encrypting.
 
 C<age> is a comma-separated list of recipients, or a YAML list of them, or a
 list whose entries are themselves comma-separated. Whitespace around each
@@ -2545,8 +2695,7 @@ destination_rules is reported as having no creation rules.
 =item * A rule naming C<aws_kms>, C<azure_kv> or C<hc_vault> is ignored.
 Those are C<sops>-section field names that sops also ignores in a
 creation rule (measured, 3.13.3). The names THIS method refuses are the
-config file's: C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault>,
-C<hc_vault_transit_uri>.
+config file's: C<pgp>, C<kms>, C<gcp_kms>, C<azure_keyvault>.
 
 =item * C<$SOPS_CONFIG> is not consulted (covered above under
 C<config>).
@@ -2773,20 +2922,22 @@ sub _rule_field_set {
     return length $value;
 }
 
-# A creation rule's `age`, as a list of recipients. Comma-separated, or a YAML
-# list, or a list of comma-separated strings; whitespace around each recipient
+# A creation rule's `age` or `hc_vault_transit_uri`, as a list. Comma-separated,
+# or a YAML list, or a list of comma-separated strings; whitespace around each recipient
 # is dropped, which is what makes the folded `age: >-` form work. A NEWLINE is
 # not a separator: measured on sops 3.13.3, a literal block of recipients with
 # no commas reaches age as one string and fails to parse.
 sub _age_recipients {
-    my ($value, $config, $index) = @_;
+    my ($value, $config, $index, $field) = @_;
+    $field //= 'age';
 
     return () unless defined $value;
 
     my @out;
     for my $entry (ref $value eq 'ARRAY' ? @$value : $value) {
-        croak "The age entry of creation rule $index in '$config' holds a "
-            . lc(ref $entry) . " reference; it takes a recipient, a "
+        croak "The $field entry of creation rule $index in '$config' holds a "
+            . lc(ref $entry) . " reference; it takes a "
+            . ($field eq 'age' ? 'recipient' : 'URI') . ", a "
             . "comma-separated list of them, or a YAML list"
             if ref $entry;
         next unless defined $entry;
@@ -2809,8 +2960,8 @@ sub _creation_rule_args {
 
     croak "Refusing to encrypt under creation rule $index in '$config': it "
         . "names key material this distribution cannot produce ("
-        . join(', ', @unimplemented) . ") -- age is the only backend "
-        . "implemented here. sops "
+        . join(', ', @unimplemented) . ") -- age and Vault transit are "
+        . "the only backends implemented here. sops "
         . "wraps the data key for every backend a rule names, so encrypting "
         . "under this rule while ignoring those fields would write a document "
         . "the config says several parties can read and only the age "
@@ -2819,13 +2970,18 @@ sub _creation_rule_args {
         if @unimplemented;
 
     my @recipients = _age_recipients($rule->{age}, $config, $index);
+    my @vault      = _age_recipients($rule->{hc_vault_transit_uri},
+        $config, $index, 'hc_vault_transit_uri');
     croak "Creation rule $index in '$config' matches, but names no age "
-        . "recipient, so there is nobody to encrypt for. (sops stops on the "
-        . "same rule with \"Could not generate data key: [empty key group "
-        . "provided]\".)"
-        unless @recipients;
+        . "recipient and no Vault transit key, so there is nobody to encrypt "
+        . "for. (sops stops on the same rule with \"Could not generate data "
+        . "key: [empty key group provided]\".)"
+        unless @recipients || @vault;
 
-    my %args = (recipients => \@recipients);
+    my %args = (
+        @recipients ? ( recipients            => \@recipients ) : (),
+        @vault      ? ( hc_vault_transit_uris => \@vault )      : (),
+    );
 
     # The same mutual exclusion File::SOPS::Metadata enforces on a document,
     # asked here so the message can name the config file rather than the
@@ -3279,9 +3435,9 @@ sub _assert_rules_supported {
     return 1;
 }
 
-# age is the only backend implemented here, so a document holding key material
-# for another one cannot be re-keyed: the new data key can be wrapped for its
-# age recipients and for nobody else. Both ways out of that are wrong, and the
+# age and Vault transit are the only backends implemented here, so a document
+# holding key material for another one cannot be re-keyed: the new data key can
+# be wrapped for its age recipients and its Vault keys and for nobody else. Both ways out of that are wrong, and the
 # quiet one is the worse -- dropping the entries revokes those recipients'
 # access while reporting success, and keeping them leaves a wrapped copy of a
 # key that no longer decrypts anything, which fails later and further away.
@@ -3291,7 +3447,7 @@ sub _assert_rules_supported {
 sub _assert_rekeyable {
     my ($metadata, $file, %words) = @_;
 
-    my @foreign = grep { $_ ne 'age' } $metadata->key_material_fields;
+    my @foreign = grep { $_ ne 'age' && $_ ne 'hc_vault' } $metadata->key_material_fields;
     return 1 unless @foreign;
 
     croak "Refusing to $words{verb} '$file': its sops section holds key material "
@@ -3300,6 +3456,167 @@ sub _assert_rekeyable {
         . "silently dropped and the recipients behind them would lose access. "
         . "\u$words{verb} this file with the sops CLI, or, if losing them is "
         . "what you want, say so explicitly with decrypt followed by encrypt.";
+}
+
+# --- Vault transit ------------------------------------------------------
+#
+# The arguments that reach the Vault backend. Only the ones the caller gave are
+# forwarded, so the backend applies its own defaults ($ENV{VAULT_TOKEN}, its own
+# HTTP::Tiny) exactly as it does when called directly.
+sub _vault_call_args {
+    my ($args) = @_;
+    return map { $_ => $args->{$_} }
+        grep { exists $args->{$_} }
+        qw( vault_token vault_transport vault_allowed_addresses );
+}
+
+# encrypt_file and encrypt_in_place forward the targets as well.
+sub _vault_encrypt_args {
+    my ($args) = @_;
+    return (
+        _vault_call_args($args),
+        exists $args->{hc_vault_transit_uris}
+            ? ( hc_vault_transit_uris => $args->{hc_vault_transit_uris} ) : (),
+    );
+}
+
+# Is there a token to use? The same two places the backend looks.
+sub _has_vault_token {
+    my ($args) = @_;
+    my $token = $args->{vault_token} // $ENV{VAULT_TOKEN};
+    return defined $token && length $token ? 1 : 0;
+}
+
+# Strip the " at FILE line N." Carp adds, so two errors can share one message.
+sub _error_text {
+    my ($err) = @_;
+    $err = 'unknown error' unless defined $err && length $err;
+    $err =~ s/ at \S+ line \d+\.?\s*\z//;
+    chomp $err;
+    return $err;
+}
+
+# The data key of a parsed document, by whichever way works. age is tried first
+# when identities were given -- it is local and never sends anything anywhere --
+# then Vault. A document with no hc_vault entries goes to the age backend
+# directly, so its errors are exactly what they were before Vault existed.
+sub _unwrap_data_key {
+    my ($metadata, $args) = @_;
+
+    my $identities = $args->{identities};
+    my $vault      = $metadata->hc_vault;
+    my @age_args   = (
+        age_keys    => $metadata->age,
+        identities  => $identities,
+        max_stanzas => $args->{max_stanzas},
+    );
+
+    unless (ref $vault eq 'ARRAY' && @$vault) {
+        croak "identities required" unless defined $identities;
+        return File::SOPS::Backend::Age->decrypt_data_key(@age_args);
+    }
+
+    my @why;
+    if (defined $identities && @{ $metadata->age }) {
+        my $key = eval { File::SOPS::Backend::Age->decrypt_data_key(@age_args) };
+        my $err = $@;
+        return $key if defined $key;
+        push @why, 'age: ' . _error_text($err);
+    }
+    else {
+        push @why, 'age: ' . (defined $identities
+            ? 'the document has no age entries'
+            : 'no identities given');
+    }
+
+    my $key = eval {
+        File::SOPS::Backend::HCVault->decrypt_data_key(
+            hc_vault          => $vault,
+            token             => $args->{vault_token},
+            transport         => $args->{vault_transport},
+            allowed_addresses => $args->{vault_allowed_addresses},
+        );
+    };
+    my $err = $@;
+    return $key if defined $key;
+    push @why, 'hc_vault: ' . _error_text($err);
+
+    croak "Could not decrypt the data key by any means -- " . join('; ', @why);
+}
+
+# The Vault transit URI an hc_vault entry was made from. The entry holds the
+# address, engine path and key name that `sops --hc-vault-transit` split the URI
+# into; the backend refuses whatever does not put back together.
+sub _vault_uri_of_entry {
+    my ($entry, $index) = @_;
+    for my $field (qw( vault_address engine_path key_name )) {
+        croak "hc_vault entry $index of the document has no $field, so the "
+            . "Vault key it was made with cannot be rebuilt"
+            unless ref $entry eq 'HASH' && defined $entry->{$field}
+                && !ref $entry->{$field} && length $entry->{$field};
+    }
+    return join '/', $entry->{vault_address}, 'v1',
+        $entry->{engine_path}, 'keys', $entry->{key_name};
+}
+
+# Whom a re-keyed document is wrapped for: the targets it already has, unless
+# the caller names new ones. $given holds the caller's explicit `recipients` /
+# `hc_vault_transit_uris` (rotate only); $args the Vault options.
+#
+# The Vault targets are rebuilt from the document's own entries, so the document
+# decides where the token and the NEW data key go. When the caller pinned
+# `vault_allowed_addresses`, every rebuilt target is checked against it HERE,
+# before anything is sent: the decrypt may have gone through age and never
+# looked at those addresses.
+sub _rewrap_targets {
+    my ($metadata, $given, $args) = @_;
+
+    my @age = map { $_->{recipient} } @{ $metadata->age };
+    my $age = $given->{recipients} // (@age ? \@age : undef);
+
+    my $vault = $given->{hc_vault_transit_uris};
+    my $entries = $metadata->hc_vault;
+    if (!defined $vault && ref $entries eq 'ARRAY' && @$entries) {
+        my $allowed = $args->{vault_allowed_addresses};
+        my $i = 0;
+        my @uris;
+        for my $e (@$entries) {
+            croak "vault_allowed_addresses must be an array ref"
+                if defined $allowed && ref $allowed ne 'ARRAY';
+            push @uris, _vault_uri_of_entry($e, $i);
+            croak "Refusing to re-key: hc_vault entry $i of the document names "
+                . "the Vault at $e->{vault_address}, which is not in "
+                . "vault_allowed_addresses; nothing was sent there"
+                if $allowed && !grep { $_ eq $e->{vault_address} } @$allowed;
+            $i++;
+        }
+        $vault = \@uris;
+    }
+
+    # Nobody left to wrap for: pass the empty list on, so encrypt refuses it
+    # with the message it always had.
+    $age = [] unless defined $age || defined $vault;
+
+    return (
+        defined $age   ? ( recipients            => $age )   : (),
+        defined $vault ? ( hc_vault_transit_uris => $vault ) : (),
+    );
+}
+
+# Re-keying a document that names Vault keys wraps the new data key through
+# Vault, which takes a token. Asked up front, ahead of any decryption and ahead
+# of the editor, so that a missing token costs nothing and loses nothing.
+sub _assert_vault_rekeyable {
+    my ($metadata, $args, $file, %words) = @_;
+
+    my $entries = $metadata->hc_vault;
+    return 1 unless (ref $entries eq 'ARRAY' && @$entries)
+        || ($words{verb} eq 'rotate' && defined $args->{hc_vault_transit_uris});
+    return 1 if _has_vault_token($args);
+
+    croak "Refusing to $words{verb} '$file': the new data key has to be wrapped "
+        . "through HashiCorp Vault and there is no token -- pass vault_token => "
+        . "... or set VAULT_TOKEN. Nothing was written.";
 }
 
 # --- how deep a document may be -----------------------------------------
@@ -4843,6 +5160,8 @@ and the section a comment belongs to
 =item * L<File::SOPS::Metadata> - SOPS metadata section handling
 
 =item * L<File::SOPS::Backend::Age> - Age encryption backend
+
+=item * L<File::SOPS::Backend::HCVault> - HashiCorp Vault transit backend
 
 =item * L<Crypt::Age> - Perl age encryption implementation
 

@@ -1,6 +1,13 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - HashiCorp Vault Transit is the second backend: documents can be
+    encrypted, decrypted, rotated and edited for Vault keys, through the new
+    hc_vault_transit_uris, vault_token and vault_allowed_addresses arguments;
+    creation_rules_for returns hc_vault_transit_uri. PGP and the cloud KMS
+    backends are still refused.
+  - sops.hc_vault[].created_at is written quoted, so sops 3.13 reads
+    documents carrying a Vault entry.
 
 0.005     2026-10-21 18:35:30Z
   - Crypt::Age is raised to 0.005, the release whose header parser no longer

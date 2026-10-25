@@ -597,16 +597,18 @@ subtest 'unknown fields in a rule are ignored, as sops ignores them' => sub {
 ###############################################################################
 subtest 'a rule naming another backend is refused' => sub {
     # The CONFIG's field names, which are not the sops section's:
-    # azure_keyvault and hc_vault_transit_uri here, azure_kv and hc_vault
-    # there. Measured on 3.13.3 -- each of these makes sops try to wrap the
-    # data key for that backend, while aws_kms/azure_kv/hc_vault in a creation
-    # rule are ignored.
+    # azure_keyvault here, azure_kv there. (hc_vault_transit_uri was on this
+    # list until k39 implemented the Vault backend; it is handed out as
+    # hc_vault_transit_uris now, see t/86-hc-vault-backend.t, and the
+    # still-refused fields are checked next to it below.)
+    # Measured on 3.13.3 -- each of these makes sops try to wrap the data key
+    # for that backend, while aws_kms/azure_kv/hc_vault in a creation rule are
+    # ignored.
     my %fields = (
         pgp                  => '0000000000000000000000000000000000000000',
         kms                  => 'arn:aws:kms:us-east-1:0:key/0',
         gcp_kms              => 'projects/p/locations/l/keyRings/r/cryptoKeys/k',
         azure_keyvault       => 'https://example.vault.azure.net/keys/k/v',
-        hc_vault_transit_uri => 'http://127.0.0.1:8200/v1/transit/keys/k',
         shamir_threshold     => '2',
     );
 
@@ -622,6 +624,31 @@ subtest 'a rule naming another backend is refused' => sub {
              "$name is refused rather than dropped");
         like($err, qr/\Q$name\E/, "and the message names $name");
     }
+
+    # Vault is no longer one of them: it comes back as an encrypt argument ...
+    my $vault_uri = 'http://127.0.0.1:8200/v1/transit/keys/k';
+    my $vroot = tree(
+        '.sops.yaml' => "creation_rules:\n  - age: $pub_a\n"
+                      . "    hc_vault_transit_uri: '$vault_uri'\n",
+        's.yaml'     => "k: v\n",
+    );
+    my $vgot = eval { rules_for(file => "$vroot/s.yaml") }
+        || do { fail("hc_vault_transit_uri is accepted: $@"); {} };
+    is_deeply($vgot->{hc_vault_transit_uris}, [$vault_uri],
+        'hc_vault_transit_uri is returned as hc_vault_transit_uris');
+    is_deeply($vgot->{recipients}, [$pub_a], 'next to the age recipient');
+
+    # ... and a refused backend next to it is still refused.
+    my $mixed = tree(
+        '.sops.yaml' => "creation_rules:\n  - hc_vault_transit_uri: '$vault_uri'\n"
+                      . "    pgp: '0000000000000000000000000000000000000000'\n",
+        's.yaml'     => "k: v\n",
+    );
+    like(
+        exception(sub { File::SOPS->creation_rules_for(file => "$mixed/s.yaml") }),
+        qr/Refusing to encrypt under creation rule 1\b.*\bpgp\b/s,
+        'pgp next to hc_vault_transit_uri is refused',
+    );
 
     my $groups = tree(
         '.sops.yaml' => "creation_rules:\n  - key_groups:\n"

@@ -1760,23 +1760,41 @@ sub serialize {
 # only way to get a quoted scalar out of this emitter is to quote it after the
 # dump. Kept deliberately narrow: it rewrites one key, only inside the
 # top-level `sops:` block, so a user's own `lastmodified:` in the data section
-# is never touched. JSON needs none of this -- JSON has no timestamp type and
+# is never touched. `created_at` of the hc_vault entries gets the same
+# treatment, and only there. JSON needs none of this -- JSON has no timestamp type and
 # its strings are always quoted.
 sub _quote_sops_timestamp {
     my ($yaml) = @_;
 
     my @lines = split /\n/, $yaml, -1;
     my $in_sops = 0;
+    my $sub     = '';
 
     for my $line (@lines) {
         if ($line =~ /\A sops : \s* \z/x) {
             $in_sops = 1;
+            $sub     = '';
             next;
         }
         # any other column-0 line ends the sops block (Dump sorts keys, so a
         # data key sorting after "sops" can follow it)
         $in_sops = 0 if $in_sops && $line =~ /\A\S/;
         next unless $in_sops;
+
+        # which direct child of `sops:` we are inside (two-space keys)
+        $sub = $1 if $line =~ /\A [ ]{2} ([A-Za-z_]\w*) :/x;
+
+        # hc_vault[].created_at is the same RFC3339 string and the same
+        # time.Time refusal (`'hc_vault[0].created_at' expected type 'string'`),
+        # measured against sops 3.13.3. Only inside the hc_vault list, as the
+        # first key of an entry (`  - created_at:`) or a later one.
+        if ($sub eq 'hc_vault') {
+            $line =~ s{
+                \A ( (?: [ ]{2} - [ ] | [ ]{4} ) created_at: [ \t]+ )
+                (?!['"]) (\S.*?) [ \t]* \z
+            }{$1"$2"}x;
+            next;
+        }
 
         # already-quoted values are left alone
         $line =~ s{
