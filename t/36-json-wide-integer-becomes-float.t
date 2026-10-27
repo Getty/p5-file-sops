@@ -252,10 +252,11 @@ subtest 'a literal that overflows a double dies at encrypt() and at encrypt_file
     # including sops, can create.
 };
 
+# +Inf as a float64: a -Duselongdouble NV holds 401 digits finite.
 subtest 'the same overflow does not croak on read paths: +Inf as the number, all 401 digits as the text' => sub {
     my ($data) = File::SOPS::Format::JSON->parse(qq({"huge_unencrypted": $HUGE_ZEROS}));
     my $leaf = $data->{huge_unencrypted};
-    ok($leaf == 9**9**9, 'Format::JSON::parse itself does not croak: the leaf is +Inf as a number');
+    ok(unpack('d', pack('d', $leaf)) == 9**9**9, 'Format::JSON::parse itself does not croak: the leaf is +Inf as a number');
     is(length("$leaf"), 401, 'and its string half is all 401 digits');
 
     # decrypt()/extract() need a document whose MAC was computed over this
@@ -277,7 +278,7 @@ subtest 'the same overflow does not croak on read paths: +Inf as the number, all
     is($@, '', 'decrypt(ignore_mac) does not croak on the overflow leaf');
     SKIP: {
         skip 'decrypt died, nothing to check', 2 unless $decrypted;
-        ok($decrypted->{huge_unencrypted} == 9**9**9, 'and hands back +Inf as the number');
+        ok(unpack('d', pack('d', $decrypted->{huge_unencrypted})) == 9**9**9, 'and hands back +Inf as the number');
         is(length("$decrypted->{huge_unencrypted}"), 401, 'with all 401 digits as the string half');
     }
 
@@ -288,7 +289,7 @@ subtest 'the same overflow does not croak on read paths: +Inf as the number, all
     is($@, '', 'extract(ignore_mac) does not croak either');
     SKIP: {
         skip 'extract died, nothing to check', 2 unless defined $extracted;
-        ok($extracted == 9**9**9, 'and it too hands back +Inf as the number');
+        ok(unpack('d', pack('d', $extracted)) == 9**9**9, 'and it too hands back +Inf as the number');
         is(length("$extracted"), 401, 'with all 401 digits as the string half');
     }
 };

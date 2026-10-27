@@ -5,7 +5,9 @@ use Test::More;
 use File::Temp qw(tempdir);
 use File::Slurper qw(read_binary write_binary);
 use JSON::MaybeXS qw(decode_json);
-use YAML::XS qw(Load);
+use YAML::XS ();
+use B ();
+use Config;
 use POSIX qw(signbit);
 use Scalar::Util qw(isdual dualvar);
 use Math::BigFloat;
@@ -72,9 +74,30 @@ sub scratch_file {
 #    formats. The two ticket-measured cases, exactly.
 ###############################################################################
 
+# The wire carries float64, so the values are the doubles; a -Duselongdouble
+# perl would otherwise compute them in a wider NV.
+sub dbl { unpack('d', pack('d', $_[0])) }
+
+# YAML::XS::Load as a double perl gives it: a float written `0.0` or `2.0`
+# arrives as a number plus its source text and nothing else. With a wider NV
+# Perl also publishes the integer it can hold exactly, which would make the
+# fixture an int that carries a different string form -- not the leaf these
+# tests are about.
+sub Load {
+    my $tree = YAML::XS::Load($_[0]);
+    if ($Config{nvsize} > 8) {
+        for my $key (keys %$tree) {
+            my $sv = B::svref_2object(\$tree->{$key});
+            next unless $sv->FLAGS & B::SVf_IOK() && $sv->FLAGS & B::SVf_NOK();
+            $tree->{$key} = dualvar(dbl($sv->NV), $sv->PV);
+        }
+    }
+    return $tree;
+}
+
 my @needs_extra_digits = (
-    { label => 'point_one_plus_point_two (needs 17 digits)', value => 0.1 + 0.2 },
-    { label => 'one_third (needs 16 digits)',                value => 1 / 3 },
+    { label => 'point_one_plus_point_two (needs 17 digits)', value => dbl(dbl(0.1) + dbl(0.2)) },
+    { label => 'one_third (needs 16 digits)',                value => dbl(1 / 3) },
 );
 
 for my $format (qw(yaml json)) {
@@ -95,7 +118,7 @@ for my $format (qw(yaml json)) {
             };
             is($@, '', 'the document verifies against its own MAC')
                 or diag("died: $@");
-            cmp_ok($self->{ratio_unencrypted}, '==', $value,
+            cmp_ok(dbl($self->{ratio_unencrypted}), '==', $value,
                 'and decrypts back to the value at full precision')
                 if $self;
 
@@ -109,7 +132,7 @@ for my $format (qw(yaml json)) {
 
             if ($exit_code == 0) {
                 my $decoded = $format eq 'json' ? decode_json($out) : Load($out);
-                cmp_ok($decoded->{ratio_unencrypted}, '==', $value,
+                cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', $value,
                     'and sops itself reads back the value at full precision');
             }
         };
@@ -243,7 +266,7 @@ subtest 'JSON -0.0 keeps its sign at exit 0 (guards against the naive fix)' => s
 # and quietly write the very number this ticket is about instead of the
 # fixture the test means to build.
 my $full_precision_text = '0.30000000000000004';
-my $full_precision_value = 0.1 + 0.2;
+my $full_precision_value = dbl(dbl(0.1) + dbl(0.2));
 
 subtest 'rotate() on a sops-written JSON document with a 17-digit float' => sub {
     my $plain = scratch_file('json');
@@ -260,7 +283,7 @@ subtest 'rotate() on a sops-written JSON document with a 17-digit float' => sub 
         File::SOPS->decrypt(encrypted => $content, identities => [$secret], format => 'json')
     };
     is($@, '', 'decrypt reads the sops-written document') or diag("died: $@");
-    cmp_ok($read->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($read->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and returns the value at full precision, before any rewrite')
         if $read;
 
@@ -320,7 +343,7 @@ PERL
     # double -- 0.3, not 0.1+0.2 -- with no error anywhere. == distinguishes
     # them because they are not the same double, even though both stringify
     # by default as "0.3".
-    cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and the untouched field is still the value it started as, not silently rounded');
 };
 
@@ -448,7 +471,7 @@ subtest '[json] a global Math::BigFloat->accuracy/precision does not corrupt the
     local $Math::BigFloat::accuracy  = 5;
     local $Math::BigFloat::precision = -2;
 
-    my $value = 1 / 3;   # needs 16 digits
+    my $value = dbl(1 / 3);   # needs 16 digits
 
     my $encrypted = File::SOPS->encrypt(
         data       => { ratio_unencrypted => $value, secret => 'shh' },
@@ -461,7 +484,7 @@ subtest '[json] a global Math::BigFloat->accuracy/precision does not corrupt the
     };
     is($@, '', 'self-MAC holds even with a global BigFloat accuracy/precision set')
         or diag("died: $@");
-    cmp_ok($self->{ratio_unencrypted}, '==', $value,
+    cmp_ok(dbl($self->{ratio_unencrypted}), '==', dbl($value),
         'and decrypts back to the value at full precision')
         if $self;
 
@@ -486,8 +509,8 @@ is(Math::BigFloat->precision(), $precision_before_all,
 
 for my $format (qw(yaml json)) {
     subtest "[$format] nested and array float leaves also reach full precision" => sub {
-        my $needs_digits_1 = 0.1 + 0.2;   # needs 17
-        my $needs_digits_2 = 1 / 3;        # needs 16
+        my $needs_digits_1 = dbl(dbl(0.1) + dbl(0.2));   # needs 17
+        my $needs_digits_2 = dbl(1 / 3);        # needs 16
 
         my $data = {
             outer_unencrypted => {
@@ -508,13 +531,13 @@ for my $format (qw(yaml json)) {
         };
         is($@, '', 'self-MAC holds') or diag("died: $@");
         if ($self) {
-            cmp_ok($self->{outer_unencrypted}{inner_unencrypted}, '==', $needs_digits_1,
+            cmp_ok(dbl($self->{outer_unencrypted}{inner_unencrypted}), '==', dbl($needs_digits_1),
                 'nested (two levels deep) value keeps full precision');
-            cmp_ok($self->{list_unencrypted}[0], '==', $needs_digits_2,
+            cmp_ok(dbl($self->{list_unencrypted}[0]), '==', dbl($needs_digits_2),
                 'array element 0 keeps full precision');
-            cmp_ok($self->{list_unencrypted}[1], '==', $needs_digits_1,
+            cmp_ok(dbl($self->{list_unencrypted}[1]), '==', dbl($needs_digits_1),
                 'array element 1 keeps full precision');
-            cmp_ok($self->{list_unencrypted}[2], '==', 3.14,
+            cmp_ok(dbl($self->{list_unencrypted}[2]), '==', dbl(3.14),
                 'array element 2 (already healthy at 15 digits) is untouched');
         }
 
@@ -526,9 +549,9 @@ for my $format (qw(yaml json)) {
 
         if ($exit_code == 0) {
             my $decoded = $format eq 'json' ? decode_json($out) : Load($out);
-            cmp_ok($decoded->{outer_unencrypted}{inner_unencrypted}, '==', $needs_digits_1,
+            cmp_ok(dbl($decoded->{outer_unencrypted}{inner_unencrypted}), '==', dbl($needs_digits_1),
                 'and sops itself reads the nested value back at full precision');
-            cmp_ok($decoded->{list_unencrypted}[0], '==', $needs_digits_2,
+            cmp_ok(dbl($decoded->{list_unencrypted}[0]), '==', dbl($needs_digits_2),
                 'and the array value at full precision too');
         }
     };
@@ -562,7 +585,7 @@ subtest '[json -> yaml] a float that arrived as a bare NV from JSON survives re-
     my $data = File::SOPS->decrypt(
         encrypted => $content, identities => [$secret], format => 'json',
     );
-    cmp_ok($data->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($data->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'decrypted value is correct before any re-emission');
 
     # The cross-format step: the SAME in-memory tree, with its bare NV, is
@@ -583,7 +606,7 @@ subtest '[json -> yaml] a float that arrived as a bare NV from JSON survives re-
 
     if ($exit_code == 0) {
         my $decoded = Load($out);
-        cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+        cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
             'and sops reads the cross-format value back at full precision');
     }
 };
@@ -617,9 +640,9 @@ subtest 'decrypt_file on a sops-written JSON document matches what sops -d itsel
     # get written, as the literal text on the wire.
     my $sops_decoded = decode_json($sops_plain_out);
     my $our_decoded  = decode_json($our_content);
-    cmp_ok($our_decoded->{ratio_unencrypted}, '==', $sops_decoded->{ratio_unencrypted},
+    cmp_ok(dbl($our_decoded->{ratio_unencrypted}), '==', dbl($sops_decoded->{ratio_unencrypted}),
         'decrypt_file and sops -d decode to the same double');
-    cmp_ok($our_decoded->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($our_decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and that double is the full-precision value, not the 15-digit truncation');
     like($our_content, qr/\Q$full_precision_text\E/,
         'decrypt_file writes the same literal digits sops -d does, not a truncated form')
@@ -972,9 +995,9 @@ for my $format (qw(yaml json)) {
         # literal that happens to be present.
         my $ours = $format eq 'json' ? decode_json($our_content) : Load($our_content);
         my $theirs = $format eq 'json' ? decode_json($sops_out)  : Load($sops_out);
-        cmp_ok($ours->{ratio}, '==', $theirs->{ratio},
+        cmp_ok(dbl($ours->{ratio}), '==', dbl($theirs->{ratio}),
             'decrypt_file and sops -d decode to the same double');
-        cmp_ok($ours->{ratio}, '==', $full_precision_value,
+        cmp_ok(dbl($ours->{ratio}), '==', dbl($full_precision_value),
             'and that double is 0.1+0.2, not its 15-digit truncation');
         is($ours->{other}, 'hello', 'the neighbouring string leaf came through too');
     };
@@ -1075,7 +1098,7 @@ for my $format (qw(yaml json)) {
                 "$leaf is still a float after decrypt (measured before the fix: "
               . ($leaf eq 'half' ? 'float' : 'int') . ')');
         }
-        cmp_ok($data->{whole}, '==', 2, 'and it is still the number 2');
+        cmp_ok(dbl($data->{whole}), '==', dbl(2), 'and it is still the number 2');
 
         # The write side, which is where it became a changed document.
         File::SOPS->rotate(file => $enc_file, identities => [$secret]);
@@ -1136,8 +1159,8 @@ subtest 'decrypt_file renders an integral float as ADR 0009 measured it' => sub 
 
         # Whatever the spelling, it is the same number sops reads.
         my $decoded = $format eq 'json' ? decode_json($content) : Load($content);
-        cmp_ok($decoded->{whole}, '==', 2, "[$format] and it is the number 2");
-        cmp_ok($decoded->{half}, '==', 1.5, "[$format] the neighbour is untouched");
+        cmp_ok(dbl($decoded->{whole}), '==', dbl(2), "[$format] and it is the number 2");
+        cmp_ok(dbl($decoded->{half}), '==', dbl(1.5), "[$format] the neighbour is untouched");
     }
 };
 
@@ -1201,8 +1224,8 @@ for my $format (qw(yaml json)) {
 
         # The other half of the dualvar: it is still the number, so anything
         # doing arithmetic with an extracted value is unaffected.
-        cmp_ok($ours, '==', $full_precision_value, 'numerically the same double');
-        cmp_ok($ours + 0, '==', $full_precision_value, 'in arithmetic too');
+        cmp_ok(dbl($ours), '==', dbl($full_precision_value), 'numerically the same double');
+        cmp_ok(dbl($ours + 0), '==', dbl($full_precision_value), 'in arithmetic too');
         is(sprintf('%.2f', $ours), '0.30', 'and to a format that asks for 2 places');
 
         # Fed back in, it writes the same wire bytes the bare NV would: the
@@ -1251,7 +1274,7 @@ subtest 'the dualvar stops at the leaf extract returns (ADR 0010)' => sub {
     ok(!isdual($branch->{ratio}),
         'and the float inside it is a plain scalar, so the emitters keep '
       . 'writing it as a number');
-    cmp_ok($branch->{ratio}, '==', $full_precision_value,
+    cmp_ok(dbl($branch->{ratio}), '==', dbl($full_precision_value),
         'with the value unchanged');
 
     # decrypt() is the same boundary from the other side. read_file in a
@@ -1374,7 +1397,7 @@ subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot
     is($? >> 8, 0, 'sops -d accepts the document') or diag("sops: $out");
     my $decoded = eval { decode_json($out) };
     return unless $decoded;
-    cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and reads the value back at full precision');
     is(File::SOPS::Encrypted->detect_type($decoded->{ratio_unencrypted}), 'float',
         'as a float, which is what k78 was about');
@@ -1395,7 +1418,7 @@ subtest 'the extract -> encrypt caller path writes a NUMBER in a JSON plain slot
         my $enc_out = `$sops_bin -d $enc_out_file 2>&1`;
         is($? >> 8, 0, 'sops -d accepts it') or diag("sops: $enc_out");
         my $enc_decoded = eval { decode_json($enc_out) };
-        cmp_ok($enc_decoded->{ratio}, '==', $full_precision_value,
+        cmp_ok(dbl($enc_decoded->{ratio}), '==', dbl($full_precision_value),
             'and reads the value back at full precision') if $enc_decoded;
     }
 };
@@ -1432,7 +1455,7 @@ subtest 'a float that arrived through a YAML parse reaches JSON as a number (k78
     is($? >> 8, 0, 'sops -d accepts the document') or diag("sops: $out");
     my $decoded = eval { decode_json($out) };
     return unless $decoded;
-    cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and reads the 17-digit value back');
     is(File::SOPS::Encrypted->detect_type($decoded->{half_unencrypted}), 'float',
         'with 1.50 still a float rather than a string');
@@ -1461,7 +1484,7 @@ subtest 'YAML writes the same number, unchanged by ADR 0011 (k78)' => sub {
     my $out = `$sops_bin -d $file 2>&1`;
     is($? >> 8, 0, 'sops -d accepts the document') or diag("sops: $out");
     my $decoded = eval { Load($out) };
-    cmp_ok($decoded->{ratio_unencrypted}, '==', $full_precision_value,
+    cmp_ok(dbl($decoded->{ratio_unencrypted}), '==', dbl($full_precision_value),
         'and sops reads a number back') if $decoded;
 };
 
@@ -1475,7 +1498,7 @@ subtest 'the repair moves no byte of the ADR 0005 / ADR 0006 cases (k78)' => sub
     my $emitted = File::SOPS::Format::JSON->emit({
         a_neg_zero => -0.0,
         b_17       => $full_precision_value,
-        c_16       => 1 / 3,
+        c_16       => dbl(1 / 3),
         d_1e29     => 1e29,
         e_1e20     => 1e20,
         f_2_0      => 2.0,

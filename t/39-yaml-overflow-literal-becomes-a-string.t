@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test::More;
+use Config;
 use File::Temp qw(tempdir);
 use File::Slurper qw(read_binary write_binary);
 
@@ -189,7 +190,10 @@ subtest 'an underflowing literal is untouched' => sub {
     # this pins that it does not.
     for my $source ('1e-400', '1e-500') {
         my $leaf = yaml_leaf($source);
-        is(leaf_type($leaf), 'int', "[$source] still an int -- k106");
+        # A wider NV (-Duselongdouble) holds 1e-400 as a nonzero float; the
+        # digest is `0` either way, which is what the wire sees.
+        is(leaf_type($leaf), $Config{nvsize} > 8 ? 'float' : 'int',
+            "[$source] an int on a double perl (k106), a float on a wider NV");
         is(leaf_bytes($leaf), '0', "[$source] still digesting 0");
     }
 };

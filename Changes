@@ -8,6 +8,11 @@ Revision history for File-SOPS
     backends are still refused.
   - sops.hc_vault[].created_at is written quoted, so sops 3.13 reads
     documents carrying a Vault entry.
+  - Float leaves are IEEE-754 doubles on every perl, also on those built
+    with -Duselongdouble: they are written as the shortest digits that read
+    back bit-identical (3.14 stays 3.14, 0.30000000000000004 stays itself),
+    a literal beyond the double range is +Inf or a string exactly as on a
+    double perl, and a YAML 2.0 stays a float (GitHub issue 2).
 
 0.005     2026-10-21 18:35:30Z
   - Crypt::Age is raised to 0.005, the release whose header parser no longer

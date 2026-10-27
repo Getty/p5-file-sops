@@ -880,6 +880,9 @@ my $POSITIVE_INFINITY = 9**9**9;
 sub _non_finite_bytes {
     my ($n) = @_;
 
+    # Go's float is a float64: a long double beyond its range is +Inf there.
+    $n = unpack('d', pack('d', $n));
+
     return 'NaN' if $n != $n;                       # only NaN is unequal to itself
     return $n > 0 ? '+Inf' : '-Inf'
         if $n == $POSITIVE_INFINITY || $n == -$POSITIVE_INFINITY;
@@ -2027,6 +2030,23 @@ sub _has_public_pv {
     return $flags & B::SVf_POK() ? 1 : 0;
 }
 
+# Does this emitted number token carry no more significant digits than a
+# float64 needs (17)? A -Duselongdouble perl stringifies an NV with 18 and
+# more, so an emitter that writes the NV as it stands spells 0.3000000000000000444
+# where Go writes 0.30000000000000004. Both read back as the same double; the
+# canonical shortest form is the one written.
+sub _token_fits_double {
+    my ($class, $token) = @_;
+    return 0 unless defined $token;
+
+    $token =~ s/[eE].*\z//s;
+    $token =~ s/\A[-+]//;
+    $token =~ tr/.//d;
+    $token =~ s/\A0+//;
+    $token =~ s/0+\z//;
+    return length($token) <= 17 ? 1 : 0;
+}
+
 # strconv.FormatFloat(v, 'f', -1, 64).
 #
 # 'f' means positional notation, never an exponent. -1 means the shortest
@@ -2051,10 +2071,16 @@ sub _float_bytes {
     my $non_finite = _non_finite_bytes($n);
     return $non_finite if defined $non_finite;
 
+    # Go's float is a float64 whatever Perl's NV is. On a -Duselongdouble
+    # perl $n may carry more precision than a double, so the shortest-digits
+    # search is run on the double it rounds to, and each candidate is read
+    # back as a double too -- never as an NV, which would hold 3.14 and the
+    # double nearest 3.14 apart.
+    $n = unpack('d', pack('d', $n));
     my $g;
     for my $precision (1 .. 17) {                   # 17 always round-trips a double
         $g = sprintf('%.*g', $precision, $n);
-        last if 0 + "$g" == $n;
+        last if unpack('d', pack('d', 0 + "$g")) == $n;
     }
 
     return _expand_exponent($g);

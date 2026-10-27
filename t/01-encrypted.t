@@ -68,7 +68,16 @@ for my $test (
     );
     is($enc->type, $type, "'$value' is typed $type");
     my $dec = $enc->decrypt_value(key => $key);
-    is($dec, $expected, "roundtrip for $type ('$value')");
+    if ($type eq 'float') {
+        # A float is a float64 on the wire; the NV Perl holds it in may be wider
+        # (-Duselongdouble) and stringifies the double's extra digits, so the
+        # comparison is between doubles.
+        cmp_ok(unpack('d', pack('d', $dec)), '==', unpack('d', pack('d', $expected)),
+            "roundtrip for $type ('$value')");
+    }
+    else {
+        is($dec, $expected, "roundtrip for $type ('$value')");
+    }
 }
 
 # Test wrong AAD fails

@@ -55,6 +55,10 @@ my @VALUES      = (1e20, 1e21, -1e20, 1.25e20, 9.87e19, 1.5e-7);
 my $LEAVES      = 50;
 my $ROUND_TRIPS = 60;
 
+# The wire carries float64, so the stored value is the double each literal
+# rounds to -- on a -Duselongdouble perl the literal itself is wider.
+@VALUES = map { unpack('d', pack('d', $_)) } @VALUES;
+
 my %input = map { ('k' . $_ => $VALUES[ $_ % @VALUES ]) } 0 .. $LEAVES - 1;
 
 my $mismatches = 0;

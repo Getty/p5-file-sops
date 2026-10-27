@@ -3,6 +3,7 @@ package File::SOPS::Format::YAML;
 our $VERSION = '0.006';
 use Moo;
 use B ();
+use Config;
 use Carp qw(carp croak);
 use Scalar::Util qw(blessed dualvar refaddr);
 use YAML::PP;
@@ -741,6 +742,20 @@ sub _restring_non_finite_leaves {
     return;
 }
 
+# Does this decimal text round to +-Inf as a float64? Go's ParseFloat answers
+# ErrRange from 2**1024 - 2**970 upwards (the rounding threshold). Exact, on the
+# digits, for perls whose NV is wider than a double and cannot decide it.
+sub _text_overflows_double {
+    my ($text) = @_;
+    require Math::BigFloat;
+    my $x = Math::BigFloat->new($text);
+    return 1 if $x->is_nan;
+    $x->babs;
+    my $threshold = Math::BigFloat->new(2)->bpow(1024)
+                  - Math::BigFloat->new(2)->bpow(970);
+    return $x >= $threshold ? 1 : 0;
+}
+
 # $_[0] is the caller's element by alias, deliberately: the flags are read off
 # the SV the tree holds rather than off a copy, and the replacement is written
 # back into the same slot. Nothing here numifies anything -- B reads the NV and
@@ -753,7 +768,21 @@ sub _restring_non_finite_leaf {
     my $flags = $sv->FLAGS;
     return unless ($flags & B::SVf_NOK()) && ($flags & B::SVf_POK());
 
-    my $nv = $sv->NV;
+    # A perl whose NV is wider than a double holds an integral float exactly,
+    # so YAML::XS leaves the public IOK on `2.0` and `0.0` where a double perl
+    # leaves NOK alone, and the SV ladder would call the leaf an int. (An
+    # exponent spelling carries the integer on every perl; those stay as they
+    # are.) The number is rebuilt from the double alone, keeping the source spelling.
+    if ($Config{nvsize} > 8 && ($flags & B::SVf_IOK())
+        && $sv->PV =~ /\A[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)\z/) {
+        $_[0] = dualvar(unpack('d', pack('d', $sv->NV)), $sv->PV);
+        return;
+    }
+
+    # The double it rounds to: on a -Duselongdouble perl 1e400 is a finite NV
+    # and a float64 overflow to Go.
+    my $wide = $sv->NV;
+    my $nv   = unpack('d', pack('d', $wide));
     return unless $nv != $nv
         || $nv == $POSITIVE_INFINITY
         || $nv == -$POSITIVE_INFINITY;
@@ -762,6 +791,18 @@ sub _restring_non_finite_leaf {
     # An empty one is not a token Go reads as anything but a null, and there is
     # nothing to hand back, so the leaf is left exactly as it came.
     my $pv = $sv->PV;
+
+    # A wider NV can round to the double threshold from a literal that is still
+    # below it, which Go reads as a finite float. Where the NV itself is finite
+    # but its double is not, the literal's own digits decide.
+    if ($wide == $wide && $wide != $POSITIVE_INFINITY
+        && $wide != -$POSITIVE_INFINITY && !_text_overflows_double($pv)) {
+        # Go's float is the largest finite double there, not the wider NV.
+        my $max = unpack('d', pack('d', 1.7976931348623157e308));
+        $_[0] = $wide < 0 ? -$max : $max;
+        return;
+    }
+
     return unless length $pv;
 
     $_[0] = $pv;
@@ -1109,7 +1150,7 @@ sub _plain_infinity_leaf {
     # `this scalar was written plain`.
     my $theirs = B::svref_2object(\$_[1]);
     return undef unless $theirs->FLAGS & B::SVf_NOK();
-    my $nv = $theirs->NV;
+    my $nv = unpack('d', pack('d', $theirs->NV));   # the float64, as above
     return undef unless $nv != $nv
         || $nv == $POSITIVE_INFINITY
         || $nv == -$POSITIVE_INFINITY;
@@ -2884,7 +2925,15 @@ sub _foreign_resolution_warning_remedy {
 sub _float_roundtrips {
     my ($value, $text) = @_;
 
-    my $back = eval { Load(Dump({ v => $value }))->{v} };
+    my $written = eval { Dump({ v => $value }) };
+    return 0 unless defined $written;
+
+    # A perl with a wider NV than a double writes digits a double does not need.
+    return 0 if $Config{nvsize} > 8
+        && !File::SOPS::Encrypted->_token_fits_double(
+            $written =~ /^v:\s*(\S+)/m ? $1 : undef);
+
+    my $back = eval { Load($written)->{v} };
     return 0 unless defined $back;
     return File::SOPS::Encrypted->value_to_bytes($back) eq $text ? 1 : 0;
 }

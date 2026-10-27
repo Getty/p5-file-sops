@@ -285,9 +285,16 @@ for my $format (qw(yaml json)) {
 # ----------------------------------------------------------------------------
 
 {
+    # 0.1 + 0.2 as IEEE-754 doubles, whatever width Perl's NV has: a
+    # -Duselongdouble perl adds in long double and lands on 0.3.
+    my $dbl = sub { unpack('d', pack('d', $_[0])) };
+    my $sum = $dbl->($dbl->(0.1) + $dbl->(0.2));
+
     my @cases = (
-        [ 'float needing 17 digits', 0.1 + 0.2,  undef,   '0.30000000000000004' ],
+        [ 'float needing 17 digits', $sum,       undef,   '0.30000000000000004' ],
         [ 'float 1.5',               1.5,        undef,   '1.5'                 ],
+        [ 'double nearest 3.14',     $dbl->(3.14),   undef, '3.14'              ],
+        [ 'double nearest 1.5e-7',   $dbl->(1.5e-7), undef, '0.00000015'        ],
         [ 'float forced type',       1.5,        'float', '1.5'                 ],
         [ 'float 2.0',               2.0,        undef,   '2'                   ],
         [ 'negative zero',           -0.0,       undef,   '-0'                  ],
@@ -311,7 +318,7 @@ for my $format (qw(yaml json)) {
     # The caller path the ticket is about, end to end: a value that went
     # through value_to_bytes and came back must reach the wire as type:str.
     my $key   = "\x01" x 32;
-    my $bytes = File::SOPS::Encrypted->value_to_bytes(0.1 + 0.2);
+    my $bytes = File::SOPS::Encrypted->value_to_bytes($sum);
     my $enc   = File::SOPS::Encrypted->encrypt_value(
         value => $bytes, key => $key, aad => 'a:',
     );
@@ -322,7 +329,7 @@ for my $format (qw(yaml json)) {
 
     # And the source scalar is not retyped either -- the input side of the same
     # rule, which is what k72 and k73 fixed.
-    my $float = 0.1 + 0.2;
+    my $float = $sum;
     File::SOPS::Encrypted->value_to_bytes($float);
     is(File::SOPS::Encrypted->detect_type($float), 'float',
         "and the caller's own scalar is still a float afterwards");

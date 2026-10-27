@@ -2,6 +2,7 @@ package File::SOPS::Format::JSON;
 # ABSTRACT: JSON format handler for SOPS
 our $VERSION = '0.006';
 use Moo;
+use Config;
 use B ();
 use Carp qw(croak);
 use Cpanel::JSON::XS ();
@@ -633,7 +634,15 @@ sub _reject_referenced_leaf {
 sub _float_roundtrips {
     my ($value, $text) = @_;
 
-    my $back = eval { $json->decode($encoder->encode({ v => $value }))->{v} };
+    my $written = eval { $encoder->encode({ v => $value }) };
+    return 0 unless defined $written;
+
+    # A perl with a wider NV than a double writes digits a double does not need.
+    return 0 if $Config{nvsize} > 8
+        && !File::SOPS::Encrypted->_token_fits_double(
+            $written =~ /"v"\s*:\s*([^,}\s]+)/ ? $1 : undef);
+
+    my $back = eval { $json->decode($written)->{v} };
     return 0 unless defined $back;
 
     return 0 unless File::SOPS::Encrypted->detect_type($back)
