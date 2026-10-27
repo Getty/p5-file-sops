@@ -1,0 +1,20 @@
+---
+class: standard
+completed: 2026-10-27T03:23:33Z
+created: 2026-10-27T02:40:28Z
+id: 204
+priority: high
+started: 2026-10-27T03:23:33Z
+status: done
+tags:
+- bug
+- github
+title: Float round-trip tests fail on -Duselongdouble perls (GitHub issue 2)
+updated: 2026-10-27T03:23:33Z
+---
+
+Reported by eserte: https://github.com/Getty/p5-file-sops/issues/2 — on -Duselongdouble perls t/01-encrypted.t (3.14 comes back as 3.14000000000000012), t/06-wire-format-regressions.t (0.30000000000000004 written as 0.3) and t/18-decrypt-determinism.t (1.5e-07 vs 1.49999999999999993e-07) fail. Done: float encoding/decoding and the tests hold on NV=long double as on NV=double; suite green.
+
+2026-10-27 03:13 Fixed on branch gh-issue-2, commit 81b3b0e. Suite green on system perl and on perl 5.40.1 -Duselongdouble (1493 tests each).
+
+2026-10-27 03:23 Merged on main: 72ce7f2 (helper moved above the k32 comment block, t/39 test name says int on a double perl, float on a wider NV). Red proof t/87 against old lib on perl 5.40.1 -Duselongdouble: 5/5 subtests fail; suite 89 files / 1493 tests PASS on the normal and the long-double perl.
