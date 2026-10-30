@@ -1,6 +1,8 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - The skill perl-file-sops ships in .claude/skills/ for projects that call
+    File::SOPS: install it with skilletor as perl-file-sops@p5-file-sops.
   - HashiCorp Vault Transit is the second backend: documents can be
     encrypted, decrypted, rotated and edited for Vault keys, through the new
     hc_vault_transit_uris, vault_token and vault_allowed_addresses arguments;
