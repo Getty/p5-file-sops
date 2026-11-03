@@ -1,11 +1,9 @@
 requires 'perl', '5.014';
 
+requires 'Cpanel::JSON::XS', '4.38';
 requires 'Crypt::Age', '0.005';
 requires 'CryptX';
-requires 'YAML::XS';
-# Only used to recover document key order for MAC verification; YAML::XS stays
-# the parser and emitter. See the MAC section of File::SOPS.
-requires 'YAML::PP';
+requires 'HTTP::Tiny';
 # JSON::MaybeXS is used for JSON::PP::Boolean (JSON->true/false), which every
 # one of its backends agrees on. It is NOT what emits or parses documents:
 # it binds a backend once per process by load order, so the calling program
@@ -14,10 +12,12 @@ requires 'YAML::PP';
 # Cpanel::JSON::XS instead -- see docs/adr/0005. The version is the one
 # JSON::MaybeXS itself asks for, so this is usually already installed.
 requires 'JSON::MaybeXS';
-requires 'Cpanel::JSON::XS', '4.38';
-requires 'HTTP::Tiny';
 requires 'Moo';
 requires 'namespace::clean';
+# Only used to recover document key order for MAC verification; YAML::XS stays
+# the parser and emitter. See the MAC section of File::SOPS.
+requires 'YAML::PP';
+requires 'YAML::XS';
 
 on test => sub {
     requires 'File::Slurper';
