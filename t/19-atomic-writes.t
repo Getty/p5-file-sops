@@ -370,6 +370,19 @@ subtest 'a target whose directory does not exist is still named in the error' =>
               . 'caller nothing about which path was wrong');
 };
 
+# Whether chmod 0444 keeps THIS process out of a file. root (or anything with
+# CAP_DAC_OVERRIDE, as in a CI container) writes through 0444, so there the
+# refusal cannot be observed. Probe the capability itself rather than $> == 0.
+sub readonly_is_enforced {
+    my $probe = "$dir/readonly-probe";
+    write_binary($probe, "x");
+    chmod 0444, $probe or die $!;
+    my $writable = open(my $fh, '>>', $probe);
+    close $fh if $writable;
+    unlink $probe;
+    return !$writable;
+}
+
 ###############################################################################
 # A read-only target is refused, with the file the caller asked for named
 ###############################################################################
@@ -380,6 +393,8 @@ subtest 'a target whose directory does not exist is still named in the error' =>
 # this is the one refusal the atomic write silently dropped. Every method that
 # goes through _replace_file has to enforce it.
 subtest 'a read-only target is refused and left untouched' => sub {
+    plan skip_all => 'this process can write to a chmod 0444 file (root or CAP_DAC_OVERRIDE): the refusal cannot be observed'
+        unless readonly_is_enforced();
     my $sub   = scratch();
     my $plain = "db:\n  password: secret123\n";
 
@@ -448,6 +463,8 @@ subtest 'a read-only target is refused and left untouched' => sub {
 };
 
 subtest 'edit refuses a read-only file too, before the re-encrypt' => sub {
+    plan skip_all => 'this process can write to a chmod 0444 file (root or CAP_DAC_OVERRIDE): the refusal cannot be observed'
+        unless readonly_is_enforced();
     # The refusal lives in _replace_file, which edit reaches only after the
     # editor ran and the result re-parsed. The check therefore costs the
     # editor nothing when the file is writable, and saves edit from

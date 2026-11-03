@@ -6,10 +6,12 @@ use File::Temp qw(tempdir);
 use File::Slurper qw(read_binary write_binary);
 use YAML::XS qw(Load);
 use JSON::MaybeXS ();
-use FindBin;
-use lib "$FindBin::Bin/../../t/lib";
 
 use File::SOPS;
+# cwd-relative like every interop test and xt/release/sops-bin-present.t: right
+# from the source tree and after ExtraTests rewrites this to t/author-*.t
+# (`dzil test`, cwd = built dist root), where a FindBin-relative path breaks.
+use lib 't/lib';
 use SopsBin qw(find_sops_bin);
 
 # A round trip against a REAL Vault (k39). Everything under t/ uses a mock
