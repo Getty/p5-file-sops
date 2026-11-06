@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-06T20:42:11Z
+claimed_by: orchestrator
+class: standard
+completed: 2026-11-06T20:42:06Z
+created: 2026-10-30T21:51:59Z
+id: 206
+priority: low
+started: 2026-11-06T20:28:39Z
+status: done
+tags:
+- docs
+- skills
+title: 'POD and file-sops-core lag behind the code: multi-document YAML, Vault, .ini'
+updated: 2026-11-06T20:42:11Z
+---
+
+Found while writing the consumer skill perl-file-sops (k205), each checked against the code:
+
+- lib/File/SOPS.pm POD "Multi-document YAML: Not supported, and refused" (around line 573) contradicts the code and t/13: encrypt takes an ArrayRef of HashRefs and decrypt returns an ArrayRef for a multi-document stream.
+- lib/File/SOPS.pm POD feature list (around line 114) says "currently age, with PGP/KMS planned" and leaves out the Vault Transit backend.
+- The encrypt_file POD (around line 1613) lists .yaml/.yml/.json/.env; the filename detection (_format_from_filename, around line 5138) also maps .ini.
+- Skill file-sops-core calls age "the only backend implemented" and its module map leaves out the ENV and INI format handlers.
+
+Done when: the four places describe what the code does; perl-file-sops (the consumer skill) needs no change.
+
+Settled by the hub session perl-developer-bb for the 2026-11-06 release round -- these are the hub's calls, not the maintainer's: the four places describe what the code does (multi-document YAML, Vault Transit as the second backend, .ini in the filename detection, the ENV and INI handlers in file-sops-core); every statement checked against code and tests; the consumer skill perl-file-sops stays as it is; the POD correction gets a Changes entry, the internal skill change none. Worker: file-sops-api (POD and the core skill text, read-only check of the code).
+
+file-sops-api: docs done, tree commit-ready and uncommitted in worktree k206-k207. Changed SOPS.pm POD in three places and the file-sops-core skill in two. All claims checked against code and tests. podchecker adds only unresolved method-link errors, none on a weave-equivalent copy. No t/ run. Full report and drift list went to the orchestrator.
+
+file-sops-api done, tree commit-ready. SOPS.pm POD: DESCRIPTION names all four formats and the two backends, the Multi-document YAML section describes the supported stream and its two refusals, the encrypt_file extension list has .ini and the yaml fallback. Skill file-sops-core: module map has HCVault, ENV, INI, Flat and Comment rows, and What exists names age and Vault transit. Each claim backed by code and by t/13, t/15, t/17, t/22, t/86. Checks: perl -c OK, t/00-load PASS, dzil build plus podchecker on the built SOPS.pm says pod syntax OK. perl-file-sops untouched.
+
+Committed as 5e1e294bf1532b6cfd659fea1c6d11baa779b006 by file-sops-release-manager, main fast-forwarded to it. Drift found on the way, filed separately: k208 (POD remnants of the stream refusal and the age-only list), k209 (CLAUDE.md backend status).
