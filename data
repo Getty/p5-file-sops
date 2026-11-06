@@ -1,0 +1,13 @@
+---
+class: standard
+created: 2026-11-06T20:41:01Z
+id: 209
+priority: low
+status: backlog
+tags:
+- docs
+title: CLAUDE.md says Vault does not exist and age is the only backend module
+updated: 2026-11-06T20:41:01Z
+---
+
+Found while working k206. The CLAUDE.md status block and the Encryption Backends section still list Vault as not existing and age as the only backend module; Backend::HCVault landed with k39. The API Design section still calls format env and ini roadmap. The skill file-sops-core line that CLAUDE.md describes a little more than exists is now only half true. Plain prose, the orchestrator's lane. Done when CLAUDE.md states the two backends and drops the env/ini roadmap note.
