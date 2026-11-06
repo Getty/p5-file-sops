@@ -1,6 +1,11 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - New File::SOPS->has_bare_lastmodified(file => ... | encrypted => ...)
+    says whether a YAML file's sops.lastmodified is a bare timestamp, the
+    kind File::SOPS 0.002 wrote and sops -d refuses; it decrypts nothing and
+    needs no identities. rotate rewrites such a file with the timestamp
+    quoted.
   - The skill perl-file-sops ships in .claude/skills/ for projects that call
     File::SOPS: install it with skilletor as perl-file-sops@p5-file-sops.
   - HashiCorp Vault Transit is the second backend: documents can be

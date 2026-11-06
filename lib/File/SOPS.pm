@@ -107,6 +107,9 @@ our $VERSION = '0.006';
         identities => ['AGE-SECRET-KEY-1...'],
     );
 
+    # Does sops -d refuse this file for a bare lastmodified? (decrypts nothing)
+    my $bare = File::SOPS->has_bare_lastmodified(file => 'secrets.enc.yaml');
+
     # Take the recipients and rules from the .sops.yaml governing a file
     my %args = File::SOPS->creation_rules_for(file => 'secrets/prod.yaml');
     File::SOPS->encrypt_in_place(file => 'secrets/prod.yaml', %args);
@@ -2200,6 +2203,104 @@ back as a C<File::SOPS::Comment>>); the rotation then re-encrypts that comment
 into a C<type:comment> leaf, so a second rotation is silent.
 
 Returns true on success.
+
+=cut
+
+sub has_bare_lastmodified {
+    my ($class, %args) = @_;
+    my $file      = $args{file};
+    my $encrypted = $args{encrypted};
+    my $format    = $args{format};
+
+    croak "file or encrypted required"
+        unless defined $file || defined $encrypted;
+    croak "file and encrypted are mutually exclusive"
+        if defined $file && defined $encrypted;
+
+    # The bytes and the format the read paths would use: decrypt_file's for a
+    # file, decrypt's for text.
+    my $content;
+    if (defined $file) {
+        $format //= _detect_format_from_filename($file);
+        $content  = _read_file($file, 'file');
+    }
+    else {
+        $format //= _detect_format($encrypted);
+        $content  = $encrypted;
+    }
+
+    my $format_class = _format_class($format);
+
+    # Only a handler whose documents can carry the defect offers the question,
+    # and that is YAML alone: a JSON string is always quoted, and sops reads a
+    # dotenv or INI value as an untyped string. The others answer unparsed.
+    return 0 unless $format_class->can('has_bare_lastmodified');
+
+    # Already exactly 1 or 0, and asked of the read path's own load rather than
+    # of parse, which would warn and build the metadata object.
+    return $format_class->has_bare_lastmodified($content);
+}
+
+=method has_bare_lastmodified
+
+    my $bare = File::SOPS->has_bare_lastmodified(
+        file   => 'secrets.enc.yaml',
+        format => 'yaml',            # optional, auto-detected from filename
+    );
+
+    my $bare = File::SOPS->has_bare_lastmodified(
+        encrypted => $yaml_text,
+        format    => 'yaml',         # optional, auto-detected from content
+    );
+
+Returns C<1> when the document's C<sops> section holds C<lastmodified> as a
+B<bare> timestamp, and C<0> otherwise. Nothing is decrypted and no MAC is
+looked at, so it needs no C<identities>, and it never warns.
+
+Bare means an untagged plain YAML scalar that go-yaml resolves to a timestamp:
+
+    lastmodified: 2026-08-21T09:05:08Z      bare
+    lastmodified: "2026-08-21T09:05:08Z"    quoted, as sops writes it
+
+sops refuses such a file whole, before decrypting anything -- measured against
+sops 3.13.3, C<sops -d> exits 1 with C<'lastmodified' expected type 'string',
+got unconvertible type 'time.Time'>. This distribution reads it, values and MAC
+intact, and warns (see L<File::SOPS::Format::YAML/A plain C<lastmodified> in the
+C<sops> section is warned about>). File::SOPS 0.002 and earlier wrote the
+timestamp bare, so a YAML file they wrote is one.
+
+This method is the check that warning makes,
+L<File::SOPS::Format::YAML/has_bare_lastmodified>, over the same load of the
+document, so it answers C<1> for exactly the documents the read path warns
+about. Only the C<lastmodified> directly under the root C<sops> key counts, not
+a key of that name anywhere else; a scalar tagged C<!!str> is not bare, because
+the tag stops go-yaml's resolver and sops reads it.
+
+Exactly one of C<file> and C<encrypted> is required; neither, or both, croaks.
+C<file> is read as L</decrypt_file> reads its input, and croaks as it does when
+the file cannot be opened. Without C<format>, the format is guessed from
+C<file>'s name as L</decrypt_file> guesses it, or from C<encrypted>'s content as
+L</decrypt> guesses it. An unknown C<format> croaks with C<Unknown format: ...>,
+and a YAML document L<YAML::XS> cannot read croaks with the message L</decrypt>
+dies with for the same text: an unreadable document is never answered C<0>.
+
+Only YAML can carry the defect, so a C<json>, C<env> (or C<dotenv>) or C<ini>
+document answers C<0> without being parsed: a JSON string is always quoted, and
+sops reads a dotenv or INI value as an untyped string. A multi-document YAML
+stream answers from its B<first> document, which is the one sops reads the
+metadata from (see L</Multi-document YAML>). A document with no C<sops> section,
+and empty text, answer C<0>.
+
+There is no repair method, because L</rotate> is one: it re-stamps
+C<lastmodified> and writes it quoted, under a new data key, and keeps the
+values, their types, the recipients and the encryption rules. It needs what any
+rotation needs -- C<identities> or a Vault token, and a document whose key
+material it can re-wrap (see L</Files rotate refuses>) -- and since it reads the
+file first, it emits the warning once.
+
+    if (File::SOPS->has_bare_lastmodified(file => $file)) {
+        File::SOPS->rotate(file => $file, identities => \@identities);
+    }
 
 =cut
 

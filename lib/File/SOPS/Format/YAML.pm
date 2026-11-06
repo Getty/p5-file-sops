@@ -128,37 +128,9 @@ sub parse {
 
     local $YAML::XS::Boolean = $BOOLEAN_MODE;
 
-    # LIST context is load-bearing, and it is the whole of the trap this ADR
-    # names. YAML::XS::Load in SCALAR context returns only the LAST document of
-    # a multi-document stream, so `a: 1\n---\nb: 2` parsed to just {b=>2} -- and
-    # encrypt_file then wrote that back as the whole file. In LIST context @docs
-    # holds every document, in order.
-    #
-    # sops supports multi-document YAML as ONE tree with N branches carrying ONE
-    # metadata section (written into every document) and ONE MAC spanning all
-    # documents in order (docs/adr/0033, k31). This method now returns the
-    # DOCUMENT LIST rather than refusing above one document -- see
-    # _parse_multidoc. The single-document path below is untouched, so a
-    # one-document file is byte-identical to before.
-    #
-    # parse_in_document_order moved to a document list in the SAME commit, and
-    # it had to: that reparse supplies the MAC walk's key ORDER while the tree
-    # here supplies the VALUES, so if one became a list and the other did not
-    # the walk would pair one document's order with another's values -- a wrong
-    # MAC with no error. Both are lists now.
-    #
-    # The retries below exist for TWO tokens and run only after YAML::XS has
-    # already refused the document. See _without_merge_tags and
-    # _without_bool_tags; _refuse_unreadable_tag names the tag for the ones
-    # that carry a type this module cannot reproduce, and reports libyaml's own
-    # message, unchanged, for everything that is not a tag at all.
-    my @docs = eval { Load($content) };
-    if (my $load_error = $@) {
-        my $retry = _without_redundant_tags($content);
-        _refuse_unreadable_tag($content, $load_error) unless defined $retry;
-        @docs = eval { Load($retry) };
-        _refuse_unreadable_tag($content, $load_error) if $@;
-    }
+    # The read path's one load, shared with has_bare_lastmodified so that the
+    # question it answers is asked of the same documents this method reads.
+    my @docs = _load_documents($content);
 
     return _parse_multidoc($content, \@docs) if @docs > 1;
 
@@ -204,6 +176,49 @@ sub parse {
     # without special-casing the count. The two-value unpacking every current
     # caller uses ignores it, so the single-document path is byte-identical.
     return ($data, $metadata, [$data]);
+}
+
+# YAML::XS::Load over the whole stream, with the tag repairs below. Every
+# document, in order; dies with the read path's own message when the text
+# cannot be read.
+sub _load_documents {
+    my ($content) = @_;
+
+    local $YAML::XS::Boolean = $BOOLEAN_MODE;
+
+    # LIST context is load-bearing, and it is the whole of the trap this ADR
+    # names. YAML::XS::Load in SCALAR context returns only the LAST document of
+    # a multi-document stream, so `a: 1\n---\nb: 2` parsed to just {b=>2} -- and
+    # encrypt_file then wrote that back as the whole file. In LIST context @docs
+    # holds every document, in order.
+    #
+    # sops supports multi-document YAML as ONE tree with N branches carrying ONE
+    # metadata section (written into every document) and ONE MAC spanning all
+    # documents in order (docs/adr/0033, k31). parse now returns the
+    # DOCUMENT LIST rather than refusing above one document -- see
+    # _parse_multidoc. The single-document path is untouched, so a
+    # one-document file is byte-identical to before.
+    #
+    # parse_in_document_order moved to a document list in the SAME commit, and
+    # it had to: that reparse supplies the MAC walk's key ORDER while the tree
+    # here supplies the VALUES, so if one became a list and the other did not
+    # the walk would pair one document's order with another's values -- a wrong
+    # MAC with no error. Both are lists now.
+    #
+    # The retries below exist for TWO tokens and run only after YAML::XS has
+    # already refused the document. See _without_merge_tags and
+    # _without_bool_tags; _refuse_unreadable_tag names the tag for the ones
+    # that carry a type this module cannot reproduce, and reports libyaml's own
+    # message, unchanged, for everything that is not a tag at all.
+    my @docs = eval { Load($content) };
+    if (my $load_error = $@) {
+        my $retry = _without_redundant_tags($content);
+        _refuse_unreadable_tag($content, $load_error) unless defined $retry;
+        @docs = eval { Load($retry) };
+        _refuse_unreadable_tag($content, $load_error) if $@;
+    }
+
+    return @docs;
 }
 
 ###############################################################################
@@ -1223,24 +1238,14 @@ sub _plain_infinity_token {
 # guard stays quiet on a document sops refuses; `...09:05:08+25:00` is a
 # timestamp to this model and a string to go-yaml, so the guard fires on a
 # document sops refuses anyway -- for the other of its two reasons.
+#
+# The condition is _has_bare_lastmodified, and this is only "carp if it holds".
+# has_bare_lastmodified asks the same function of the same load, so the public
+# query and this warning cannot answer differently for any document.
 sub _warn_plain_lastmodified {
     my ($section, $content) = @_;
 
-    # The cheapest gate first: no metadata, or a `lastmodified` that is not a
-    # scalar, and there is nothing a plain/quoted question could be about.
-    # ADR 0043 refuses a reference here further down the read path.
-    return unless ref $section eq 'HASH';
-    my $text = $section->{lastmodified};
-    return unless defined $text && !ref $text;
-
-    # Then the model, which is a regex and no parse: go-yaml only resolves a
-    # scalar to a timestamp when parseTimestamp takes it, and _go_timestamp is
-    # this module's measured reimplementation of that (see _go_scalar_bytes,
-    # where the emit-side guard asks the same question of the same tokens).
-    return unless defined _go_timestamp($text);
-
-    # Only then the second parser, and only for the style of one scalar.
-    return unless _plain_lastmodified($content);
+    return unless _has_bare_lastmodified($section, $content);
 
     carp "sops:lastmodified: this timestamp is written as a PLAIN scalar. "
         . "gopkg.in/yaml.v3 resolves a bare RFC3339 scalar to a Go time.Time "
@@ -1254,6 +1259,30 @@ sub _warn_plain_lastmodified {
         . "Quoting the line by hand does the same";
 
     return;
+}
+
+# 1 when the section YAML::XS read holds a `lastmodified` go-yaml would resolve
+# to a time.Time -- a timestamp-shaped token, written as an untagged plain
+# scalar -- and 0 otherwise. $section is the FIRST document's root `sops`
+# value as YAML::XS loaded it, $content the raw text it was loaded from.
+sub _has_bare_lastmodified {
+    my ($section, $content) = @_;
+
+    # The cheapest gate first: no metadata, or a `lastmodified` that is not a
+    # scalar, and there is nothing a plain/quoted question could be about.
+    # ADR 0043 refuses a reference here further down the read path.
+    return 0 unless ref $section eq 'HASH';
+    my $text = $section->{lastmodified};
+    return 0 unless defined $text && !ref $text;
+
+    # Then the model, which is a regex and no parse: go-yaml only resolves a
+    # scalar to a timestamp when parseTimestamp takes it, and _go_timestamp is
+    # this module's measured reimplementation of that (see _go_scalar_bytes,
+    # where the emit-side guard asks the same question of the same tokens).
+    return 0 unless defined _go_timestamp($text);
+
+    # Only then the second parser, and only for the style of one scalar.
+    return _plain_lastmodified($content) ? 1 : 0;
 }
 
 # Was the `sops` section's `lastmodified` value written as a plain scalar?
@@ -1498,7 +1527,12 @@ lives here and not there. Unlike the infinity above, the answer does not come
 from a resolver -- YAML 1.2's Core schema has no timestamp type, so L<YAML::PP>
 reads both spellings as the same string too -- but from L<YAML::PP>'s B<parser>,
 asked for one scalar's style. A document that parser will not read is not warned
-about. See
+about.
+
+L<File::SOPS/has_bare_lastmodified> asks the same question of a file without
+decrypting it -- the same check, through L</has_bare_lastmodified>, so it answers
+C<1> for exactly the documents warned about here -- and L<File::SOPS/rotate>
+rewrites such a file with the timestamp quoted. See
 L<docs/adr/0050|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0050-a-plain-lastmodified-is-warned-about-because-only-we-can-still-repair-it.md>
 and
 L<docs/adr/0044|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0044-the-macs-aad-is-the-timestamp-go-re-formats-not-the-text-the-document-holds.md>.
@@ -1639,6 +1673,43 @@ which is what makes L<File::SOPS/decrypt_file> and L<File::SOPS/edit> refuse it
 rather than drop it -- while a document whose only comment is above a mapping
 key is written back B<silently without it>. C<sops -d> returns both comments
 intact for both documents.
+
+=cut
+
+sub has_bare_lastmodified {
+    my ($class, $content) = @_;
+    croak "content required" unless defined $content;
+
+    # parse's own load, not a lighter one: the answer has to be the warning's,
+    # so it is asked of the section parse would hand the warning.
+    my ($first) = _load_documents($content);
+
+    # The metadata is the FIRST document's, as in _parse_multidoc. A root that
+    # is not a mapping holds no `sops` section to ask about -- parse refuses
+    # that document for its own reason, before the warning could run.
+    return 0 unless ref $first eq 'HASH';
+    return _has_bare_lastmodified($first->{sops}, $content);
+}
+
+=method has_bare_lastmodified
+
+    my $bare = File::SOPS::Format::YAML->has_bare_lastmodified($yaml_string);
+
+Returns C<1> when the C<sops> section's C<lastmodified> is written as an
+untagged B<plain> scalar that go-yaml resolves to a timestamp -- the document
+sops refuses whole, and the one L</parse> warns about (see
+L</A plain C<lastmodified> in the C<sops> section is warned about>) -- and
+C<0> otherwise. A document without a C<sops> section, or whose root is not a
+mapping, answers C<0>.
+
+It is the same check as that warning, made over the same load, so the two
+cannot disagree about any document. A multi-document stream is answered from
+its B<first> document, which is where sops reads the metadata from. Nothing is
+decrypted, no MAC is looked at, and nothing is warned about;
+L<File::SOPS/has_bare_lastmodified> is the public question built on it.
+
+Dies when L<YAML::XS> cannot read C<$yaml_string>, with the message L</parse>
+dies with for the same text: an unreadable document is never answered C<0>.
 
 =cut
 
