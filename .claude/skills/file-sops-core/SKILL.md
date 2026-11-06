@@ -17,8 +17,11 @@ API is class methods on `File::SOPS`.
 | `File::SOPS` | public API (`encrypt`/`decrypt`/`encrypt_file`/`decrypt_file`/`extract`/`rotate`), tree walk, path→AAD, MAC |
 | `File::SOPS::Encrypted` | one `ENC[...]` value — parse, encrypt, decrypt, type (de)serialization |
 | `File::SOPS::Metadata` | the `sops:` section — backends, mac, lastmodified, version, encryption rules |
-| `File::SOPS::Backend::Age` | data-key encryption via `Crypt::Age` (the only backend implemented) |
-| `File::SOPS::Format::{YAML,JSON}` | parse/serialize, split off and re-attach the `sops:` section |
+| `File::SOPS::Backend::Age` | data-key encryption via `Crypt::Age` |
+| `File::SOPS::Backend::HCVault` | data-key wrap/unwrap via the HashiCorp Vault transit engine (HTTP) |
+| `File::SOPS::Format::{YAML,JSON,ENV,INI}` | parse/serialize, split off and re-attach the `sops` section (ENV = dotenv) |
+| `File::SOPS::Metadata::Flat`, `File::SOPS::Format::ENV::Ordered` | shared by ENV and INI: the flat `sops_…` / `[sops]` metadata encoding, the document-order parse |
+| `File::SOPS::Comment` | a sops comment as a leaf of its own (ADR 0041) |
 
 ## The wire format
 
@@ -142,8 +145,9 @@ cannot compile matches *nothing* on the read path and is refused on the write pa
 
 ## What exists and what does not
 
-Every backend other than age — PGP, KMS, GCP KMS, Azure KV, Vault — is **not implemented**: the
-metadata fields exist and round-trip, the encryption does not, and that gap is **parked on a
+Two backends are implemented: age and HashiCorp Vault transit. The others — PGP, KMS, GCP KMS,
+Azure KV — are **not implemented**: the metadata fields exist and round-trip, the encryption does
+not (`rotate`/`edit` refuse such a document, `_assert_rekeyable`), and that gap is **parked on a
 maintainer decision**. All four format handlers exist: YAML, JSON, ENV/dotenv and INI, the last two
 since 2026-08-21. `CLAUDE.md` describes a little more than exists — a roadmap, not the code.
 

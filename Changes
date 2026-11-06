@@ -15,6 +15,10 @@ Revision history for File-SOPS
     back bit-identical (3.14 stays 3.14, 0.30000000000000004 stays itself),
     a literal beyond the double range is +Inf or a string exactly as on a
     double perl, and a YAML 2.0 stays a float (GitHub issue 2).
+  - The documentation now matches the code: multi-document YAML is described
+    as supported (edit and non-YAML output of a stream are refused), Vault
+    Transit is named as the second backend, and .ini is listed among the
+    extensions encrypt_file recognises.
 
 0.005     2026-10-21 18:35:30Z
   - Crypt::Age is raised to 0.005, the release whose header parser no longer

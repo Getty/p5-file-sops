@@ -116,8 +116,8 @@ our $VERSION = '0.006';
 File::SOPS is a pure Perl implementation of Mozilla SOPS (Secrets OPerationS),
 compatible with the reference Go implementation at L<https://github.com/getsops/sops>.
 
-SOPS encrypts B<values> in structured files (YAML, JSON) while keeping B<keys>
-readable. This enables:
+SOPS encrypts B<values> in structured files (YAML, JSON, dotenv, INI) while
+keeping B<keys> readable. This enables:
 
 =over 4
 
@@ -125,7 +125,10 @@ readable. This enables:
 
 =item * Partial file inspection without full decryption
 
-=item * Multiple encryption backends (currently age, with PGP/KMS planned)
+=item * Two encryption backends, age and HashiCorp Vault transit (see
+L</HashiCorp Vault transit>). PGP, AWS KMS, GCP KMS and Azure Key Vault are not
+implemented: L</rotate> and L</edit> refuse a document holding them, and
+L</creation_rules_for> a rule naming them
 
 =item * MAC verification to detect tampering
 
@@ -572,15 +575,34 @@ has to be re-read from wherever it came from.
 
 =head2 Multi-document YAML
 
-B<Not supported, and refused rather than truncated.> A YAML file holding more
-than one document (separated by C<--->) makes L</encrypt_file>, L</decrypt>,
-L</extract> and L</rotate> die.
+B<Supported since 0.003.> A YAML file holding more than one document
+(separated by C<--->) is one stream: one C<sops> section, written into every
+document, and one MAC over all of them in order. L</decrypt> returns it as an
+ArrayRef of HashRefs and L</encrypt> takes one; L</encrypt_file>,
+L</encrypt_in_place>, L</decrypt_file> and L</rotate> carry every document
+through. L</extract> reads one document at a time, chosen by C<document>. The
+details are in L</A multi-document YAML stream is an ArrayRef> and
+L</Reaching a document of a multi-document stream>.
+
+Two things are refused, loudly:
+
+=over 4
+
+=item * L</edit> dies on a stream, and on an edit that turns a single document
+into one. It re-encrypts under a new data key (L</Editing re-keys the file>),
+and what that should mean for a stream is deliberately left open; change a
+stream with L</decrypt> and L</encrypt> instead.
+
+=item * L</encrypt> dies on an ArrayRef of more than one document when
+C<format> is C<json>, C<env> or C<ini>: those formats hold a single document,
+so all but the first would be lost. sops drops them silently; the error here
+names the document count and the format.
+
+=back
 
 Until 0.003 such a file was accepted and silently reduced to its B<last>
 document, so encrypting a two-document file wrote one document back and
-discarded the other without an error. sops does support multi-document YAML;
-what its model is, and why matching it is more than a parser change, is in
-L<File::SOPS::Format::YAML/Multi-document YAML>.
+discarded the other without an error.
 
 =head2 How a file is written
 
@@ -1600,9 +1622,9 @@ before deciding there was no metadata section, so the guard above never saw it
 and the key was simply missing from the output. See
 L<File::SOPS::Metadata/from_hash>.
 
-Format is auto-detected from the filename extension (C<.yaml>, C<.yml>, C<.json>,
-C<.env>)
-unless explicitly specified.
+Format is auto-detected from the filename extension (C<.yaml>, C<.yml>,
+C<.json>, C<.env>, C<.ini>, case-insensitive) unless explicitly specified; any
+other name is treated as YAML.
 
 C<mac_only_encrypted>, the four encryption rules and C<metadata> are all
 passed through to L</encrypt>; see L</Choosing what gets encrypted>.
