@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-06T20:40:56Z
+id: 208
+priority: low
+status: backlog
+tags:
+- docs
+title: POD still carries remnants of the multi-document refusal and the age-only backend
+  list
+updated: 2026-11-06T20:40:56Z
+---
+
+Found while working k206, not fixed there (out of the card's four places). Format::YAML POD, head2 Multi-document YAML (around line 80-121), still says a stream is refused and parse dies, and a comment near line 217 says File::SOPS refuses a stream; parse returns the document list. SOPS.pm decrypt, the stream section (around line 1303): Until 0.003 a stream was refused outright, no caller ever received a value -- false, released 0.002 returned the last document. SOPS.pm edit POD never says edit refuses a stream. SOPS.pm How SOPS Works item 2 says the data key is wrapped using age only. Skill file-sops-core, File::SOPS row of the module map, lists six public methods and leaves out encrypt_in_place, edit and creation_rules_for. Done when each place describes what the code does.
