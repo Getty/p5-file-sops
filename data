@@ -1,0 +1,32 @@
+---
+claimed_at: 2026-11-06T21:19:19Z
+claimed_by: orchestrator
+class: standard
+completed: 2026-11-06T21:19:14Z
+created: 2026-10-31T02:18:42Z
+id: 207
+priority: low
+started: 2026-11-06T20:42:50Z
+status: done
+tags:
+- api
+- compat
+title: Public check for a bare sops.lastmodified timestamp
+updated: 2026-11-06T21:19:19Z
+---
+
+Consumer request from kubernetes-ocp k259. Files written by File::SOPS 0.002 carry `sops.lastmodified` as a bare YAML timestamp; `sops -d` refuses them, and File::SOPS (>= 0.003) warns when it reads one. The detector behind that warning is private, so OCP (OCP::Secrets->repair_sops_lastmodified) re-implements it as a text match inside the root `sops:` block before rotating the file to rewrite it quoted.
+
+Done when File::SOPS offers a public, documented way to ask whether a file (or its raw text) has the bare form — e.g. a class method returning true/false, without decrypting — so consumers can drop their own match. Optional: a public `repair`/re-quote helper that rewrites only the metadata quoting when the MAC allows it, else documents that rotate is the way.
+
+Settled by the hub session perl-developer-bb for the 2026-11-06 release round, not by the maintainer: a public, documented class method says whether a file or its raw text carries a bare sops.lastmodified; it decrypts nothing and returns true or false; the read-side warning uses the same check; no repair helper -- the POD names rotate as the way to rewrite the file; tests for both forms plus a red run showing the method was missing before; Changes names the method. Chosen by the orchestrator (not a maintainer requirement): name has_bare_lastmodified, named arguments file => PATH or encrypted => TEXT (exactly one), optional format as in decrypt and decrypt_file, returns 1 or 0, never warns. Non-YAML formats answer 0. Lanes in sequence: file-sops-test-writer (red test), file-sops-format (shared predicate in Format::YAML), file-sops-api (public method and POD).
+
+Red run before the implementation, on 5e1e294 plus the new test t/88-has-bare-lastmodified-is-a-public-query.t only: prove -lv on that file fails 9 of 10, first failure at the can_ok line, error: Can't locate object method has_bare_lastmodified via package File::SOPS. The sops binary was found in that run. Next: file-sops-format (shared predicate), then file-sops-api (public method and POD).
+
+file-sops-format done, uncommitted, Format/YAML.pm only: entry point File::SOPS::Format::YAML->has_bare_lastmodified, one predicate shared with the warning, t/64 and t/13 PASS with sops, t/88 red only on the missing File::SOPS method; pre-existing drift filed as k210; next lane file-sops-api
+
+2026-11-06 21:11 file-sops-api: File::SOPS->has_bare_lastmodified(file => PATH | encrypted => TEXT, format => FMT optional) added after rotate in lib/File/SOPS.pm, with method POD and a SYNOPSIS line. Resolves the format through the format table and asks the handler via can('has_bare_lastmodified'), so yaml/yml reach the YAML handler and json/env/dotenv/ini answer 0 unparsed. t/88 green incl. the sops-binary subtest (sops 3.13.3 at ~/bin/sops); t/64, t/13, t/11, t/00 green. Also found, not fixed (out of scope): _read_file opens a directory without error and reads undef, so a directory passed as file surfaces as 'content required' here and 'encrypted required' in decrypt_file instead of a Cannot open error. The consumer skill perl-file-sops (lines 134-135) could name has_bare_lastmodified.
+
+Commit-ready. New public class method File::SOPS->has_bare_lastmodified, file => PATH or encrypted => TEXT, optional format, returns 1 or 0, decrypts nothing, never warns; YAML goes to File::SOPS::Format::YAML->has_bare_lastmodified, which shares one predicate with the read-side warning, the warning text is unchanged; non-YAML answers 0. POD names rotate as the rewrite. Checks: full prove -lr t/ PASS, Files=90 Tests=1503, nothing skipped, t/04-interop and t/88 ran against sops 3.13.3. dzil build clean, podchecker on all 12 built modules pod syntax OK, the built author-pod-links test PASS. Filed on the way: k210 (alias-key duplicate, from format lane), k211 (directory as file), k212 (consumer skill).
+
+Committed as 3ab033035fcb05b8881169b8cd19389d48cf716c by file-sops-release-manager, main fast-forwarded to it. Public method: File::SOPS->has_bare_lastmodified(file => PATH | encrypted => TEXT, format => FMT optional), returns 1 or 0.
