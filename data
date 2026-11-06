@@ -1,0 +1,14 @@
+---
+class: standard
+created: 2026-11-06T21:17:25Z
+id: 211
+priority: low
+status: backlog
+tags:
+- api
+- errors
+title: A directory passed as file fails with a misleading error
+updated: 2026-11-06T21:17:25Z
+---
+
+Found while working k207. _read_file opens a directory without error and reads undef, so a directory passed as file fails downstream with content required (has_bare_lastmodified) or encrypted required (decrypt_file) instead of a Cannot open message naming the path. Older code in the api lane. Done when every file argument that is a directory croaks with a message naming the path, with a test.
