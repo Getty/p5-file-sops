@@ -1,6 +1,8 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - Test::Fatal is declared as a test prerequisite, so installing the
+    distribution with its tests pulls it in.
   - New File::SOPS->has_bare_lastmodified(file => ... | encrypted => ...)
     says whether a YAML file's sops.lastmodified is a bare timestamp, the
     kind File::SOPS 0.002 wrote and sops -d refuses; it decrypts nothing and

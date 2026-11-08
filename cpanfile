@@ -21,6 +21,7 @@ requires 'YAML::XS';
 
 on test => sub {
     requires 'File::Slurper';
+    requires 'Test::Fatal';
 };
 
 on develop => sub {
