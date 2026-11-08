@@ -395,7 +395,7 @@ about: a caller who uses the documented C<type =E<gt> 'bytes'> escape hatch
 above writes a document sops cannot open in any format, as of 3.13.3. The
 B<read> path is unaffected -- a foreign C<type:bytes> cell decrypts correctly
 through L</decrypt_value> -- because the panic is sops's own aes cache, keyed by
-plaintext, refusing to index on a byte slice. See k136 and the "Known
+plaintext, refusing to index on a byte slice. See the "Known
 limitation" section of
 L<docs/adr/0003|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0003-value-encoding-is-unconditional-like-the-aad.md>.
 
@@ -416,8 +416,7 @@ formats, as C<type:float> and the plaintext L</value_to_bytes> derives from the
 number. That is what C<sops -e> stores for a plain C<.inf>, C<-.inf> or C<.nan>
 -- measured against sops 3.13.3, six documents, C<--output-type yaml> and
 C<--output-type json> alike, exit 0 with C<type:float> on the wire in both.
-Every release before this one refused it here. See L</assert_representable>,
-k122 and
+Every release before this one refused it here. See L</assert_representable> and
 L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 This method passes C<encrypted =E<gt> 1> to L</assert_representable>, which it
@@ -543,7 +542,7 @@ conversion is C<unpack('d', pack('d', $plaintext))> rather than C<+ 0.0>,
 because the addition sets the public C<SVf_IOK> flag on an integral result and
 that flag is what L</detect_type> reads: a C<whole: 2.0> written by sops came
 back out of our own C<rotate> as C<type:int>, in both formats, at exit 0 and
-without a word. See k73 and
+without a word. See
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 That conversion is a C<float64>, as Go's is, so a plaintext carrying more
@@ -717,7 +716,7 @@ encrypted slot and rounds it to its own double in an unencrypted one, so
 C<float> is the reference's answer too. A B<quoted>
 C<"100000000000000000000"> is unaffected and stays a C<str>; the two are told
 apart at parse time by the decoder's own type map, never by a pattern match
-on the text. See k63 and
+on the text. See
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
 
 The same leaf reaches this ladder one magnitude lower, where the limit crossed
@@ -733,7 +732,7 @@ sops itself had written -- is not reached. The window is JSON's alone: C<yaml.v3
 resolves those digits as a C<uint64> sops cannot walk at all, so no such YAML
 document exists to read, and one built by hand is still refused. A caller's own
 Perl C<UV> in the window is still refused as well -- no parser has spoken for
-it, so calling it a float would be this library guessing. See k101 and
+it, so calling it a float would be this library guessing. See
 L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>.
 
 Perl has no boolean B<type>, but since 5.36 it has a boolean B<SV>, and that
@@ -750,7 +749,7 @@ explicit C<type>.
 Until 0.003 such a scalar was an C<int>: the digest covered C<1>/C<0> while the
 document said C<true>/C<false>, so C<File::SOPS-E<gt>encrypt(data =E<gt> {
 admin =E<gt> ($user-E<gt>{level} E<gt> 3) })> wrote a file that failed its own
-MAC. See k90 and
+MAC. See
 L<docs/adr/0016|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0016-perls-own-boolean-is-a-bool-not-an-int.md>.
 
 Note that Perl marks a scalar as numeric B<in place> the first time it is used
@@ -772,7 +771,7 @@ C<-0e0> and C<-0.000e2> arrive here carrying it where C<-0.0> does not; and any
 C<$v E<gt> 1>, C<$v == 0> or C<int($v)> on a caller's own C<-0.0> sets it
 before C<encrypt> ever sees the tree. Until 0.003 that turned the value into a
 C<0> in the document -- and for the YAML spellings into a file C<sops -d>
-rejected with C<MAC mismatch>. See k89 and
+rejected with C<MAC mismatch>. See
 L<docs/adr/0015|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0015-a-negative-zero-is-a-float-even-when-perl-cached-an-integer-on-it.md>.
 
 =cut
@@ -1132,8 +1131,8 @@ its stringification -- C<SCALAR(0x...)>, C<ARRAY(0x...)>, C<HASH(0x...)> or
 C<CODE(0x...)>, the ref's heap address. _encrypt_tree would feed that same
 address into the encrypted slot, and the document would verify against itself
 (doc and digest agree on the address) but store a value that differs per run
-and is meaningless on a later read. The pre-fix code wrote the file silently
-and the caller had no reason to notice; that is the defect k67 exists to
+and is meaningless on a later read. Writing the file silently would give
+the caller no reason to notice; that is the defect this guard exists to
 close. A blessed object B<passes>: ADR 0008 measured that an encrypted
 L<Math::BigFloat>, an object overloading C<"">, and a L<Regexp> all
 round-trip correctly today -- they have a stringification the caller chose,
@@ -1153,10 +1152,10 @@ and YAML::XS writes a bare C<Inf> / C<-Inf> / C<NaN>, which Go's yaml.v3
 resolves as a B<string>. Measured against sops 3.13.3 in an unencrypted YAML
 slot, C<Inf> is C<sops -d> exit 51 and C<-Inf> / C<NaN> are exit 0 with the
 leaf silently retyped from a float to a string -- which is worse, not
-better. The pre-fix code wrote the file anyway, and the caller had no reason
-to notice; that is the defect k59 exists to close.
+better. Writing the file anyway would give the caller no reason
+to notice; that is the defect this guard exists to close.
 
-B<Narrowed since 0.003> (k113, C<docs/adr/0031>): a scalar that also
+B<Narrowed since 0.003> (C<docs/adr/0031>): a scalar that also
 carries, as its own string half, one of the twelve plain tokens go-yaml
 resolves to exactly that double -- C<.inf>, C<+.Inf>, C<-.INF>, C<.nan> and
 their case variants -- B<is> written, in an unencrypted YAML slot. That is
@@ -1180,7 +1179,7 @@ B<Everything in this item is about the UNENCRYPTED slot>, which is the only
 one whose leaf reaches the document as a token. With C<encrypted =E<gt> 1>
 the value is written instead: the wire carries C<type:float> and the
 plaintext C<+Inf> / C<-Inf> / C<NaN>, in both formats, which is what
-C<sops -e> writes for the same value (k122, C<docs/adr/0040>). The one
+C<sops -e> writes for the same value (C<docs/adr/0040>). The one
 exception is a scalar that B<states> a string half its number contradicts --
 C<dualvar(+Inf, 'banana')>, or the JSON literal of 400 zeros whose text is
 its digits -- because the encrypted slot is derived from the number and that
@@ -1238,7 +1237,7 @@ this croak.
 The window is positive-only, and structurally so: C<SVf_IOK> means the SV
 carries an C<IV> or a C<UV>, an C<IV> bottoms out at exactly C<int64min> and a
 C<UV> cannot be negative, so B<no integer SV exists below the range>. Measured
-for k104 across 14 negative decimals bracketing C<int64min> and
+across 14 negative decimals bracketing C<int64min> and
 C<uint64max> and 13 construction routes each: 182 rows, 36 of them C<int>, and
 not one below C<int64min>. Below the range a value arrives as a C<float> (or a
 string) and takes the C<float> rung instead (ADR 0020).
@@ -1377,8 +1376,8 @@ B<The flat formats have no such reader.> ENV and INI carry no type syntax, so
 sops hands the digest the literal text of the line -- and for an
 B<unencrypted> leaf, where there is no C<type:> label either, the document
 verifies only if the text written B<is> the text this method returns.
-docs/adr/0035 therefore decides that the ENV and INI emitters (k36,
-k37) write exactly what this method returns, and refuse nothing for its
+docs/adr/0035 therefore decides that the ENV and INI emitters
+write exactly what this method returns, and refuse nothing for its
 type.
 
 That is not a divergence dressed up as one. Measured against sops 3.13.3, one
@@ -1405,7 +1404,7 @@ itself writes for the corresponding string, and a document carrying it reads
 back at exit 0. The cost is that an unencrypted flat-format value loses its
 type on the way back -- a boolean returns as the string C<True>, an integer as
 C<"42"> -- which is what sops's own untyped reader does to every value in that
-slot. See k124 and k125, and
+slot. See
 L<docs/adr/0035|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0035-an-untyped-stores-unencrypted-leaf-is-written-as-the-bytes-the-digest-covers.md>.
 
 The B<type label> needs no format rule at all: an ENV or INI parser hands the
@@ -1419,7 +1418,7 @@ number that text spells. This matters to a caller who feeds the result back in:
 L</detect_type> reads the SV and not the characters (ADR 0002), so a return
 still carrying its numeric half went back onto the wire as C<type:float>, or as
 C<type:int> for the text C<-0>, where the caller meant the C<type:str> they
-were holding. k80; the bytes were never affected, only what the scalar
+were holding. The bytes were never affected, only what the scalar
 says it is.
 
 =cut
@@ -1809,7 +1808,7 @@ formats). It is refused rather than repaired because both halves are a
 candidate for what the caller meant and nothing measurable separates a spelling
 (C<007> for C<7>) from a contradiction (C<five> for C<5>). The emitter is asked
 only where the two halves actually differ; an C<int> whose string half is the
-digest's text costs one string comparison. See k84 and
+digest's text costs one string comparison. See
 L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 =item * C<carrier> returns the replacement, and is format-specific: L<YAML::XS>
@@ -1823,7 +1822,7 @@ emitter cannot write as the text the digest covers. C<$where> is that leaf's
 key path, colon-joined, or the string C<(document root)> -- the same shape the
 MAC walk's own messages use, with array indices carried because this is a
 diagnostic and not an AAD. Both handlers put it in front of their message, so
-one bad leaf in a large document is named rather than searched for (k68).
+one bad leaf in a large document is named rather than searched for.
 L</detect_type> calls every reference but a
 L<JSON::PP::Boolean> C<str>, so the digest covers its stringification, and an
 emitter that writes something else instead produces a document that fails its
@@ -1838,7 +1837,7 @@ is the exact class (a C<JSON::PP::Boolean> subclass is refused the same way
 C<detect_type> accepts it -- the guard's question is what the emitter can
 write). See
 L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
-(k65 on the YAML side, k66 closing the known gap on the JSON side).
+(YAML and JSON alike).
 
 =item * C<reject_scalar> is optional and is called as
 C<< $reject_scalar->($leaf, $where, $path, $text) >> for every plain scalar leaf
@@ -1859,8 +1858,7 @@ leading-zero integer as octal and C<0o10>, C<0x1f>, C<1_000>, C<.inf>, C<Null>
 and C<2015-01-01> as numbers, an infinity, a null and a timestamp, where
 L<YAML::XS> reads all of them as this module's type. L<File::SOPS::Format::YAML>
 installs it on the encrypt path only. See
-L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>
-(k86).
+L<docs/adr/0013|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0013-a-yaml-spelling-the-go-parser-resolves-differently-is-refused.md>.
 
 Where C<$text> is C<undef> a handler takes it from L</value_to_bytes>, on the
 leaf it was handed. It must not render one itself: that is the second conversion
@@ -1893,8 +1891,7 @@ In a document that carries a MAC and whose handler installed no C<reject_scalar>
 the leaf is B<refused>, naming the key path: that is JSON, where a non-finite
 float has no spelling at all (measured, C<sops -d> exit 51 unencrypted, exit 4
 encrypted). See
-L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>
-(k113).
+L<docs/adr/0031|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0031-a-non-finite-float-that-carries-go-yamls-own-token-is-written.md>.
 
 A non-finite leaf with B<no string half of its own> -- the shape a decrypted
 C<type:float> arrives in, and a bare C<9**9**9> -- has stated no spelling, so
@@ -1908,8 +1905,7 @@ C<decrypt_file> reproduces sops's own C<.inf> byte for byte for an B<encrypted>
 C<type:float> as well as for an unencrypted slot, where it used to write C<Inf>
 and turn the leaf into a string on the next read. A leaf that does publish a
 string half keeps it, whatever it says. See
-L<docs/adr/0037|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0037-a-non-finite-float-is-written-as-a-token-or-not-at-all.md>
-(k134).
+L<docs/adr/0037|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0037-a-non-finite-float-is-written-as-a-token-or-not-at-all.md>.
 
 Whether the document carries a MAC is read off the tree this walk is handed: a
 handler's C<serialize> puts the metadata under C<sops> before calling its
@@ -1956,7 +1952,7 @@ spellings rather than a number's decimal.
 This exists because a decrypted float is a bare NV with no string form of its
 own, so Perl renders it at 15 significant digits: an encrypted
 C<0.30000000000000004> printed as C<0.3>, where C<sops -d --extract> prints all
-17. See k61 and
+17. See
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
 B<Only for a value on its way out to a caller.> The result is a
@@ -1965,7 +1961,7 @@ emitters write. Not the value and not the type -- both formats write the
 canonical decimal as a B<number>, measured, C<sops -d> exit 0 reading the same
 double (L<YAML::XS> writes the string half verbatim; L<Cpanel::JSON::XS> quotes
 it, which sends the leaf to the L<Math::BigFloat> carrier that writes it bare,
-k78 / ADR 0011). What changes is the B<spelling>: this text is always
+ADR 0011). What changes is the B<spelling>: this text is always
 positional, where an emitter's own rendering switches to an exponent at the
 extremes, so C<1e300> is written as 301 digits and C<1e-7> as C<0.0000001> --
 in both formats. Correct documents, different bytes from the same value passed

@@ -65,7 +65,7 @@ C<type:bool> makes with L<JSON::PP::Boolean>: a wire type that is not a string
 gets a Perl value that cannot be mistaken for one. Read as a string, a comment
 is an extra element in the caller's list that the file does not contain, and a
 C<decrypt> plus C<encrypt> cycle makes it permanent with every party reporting
-success -- which is the defect (k108) this class exists to close.
+success -- which is the defect this class exists to close.
 
 =over 4
 

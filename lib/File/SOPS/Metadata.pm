@@ -203,7 +203,7 @@ nothing here reads the field, and no value read out of a document is ever
 written back into one, because L</policy_args> does not carry it across a
 re-encryption -- the divergence from sops here is that sops preserves the
 document's own version verbatim on a rotate while we stamp C<3.7.3> instead.
-See L</policy_args>, F<docs/adr/0058> (k151) and L</from_hash> for the
+See L</policy_args>, F<docs/adr/0058> and L</from_hash> for the
 measured table and why a partial check would be worse than none.
 
 =cut
@@ -618,8 +618,7 @@ L</version> -- so the divergence is silent. A document whose version sops
 itself refuses (which L</from_hash> accepts permissively, per
 L<docs/adr/0043>) would be rewritten still refused, but no version sops
 currently writes is in that set. The decision to keep the stamp rather than
-carry the document's own value across is recorded in F<docs/adr/0058> (karr
-k151).
+carry the document's own value across is recorded in F<docs/adr/0058>.
 
 This is what L<File::SOPS/rotate> passes to L<File::SOPS/encrypt> so that a
 rotated file keeps the rules it was written under.
@@ -1234,8 +1233,8 @@ refused. sops stops at exit 1 on every one of them -- a lower-case C<t> or
 C<z>, a one-digit month, C<+0000> without the colon, a five-digit year, a
 leading or trailing space -- so nothing is silently mis-read; and this grammar
 is a reimplementation of Go's parser, where being narrower than Go somewhere
-unmeasured would refuse a document sops reads. That is the trade k145
-recorded for L</version>, one field over. docs/adr/0044 carries the 45 measured
+unmeasured would refuse a document sops reads. That is the same trade
+L</version> records, one field over. docs/adr/0044 carries the 45 measured
 spellings.
 
 B<Nothing moves for a document either implementation writes>: every one of

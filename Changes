@@ -1,6 +1,8 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - edit and the non-YAML writers refuse a multi-document stream with a
+    message that names docs/adr/0033 and the way that works instead.
   - Test::Fatal is declared as a test prerequisite, so installing the
     distribution with its tests pulls it in.
   - New File::SOPS->has_bare_lastmodified(file => ... | encrypted => ...)

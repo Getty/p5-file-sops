@@ -406,7 +406,7 @@ subtest 'edit refuses a multi-document stream, with its own k41 message' => sub 
     ok(!$ok, 'edit dies rather than opening a multi-document original for editing');
     like($@, qr/edit on a multi-document YAML stream \(2 documents\) is not supported/,
         'with the edit-specific k41 message, not the old write-pending one');
-    like($@, qr/edit re-encrypts under a NEW data key \(unlike sops edit, k41\)/,
+    like($@, qr/edit re-encrypts under a NEW data key \(unlike sops edit\)/,
         'naming why: the new-data-key divergence, not an unimplemented mechanic');
     like($@, qr/docs\/adr\/0033 deliberately leaves edit-on-a-stream semantics open/,
         'and pointing at the ADR that left this open');

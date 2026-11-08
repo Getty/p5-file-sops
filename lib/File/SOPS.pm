@@ -402,15 +402,14 @@ refused a JSON document C<sops -e> had written and C<sops -d> reads, and
 L</encrypt> refused the plaintext it was written from. Measured against sops
 3.13.3: rotating such a document now writes the unencrypted slot back with the
 digits it came with and C<sops -d> reads the result, and encrypting the
-plaintext writes what C<sops -e> writes for the identical input. See k101
-and
+plaintext writes what C<sops -e> writes for the identical input. See
 L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>.
 
 The B<upper> window is the one where the decoder cannot hold the digits at all
 and hands them back as a plain B<string>, indistinguishable from the same
 digits quoted, so C<100000000000000000000> was typed C<str> and L</rotate>
 rewrote a document sops had written with a number there as a JSON B<string>.
-See k63 and
+See
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>.
 
 Both windows now hand back the leaf L<YAML::XS> has always returned for those
@@ -487,7 +486,7 @@ A caller's own bare C<9**9**9> states nothing, and it is refused in an
 B<unencrypted> slot only. In an B<encrypted> one it is now written, as
 C<type:float> and the plaintext C<+Inf>, which is what C<sops -e> stores for
 the same value in both formats. See
-L<File::SOPS::Encrypted/assert_representable>, k122 and
+L<File::SOPS::Encrypted/assert_representable> and
 L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 B<In YAML that literal is not refused any more, because it is not a number
@@ -657,7 +656,7 @@ umask. That is what sops's C<--output> does as well, so a decrypted file this
 writes is no more and no less protected than before -- if that is too open for
 plaintext, set the umask or the mode yourself.
 
-The match-sops decision is deliberate (k45): the alternative, a hard
+The match-sops decision is deliberate: the alternative, a hard
 C<0600> on every new output, would break a caller whose next step is
 another process reading the file -- loudly, not silently -- and would
 diverge from the reference implementation without a measurable security
@@ -1043,7 +1042,7 @@ A document that is acyclic but shares its aliases exponentially is a separate
 exposure with a separate guard, described under
 L</A document that expands far beyond what it contains is refused>.
 
-See k110 and
+See
 L<docs/adr/0025|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0025-a-document-that-contains-itself-is-refused-not-walked.md>.
 
 =head3 A document that expands far beyond what it contains is refused
@@ -1093,7 +1092,7 @@ C<Error unmarshalling file: yaml: document contains excessive aliasing>
 (exit 2) from C<sops -e>, and C<yaml: document contains excessive aliasing>
 (exit 1) from C<sops -d>.
 
-See k112 and
+See
 L<docs/adr/0027|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0027-the-alias-budget-is-a-ratio-and-it-is-go-yamls-ratio.md>.
 
 =head3 A document nested deeper than sops can carry is refused
@@ -1153,22 +1152,17 @@ had, and the MAC digest covers C<+Inf> / C<-Inf> / C<NaN>. C<sops -d> reads it,
 and for the three spellings C<sops -e> itself writes the wire bytes are
 identical to sops's.
 
-=item * In an B<encrypted> slot the leaf is B<refused>, naming the key path:
-the wire form there is C<type:float> with the plaintext C<+Inf>, and
-L<File::SOPS::Encrypted/encrypt_value> cannot see which format it is writing
-for -- YAML would carry it, JSON cannot (C<sops -e> exit 4,
-C<Error marshaling to json>). Before this such a leaf was written as a
-C<type:str> holding C<.inf>, where C<sops -e> on the same plaintext writes a
-C<type:float>: a working file that had silently stopped being a number. This is
-a refusal where sops succeeds, and it is deliberate -- see k122, which is
-where the encrypted slot gets the format it needs.
+=item * In an B<encrypted> slot the leaf is written as C<type:float> with the
+plaintext C<+Inf> / C<-Inf> / C<NaN>, in both formats, which is what C<sops -e>
+writes for the same value. See
+L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>.
 
 =item * In B<JSON> nothing changes at either end. C<.inf> is not JSON, so the
 token cannot reach a JSON document to begin with.
 
 =back
 
-See k123 and
+See
 L<docs/adr/0034|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0034-a-plain-scalar-is-resolved-the-same-way-on-every-parse.md>.
 
 =cut
@@ -1429,7 +1423,7 @@ it as a real comment, on the node it was attached to.
 It is deliberately an B<object> and not the text: a comment is not a value, and
 a string here would be an extra element the file does not contain. That is what
 this used to return, and a C<decrypt> plus C<encrypt> cycle made it a permanent
-value with C<sops -d> reporting success at every step (k108). A comment
+value with C<sops -d> reporting success at every step. A comment
 leaf is B<not covered by the MAC>, which is what sops does with one.
 
 Two shapes are still refused, both naming the path: a comment in a B<mapping
@@ -1498,8 +1492,7 @@ case variants -- an B<encrypted> one of those decrypts to a real C<Inf> here as
 it always did, and an B<unencrypted> one is the separate repair described under
 L</A plain YAML infinity is the float go-yaml reads>), and JSON, where sops
 refuses the document itself. See
-L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float>,
-k102 and
+L<File::SOPS::Format::YAML/parse>, L</A number past Go's int64 is a float> and
 L<docs/adr/0023|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0023-a-yaml-literal-that-overflows-a-double-is-a-string-not-a-float.md>.
 
 =head3 A document that contains itself is refused
@@ -1768,7 +1761,7 @@ C<decrypt_file> -> hand-edit -> L</encrypt_file> keeps such a leaf at
 C<type:float>, where C<2> silently relabels it C<type:int> -- which is what
 C<sops -d> followed by C<sops -e> does to its own document, and what the YAML
 side therefore still does here. Measured against sops 3.13.3 on a document
-sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value>, k73 and
+sops itself wrote; see L<File::SOPS::Encrypted/decrypt_value> and
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 B<The plaintext of a JSON number past C<2**64-1> moved in 0.003>, because such
@@ -1938,7 +1931,7 @@ is a bare NV with no string form of its own, so printing one went through
 Perl's 15 significant digits -- an encrypted C<0.30000000000000004> arrived as
 C<0.3>, where C<sops -d --extract> prints all 17. Arithmetic, C<==>, C<sprintf
 '%f'> and C<is_deeply> are unchanged; what changes is C<"$value">, and that
-change is the point. New in 0.003; see k61 and
+change is the point. New in 0.003; see
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
 
 Two things that dualvar does not do. The spelling is the B<wire's> -- the
@@ -1962,7 +1955,7 @@ What the positional form costs is length -- C<DBL_MAX> stringifies as 309
 digits and C<5e-324> as C<0.> followed by 323 zeros and a C<5>. Matching sops
 would mean a second float formatter, Go's C<%g> rules beside the C<%f> ones
 this distribution has, and then a third for JSON's; the decision to keep the
-wire's spelling is recorded in ADR 0010 (k79).
+wire's spelling is recorded in ADR 0010.
 
 The wire's spelling is not the B<document's> either, where the two differ: an
 unencrypted C<1.50> or C<42.0> comes back as C<1.5> and C<42>, because the
@@ -1983,7 +1976,7 @@ this method returns and to nothing else. Floats inside a returned branch are
 the plain scalars they have always been, because a dualvar in a structure
 changes the bytes the emitters write. Not the value: putting one into an
 B<unencrypted> slot stores the canonical decimal as a number, in JSON as in
-YAML (k78,
+YAML (see
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>).
 What changes is the spelling at the extremes -- C<1e300> written as 301
 positional digits rather than C<1e+300> -- and an encrypted slot is unaffected
@@ -2134,7 +2127,7 @@ integral: a C<whole: 2.0> that sops itself had written was rotated back out as
 C<type:int>, at exit 0 and with the MAC holding either way, because the
 plaintext is C<2> under both labels. What moved was the document's own type
 field, silently. L<File::SOPS::Encrypted/decrypt_value> has the conversion this
-now uses instead. See k73 and
+now uses instead. See
 L<docs/adr/0009|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0009-a-decrypted-float-comes-back-as-a-float.md>.
 
 =head3 Files rotate refuses
@@ -2576,7 +2569,7 @@ A C<data_key =E<gt> $bytes> argument would close the gap -- pass the
 existing data key through and this method stops re-keying -- but it puts
 raw key material on the public API, which is a real decision (and
 probably an ADR) rather than a refactor. It will be worth doing once a
-backend other than age exists (k39): today the refusal only fires
+backend other than age exists: today the refusal only fires
 on documents this distribution could not have produced in the first
 place.
 
@@ -2804,7 +2797,7 @@ document carrying two.
 =head3 What this does not read or return
 
 A few things a C<.sops.yaml> can carry are deliberately outside this
-method's scope (k54):
+method's scope:
 
 =over 4
 
@@ -3200,7 +3193,7 @@ sub _assert_format_supports_stream {
         "cannot write a multi-document stream (%d documents) as %s: that format "
         . "has no document stream, so all but the first document would be lost. "
         . "sops drops them silently here; this library refuses instead "
-        . "(docs/adr/0033 Decision 3, k14). Use YAML, or write one document "
+        . "(docs/adr/0033 Decision 3). Use YAML, or write one document "
         . "at a time.",
         $count, $name);
 }
@@ -5141,10 +5134,10 @@ sub _refuse_edit_multidoc {
 
     croak sprintf(
         "edit on a multi-document YAML stream (%d documents) is not supported: "
-        . "edit re-encrypts under a NEW data key (unlike sops edit, k41), "
+        . "edit re-encrypts under a NEW data key (unlike sops edit), "
         . "and docs/adr/0033 deliberately leaves edit-on-a-stream semantics "
         . "open. Reading and writing streams both work -- use decrypt and "
-        . "encrypt to change one, or resolve k41 first.",
+        . "encrypt to change one.",
         scalar @$documents
     );
 }

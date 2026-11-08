@@ -1484,10 +1484,10 @@ resolves a plain scalar the same way on every parse it makes, and so does this.
 B<Such a document is written back> since 0.003: an B<unencrypted> YAML slot
 holding one of the twelve tokens reaches the file as that token, with the
 digest covering C<+Inf> / C<-Inf> / C<NaN>, which is what sops writes and what
-sops digests for the same document. An B<encrypted> slot is still refused --
-the wire form there is C<type:float> with the plaintext C<+Inf>, which
-L<File::SOPS::Encrypted/encrypt_value> refuses because it cannot see which
-format is being written (k122).
+sops digests for the same document. An B<encrypted> slot is written as C<type:float>
+with the plaintext C<+Inf> / C<-Inf> / C<NaN>, in both formats, which is what
+sops writes for the same value (see
+L<docs/adr/0040|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0040-an-encrypted-slot-carries-a-non-finite-float-because-sops-writes-one.md>).
 
 See
 L<docs/adr/0026|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0026-a-plain-yaml-infinity-is-the-float-go-yaml-reads.md>,
@@ -1657,7 +1657,7 @@ because no SOPS store writes that shape.
 A comment above a B<mapping> key -- and one on the file's first line, which sops
 writes the same way -- is still B<lost> on a read here, as it always has been:
 L<YAML::XS> discards it before this method sees a tree, and nothing here can
-write one back. That is the open half of k76, filed as k148, and it
+write one back. That is the open half of comment preservation, and it
 is not a lane handoff but a wall: L<YAML::XS> is libyaml, whose emitter cannot
 write a comment at all, and L<YAML::PP>'s emitter has no comment event either --
 its own documentation lists comment-preserving round trips as a TODO. The read
@@ -1932,7 +1932,7 @@ sub _quote_sops_timestamp {
 Class method to serialize data and metadata to YAML.
 
 The C<data> parameter is a HashRef for a single document, or an B<ArrayRef of
-HashRefs> for a multi-document stream (docs/adr/0033, k31); a one-element
+HashRefs> for a multi-document stream (docs/adr/0033); a one-element
 ArrayRef is byte-identical to the bare HashRef. The C<metadata> parameter must be
 a L<File::SOPS::Metadata> object.
 
@@ -1985,10 +1985,9 @@ caller's own Perl string, and double-quoting it states the type it already has.
 Since C<docs/adr/0070> this emitter writes those seven double-quoted through a
 fail-closed sentinel substitution -- the same nine-leaf safe set as C<True> and
 C<False> below -- byte-identical to what sops writes. See
-L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>,
-k135,
-L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>
-and k99.
+L<docs/adr/0039|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0039-a-string-leaf-this-emitter-cannot-quote-stays-refused-and-says-so.md>
+and
+L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>.
 
 B<A C<True> or C<False> string is written double-quoted where the MAC covers
 it, and warned about where it does not.> The digest bytes agree -- sops renders
@@ -2013,10 +2012,9 @@ C<on>, C<off>, C<y>, C<n> and the rest of YAML 1.1's boolean family are strings
 to yaml.v3 and to libyaml alike, C<~> and C<null> are written quoted, and an
 RFC3339 timestamp -- a string here and a C<time.Time> to Go -- comes back from
 C<sops rotate> as the identical token. See
-L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>,
-k92,
-L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>
-and k99.
+L<docs/adr/0019|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0019-a-string-go-resolves-as-a-boolean-is-warned-about-in-both-modes.md>
+and
+L<docs/adr/0070|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0070-a-scoped-per-scalar-quote-is-feasible-for-the-non-ambiguous-divergent-string-leaves.md>.
 
 The refuse-or-warn rule does not apply to an B<encrypted> slot (an C<ENC[...]>
 string carries any spelling verbatim), to L</emit> on its own (a plaintext
@@ -3125,7 +3123,7 @@ C<1e3> this emitter received from a YAML parse is written back exactly as it
 came, and Go reads the same number the digest covers (exit 0), where
 L<File::SOPS::Format::JSON> has to refuse them because it quotes them. The
 refusal names the leaf's key path and neither half of the value; an
-B<encrypted> slot is unaffected. See k84 and
+B<encrypted> slot is unaffected. See
 L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<YAML::XS>

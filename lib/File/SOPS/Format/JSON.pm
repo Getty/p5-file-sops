@@ -242,9 +242,9 @@ Third, a literal that overflows a double, C<1> followed by 400 zeros, dies in
 L<File::SOPS::Encrypted/assert_representable> where it used to be written as a
 string; sops refuses that document itself, at unmarshal time.
 
-See k63 and
+See
 L<docs/adr/0020|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0020-a-json-number-perl-cannot-hold-is-a-float-not-a-string.md>
-for the upper window, k101 and
+for the upper window and
 L<docs/adr/0021|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0021-a-json-number-go-cannot-hold-is-a-float-not-a-refusal.md>
 for the lower.
 
@@ -779,7 +779,7 @@ unaffected -- the leaf is an C<ENC[...]> string before this method sees it --
 and L<File::SOPS::Format::YAML> has always written the string half bare and
 correctly, which is the document this now produces too. A dualvar whose text is
 what Cpanel would have written anyway, such as C<1.5> or C<-0.0>, still emits
-as the number it always did, byte for byte. See k78,
+as the number it always did, byte for byte. See
 L<docs/adr/0011|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0011-a-float-leaf-that-carries-its-own-string-form-is-repaired.md>
 and
 L<docs/adr/0010|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0010-extract-returns-a-float-that-prints-all-its-digits.md>.
@@ -796,7 +796,7 @@ leaf's key path and neither half of the value. Refused rather than repaired
 because nothing measurable separates a spelling from a contradiction; an
 B<encrypted> slot is unaffected, and L<File::SOPS::Format::YAML> refuses only
 the contradicting ones, because it writes a source spelling back faithfully.
-See k84 and
+See
 L<docs/adr/0012|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0012-an-integer-leaf-whose-string-half-disagrees-is-refused.md>.
 
 B<A reference as a leaf value is refused>, with one exception. L<Cpanel::JSON::XS>
@@ -822,7 +822,7 @@ time this method sees it, so an object in an encrypted slot is unaffected and
 still stores its stringification as C<type:str>. L<File::SOPS::Format::YAML>
 has refused the same leaves since 0.003; see
 L<docs/adr/0008|https://github.com/Getty/p5-file-sops/blob/main/docs/adr/0008-a-leaf-the-emitter-cannot-write-as-what-the-digest-covers-is-refused.md>
-and k66 for the unblessed-ref half of the same defect.
+for the unblessed-ref half of the same defect.
 
 =cut
 

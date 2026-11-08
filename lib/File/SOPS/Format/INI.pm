@@ -224,7 +224,7 @@ leaf's digest input is the literal text of its line, and this handler writes
 exactly C<< File::SOPS::Encrypted->value_to_bytes >> for it. That is where a
 boolean becomes C<True>, an C<undef> the empty string, and C<1.0> the token
 C<1>: three values sops writes in a display form and then cannot read back
-(k124, k125, k137).
+(see docs/adr/0035).
 
 =head2 What this handler cannot carry
 
