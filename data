@@ -1,0 +1,33 @@
+---
+claimed_at: 2026-11-10T21:44:00Z
+claimed_by: k216
+class: standard
+completed: 2026-11-10T21:44:00Z
+created: 2026-11-10T03:12:31Z
+id: 216
+priority: high
+started: 2026-11-10T19:37:27Z
+status: done
+tags:
+- portability
+- floats
+- decision
+title: 'Perls before 5.36: non-finite float guard, strtod, regex dialect and four
+  tests assume newer perls'
+updated: 2026-11-10T21:44:00Z
+---
+
+Hub pre-release smoke 2026-11-10 (main, perl 5.14.4, requires only) and CPAN Testers for 0.005 (5.18.4, 5.30.3, 5.32.1 red; 5.36.0 green apart from old YAML modules). The cpanfile says perl 5.014. Classes:
+1. lib/File/SOPS/Encrypted.pm _has_public_pv (around 2024, guard 1020-1047): assumes stringifying an NV sets only the private POK. True from 5.36 on; before, the public flag is set and +Inf/NaN "states a string half" (t/39:310, t/46:176/221, t/52:382, t/54:347ff). Code defect for < 5.36, not repairable by a test gate alone.
+2. No Perl_strtod before 5.22: Cpanel::JSON::XS reads 0.3 as 0.30000000000000004 (t/23:140/190, t/87:53; Format/JSON.pm 72, 118, 645) and perl reads 5e-324 as 0 and DBL_MAX as Inf (t/39:173; Format/YAML.pm 795-819).
+3. Regex: a{,3} is fatal on 5.30-5.32 and a literal before (t/62:243-248); /i folding of \x{e4} and of sharp s is broken on 5.14 (t/62:104, t/77:43; Metadata.pm 1619, 1665).
+4. Tests only: t/24:11 imports POSIX signbit (5.22+); t/32:53/83 names the warnings category experimental::builtin (5.36+).
+Two ways: (A) the dist requires perl 5.036 and all four classes are gone; (B) the dist keeps older perls: 1 needs another way to tell a number from a string, 2 needs an own decimal conversion below 5.22, 3 a rewrite of {,n} and a floor of 5.16 or 5.18, 4 test gates. Needs the maintainer: which floor.
+
+2026-11-10 19:37 MAINTAINER DECISION (Getty, 2026-11-10): the floor is perl 5.022. Classes 1, 3 and 4 are built for 5.22 to 5.34; class 2 (no Perl_strtod) and the 5.14 regex folding fall away with the floor.
+
+Commits (lokal, kein Push): a1a67eb Zahl/String (Punkt 1), dd455a1 Regex (Punkt 2), a2e14fd perl 5.022 + t/32 (Punkt 3). Entscheidungen: {,n} von sops als Literal gemessen, deshalb Literal statt {0,n} gebaut (ADR 0073); t/46-Fall dualvar(Inf,'Inf') nicht mehr verweigert, weil identisch zu stringifiziertem +Inf, aendert sich auch auf 5.36+ (ADR 0074); Verhalten auf 5.22-5.34 nur aus perldelta/B-Wissen, hier nur 5.40 gefahren, Beweis auf dem Smoker offen. Also found: Kommentar Encrypted.pm ~603 sagt 'declares 5.010'; Go bricht x{2,1}/a{1001} (Kompilierfehler, Regel trifft nichts), Perl nicht, siehe ADR 0073 offen.
+
+Nach Rebase auf main (230c198; main änderte nur .claude/skilletor.json, Suite nicht neu gefahren) neue Hashes: d8fff21 (Punkt 1), 045b34c (Punkt 2), 0a58299 (Punkt 3 + cpanfile 5.022)
+
+Nacharbeiten des Koordinators 1-4 erledigt: 4213b20 daea0a1 52779b4 d68d79e  (Regex-Zaehler, Inf/NaN-String, Kommentare, CI). Suite 96 Dateien/1549 Tests gruen.
