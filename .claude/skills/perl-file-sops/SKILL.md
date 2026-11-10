@@ -132,7 +132,18 @@ Documents written here decrypt with `sops -d`, and documents written by `sops -e
 dotenv and INI (pinned by `t/04-interop.t`, against sops 3.13.3). `sops` reads age identities from
 `SOPS_AGE_KEY` / `SOPS_AGE_KEY_FILE`; File::SOPS takes identities only as the `identities` argument.
 Cosmetic: our YAML starts with `---`. `lastmodified` is written quoted, as sops needs it; a document that
-carries it bare (written by 0.002) warns on every read until a `rotate` rewrites it. Integers must fit int64.
+carries it bare (written by 0.002) warns on every read until a `rotate` rewrites it. Ask
+`File::SOPS->has_bare_lastmodified` before rotating rather than matching the warning or its text; it returns `1`
+or `0`, decrypts nothing, needs no `identities` and never warns, and `rotate` is the rewrite:
+
+```perl
+my $bare = File::SOPS->has_bare_lastmodified(file => $file);          # format guessed from the name
+my $bare = File::SOPS->has_bare_lastmodified(encrypted => $text);     # format guessed from the content
+File::SOPS->rotate(file => $file, identities => \@ids) if $bare;
+```
+
+`format =>` is optional in both forms; only YAML can carry the defect, other formats answer `0`. Integers must
+fit int64.
 
 ## Vault Transit (the release after 0.005)
 
