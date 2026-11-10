@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-11-10T02:35:54Z
+claimed_by: karten-208-212
+class: standard
+completed: 2026-11-10T02:35:54Z
+created: 2026-11-06T21:17:25Z
+id: 211
+priority: low
+started: 2026-11-10T01:52:40Z
+status: done
+tags:
+- api
+- errors
+title: A directory passed as file fails with a misleading error
+updated: 2026-11-10T02:35:54Z
+---
+
+Found while working k207. _read_file opens a directory without error and reads undef, so a directory passed as file fails downstream with content required (has_bare_lastmodified) or encrypted required (decrypt_file) instead of a Cannot open message naming the path. Older code in the api lane. Done when every file argument that is a directory croaks with a message naming the path, with a test.
+
+Commit a0dda10; Test rot gegen altes lib (15/24 Subtests), Suite 92 Dateien/1531 Tests PASS. Notiz: creation_rules_for(file => Verzeichnis) croakt bewusst nicht, file wird dort nur als Pfad fuer path_regex genutzt.
