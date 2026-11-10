@@ -16,8 +16,9 @@ requires 'Moo';
 requires 'namespace::clean';
 # Only used to recover document key order for MAC verification; YAML::XS stays
 # the parser and emitter. See the MAC section of File::SOPS.
-requires 'YAML::PP';
-requires 'YAML::XS';
+requires 'YAML::PP', '0.021';
+# 0.89 dumps a core boolean (!!1, perl 5.36+) as true; 0.88 and older write 1.
+requires 'YAML::XS', '0.89';
 
 on test => sub {
     requires 'File::Slurper';
