@@ -125,10 +125,14 @@ subtest 'encrypt_in_place keeps the permissions the file had' => sub {
 
     File::SOPS->encrypt_in_place(file => $file, recipients => [$public]);
 
-    is(sprintf('%04o', (stat $file)[2] & 07777), '0640',
-        'mode survived the replace')
-        or diag('File::Temp creates 0600; without a chmod the file quietly '
-              . 'loses its group access');
+    SKIP: {
+        skip 'Unix permission bits do not exist on MSWin32 (stat reports 0666)', 1
+            if $^O eq 'MSWin32';
+        is(sprintf('%04o', (stat $file)[2] & 07777), '0640',
+            'mode survived the replace')
+            or diag('File::Temp creates 0600; without a chmod the file quietly '
+                  . 'loses its group access');
+    }
 };
 
 subtest 'encrypt_in_place refuses an already encrypted file' => sub {
@@ -257,7 +261,7 @@ subtest 'edit gives the editor a 0600 file in a 0700 directory, and removes it' 
 
     my $report = "$dir/edit-report.txt";
     my $ed = editor('report', <<"PERL");
-my \$dirname = \$file; \$dirname =~ s{/[^/]+\$}{};
+my \$dirname = \$file; \$dirname =~ s{[/\\\\][^/\\\\]+\$}{};
 open my \$r, '>', '$report' or die \$!;
 printf \$r "%s\\n%04o\\n%04o\\n%s\\n", \$file,
     (stat \$file)[2] & 07777, (stat \$dirname)[2] & 07777, \$dirname;
@@ -270,9 +274,13 @@ PERL
     File::SOPS->edit(file => $file, identities => [$secret], editor => $ed);
 
     my ($path, $file_mode, $dir_mode, $dirname) = split /\n/, read_binary($report);
-    is($file_mode, '0600', 'the plaintext file is readable only by its owner');
-    is($dir_mode,  '0700', 'and so is the directory holding it');
-    like($path, qr{/secrets\.yaml$},
+    SKIP: {
+        skip 'Unix permission bits do not exist on MSWin32', 2
+            if $^O eq 'MSWin32';
+        is($file_mode, '0600', 'the plaintext file is readable only by its owner');
+        is($dir_mode,  '0700', 'and so is the directory holding it');
+    }
+    like($path, qr{[/\\]secrets\.yaml$},
         'the temporary file keeps the original basename, so the editor sees the extension');
 
     ok(!-e $path,    'the plaintext file is gone once edit returns');
@@ -357,7 +365,12 @@ print $out "secret: via-env\n";
 close $out;
 PERL
 
-    local $ENV{EDITOR} = join(' ', @$ed, '--flag');
+    # The lib splits EDITOR like a shell, so a backslash is an escape and eats
+    # itself out of a Windows path (C:\Strawberry\perl\bin -> C:Strawberryperlbin).
+    # Forward slashes survive the split and Windows accepts them. No-op elsewhere.
+    my $editor_env = join(' ', @$ed, '--flag');
+    $editor_env =~ tr{\\}{/} if $^O eq 'MSWin32';
+    local $ENV{EDITOR} = $editor_env;
     File::SOPS->edit(file => $file, identities => [$secret]);
 
     is_deeply(
@@ -517,6 +530,8 @@ PERL
 };
 
 subtest 'edit removes the plaintext when the process is signalled' => sub {
+    plan skip_all => 'POSIX signals (kill TERM, wait status & 127) do not exist on MSWin32'
+        if $^O eq 'MSWin32';
     # The editor kills its own parent, so the decrypted copy is on disk at the
     # moment the signal arrives. Without a handler the default disposition
     # terminates the process without running a destructor, and the plaintext

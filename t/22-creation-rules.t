@@ -79,10 +79,24 @@ sub config_with {
     return "creation_rules:\n" . join('', @rules);
 }
 
+# sops matches path_regex against the path relative to the config directory
+# with the NATIVE separator (config.go: TrimPrefix(filePath, configDir +
+# filepath.Separator), then regexp.MatchString), and the lib does the same
+# through File::Spec. The regexes in this file are written with `/`; on MSWin32
+# the subject has backslashes, so each `/` becomes an escaped backslash (two
+# characters, `\\`, in the regex). Identity on every other platform.
+sub native_re {
+    my ($regex) = @_;
+    return $regex unless defined $regex && $^O eq 'MSWin32';
+    (my $native = $regex) =~ s{/}{\\\\}g;
+    return $native;
+}
+
 # One rule, tagged so that which rule was chosen is visible in what comes back:
 # the recipient names it and so does the encrypted_suffix.
 sub rule {
     my ($regex, $recipient, $tag) = @_;
+    $regex = native_re($regex);
     my $out = '  -';
     $out .= defined $regex ? " path_regex: $regex\n    " : ' ';
     $out .= "age: $recipient\n";
@@ -194,18 +208,26 @@ subtest 'the path is NOT the one that was typed, and NOT the absolute one' => su
        'the name as typed does not anchor the match');
     chdir $cwd or die "chdir: $!";
 
-    my $abs = tree(
-        '.sops.yaml' => config_with(
-            rule('^/', $pub_a, '_ABSOLUTE'),
-            rule(undef, $pub_b, '_CATCHALL'),
-        ),
-        'a/b/c/secrets.yaml' => "k: v\n",
-    );
-    is(rules_for(file => "$abs/a/b/c/secrets.yaml")->{encrypted_suffix},
-       '_CATCHALL', 'and neither does the absolute path');
+    SKIP: {
+        skip '^/ stands for an absolute path only on Unix; on MSWin32 it starts '
+           . 'with a drive letter', 1
+            if $^O eq 'MSWin32';
+        my $abs = tree(
+            '.sops.yaml' => config_with(
+                rule('^/', $pub_a, '_ABSOLUTE'),
+                rule(undef, $pub_b, '_CATCHALL'),
+            ),
+            'a/b/c/secrets.yaml' => "k: v\n",
+        );
+        is(rules_for(file => "$abs/a/b/c/secrets.yaml")->{encrypted_suffix},
+           '_CATCHALL', 'and neither does the absolute path');
+    }
 };
 
 subtest 'a file outside the config directory is matched absolutely' => sub {
+    plan skip_all => '^/ stands for an absolute path only on Unix; on MSWin32 '
+                   . 'it starts with a drive letter'
+        if $^O eq 'MSWin32';
     # Only reachable through an explicit config => ..., since a config found by
     # walking up from the file is an ancestor of it by construction. sops falls
     # back the same way rather than producing a ../..-prefixed path.
@@ -707,7 +729,7 @@ subtest 'a comment-based rule is refused' => sub {
 subtest 'the arguments splat into encrypt_in_place and take effect' => sub {
     my $root = tree(
         '.sops.yaml' => "creation_rules:\n"
-                      . "  - path_regex: ^secrets/\n"
+                      . "  - path_regex: " . native_re('^secrets/') . "\n"
                       . "    age: $pub_a\n"
                       . "    encrypted_suffix: _enc\n"
                       . "  - age: $pub_b\n",

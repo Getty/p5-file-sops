@@ -143,7 +143,10 @@ PERL
 # If the harness cannot apply the limit, every subtest below would report the
 # operation succeeding and the original being replaced -- a false failure. Find
 # out first, on a file of no consequence.
-my $limit_works = do {
+# The harness is a /bin/sh script around `ulimit -f`: POSIX only. On MSWin32 it
+# cannot even be started, so do not try (the probe would die "cannot run the
+# child" before it could report anything).
+my $limit_works = $^O eq 'MSWin32' ? 0 : do {
     my $probe = "$dir/probe.txt";
     write_binary($probe, "before\n");
     my $out = under_full_disk(
@@ -155,9 +158,11 @@ my $limit_works = do {
 };
 
 SKIP: {
-    skip 'RLIMIT_FSIZE 0 does not make writes fail here, so a write that '
+    skip(($^O eq 'MSWin32'
+        ? 'the RLIMIT_FSIZE harness is a POSIX sh script and MSWin32 has none, so a write that '
+        : 'RLIMIT_FSIZE 0 does not make writes fail here, so a write that ')
        . 'cannot complete cannot be reproduced -- the atomicity of '
-       . 'encrypt_file, decrypt_file and rotate was NOT checked', 3
+       . 'encrypt_file, decrypt_file and rotate was NOT checked', 3)
         unless $limit_works;
 
     subtest 'encrypt_file keeps the plaintext when the write cannot complete' => sub {
@@ -230,6 +235,8 @@ SKIP: {
 # Permissions: preserved on an existing file, umask on a new one
 ###############################################################################
 subtest 'an existing target keeps the mode it had' => sub {
+    plan skip_all => 'Unix permission bits cannot be checked on MSWin32'
+        if $^O eq 'MSWin32';
     # File::Temp creates 0600, so without the chmod in _replace_file every
     # method that writes over a deliberately group-readable file would quietly
     # tighten it. sops preserves the mode too (measured: 0640 in, 0640 out).
@@ -254,6 +261,8 @@ subtest 'an existing target keeps the mode it had' => sub {
 };
 
 subtest 'a target that has to be created gets the mode open would have given it' => sub {
+    plan skip_all => 'Unix permission bits cannot be checked on MSWin32'
+        if $^O eq 'MSWin32';
     # The atomic write must not smuggle in a permissions change: a file created
     # here gets 0666 & ~umask, which is what open '>' produced before and what
     # `sops --output` produces (measured: 0644 under umask 022). File::Temp's
@@ -518,8 +527,12 @@ subtest 'a writable target still works (the check is not a false positive)' => s
     like(read_binary($file), qr/ENC\[AES256_GCM,/,
         'a 0644 file is encrypted normally')
         or diag('the check is on the file, not on some other condition');
-    is(sprintf('%04o', (stat $file)[2] & 07777), '0644',
-        'and keeps its mode');
+    SKIP: {
+        skip 'Unix permission bits cannot be checked on MSWin32', 1
+            if $^O eq 'MSWin32';
+        is(sprintf('%04o', (stat $file)[2] & 07777), '0644',
+            'and keeps its mode');
+    }
 };
 
 done_testing;

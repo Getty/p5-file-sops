@@ -1,6 +1,10 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - The POD now says what file modes, path_regex separators and backslashes
+    in $EDITOR mean on Windows, and the test suite skips the Unix-mode,
+    signal and resource-limit checks and runs child processes from script
+    files there.
   - YAML::XS 0.89 and YAML::PP 0.021 are now the declared minimums; older
     XS versions wrote a boolean as 1 instead of true on perl 5.36 and
     newer.

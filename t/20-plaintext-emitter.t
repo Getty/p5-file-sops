@@ -99,13 +99,17 @@ sub decrypted_tree {
 # $ENV{FILE_SOPS_EDIT_CAPTURE}, so the text edit put in front of it can be
 # looked at. Leaving the file untouched makes edit stop and return 0, which
 # keeps this about the emitter and not about re-encryption.
-my @CAPTURING_EDITOR = (
-    $^X, '-e',
-    'open my $in, "<:raw", $ARGV[0] or die "$ARGV[0]: $!"; '
-  . 'my $text = do { local $/; <$in> }; '
-  . 'open my $out, ">:raw", $ENV{FILE_SOPS_EDIT_CAPTURE} or die $!; '
-  . 'print {$out} $text or die $!; close $out or die $!;'
-);
+# A script file, not `-e`: the multi-line/quoted -e is mangled by the command
+# line quoting of a list-form exec on MSWin32 ("syntax error at -e line 1").
+my $capture_script = "$dir/capturing-editor.pl";
+write_binary($capture_script, <<'PERL');
+open my $in, "<:raw", $ARGV[0] or die "$ARGV[0]: $!";
+my $text = do { local $/; <$in> };
+open my $out, ">:raw", $ENV{FILE_SOPS_EDIT_CAPTURE} or die $!;
+print {$out} $text or die $!;
+close $out or die $!;
+PERL
+my @CAPTURING_EDITOR = ($^X, $capture_script);
 
 for my $format (sort keys %HANDLER) {
     my $handler = $HANDLER{$format};

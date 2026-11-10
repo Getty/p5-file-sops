@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
+use File::Slurper qw(write_binary);
 use Crypt::Age;
 use File::SOPS;
 
@@ -30,11 +31,17 @@ use File::SOPS;
 
 # Runs $code in a fresh perl with this process's @INC, $preload loaded FIRST
 # (before anything of ours), and returns its stdout.
+my $SCRIPT_DIR = tempdir(CLEANUP => 1);
+my $SCRIPT_SERIAL = 0;
 sub _in_a_fresh_perl {
     my ($preload, $code, @args) = @_;
     my @inc = map { "-I$_" } grep { !ref } @INC;
     my @pre = $preload ? ("-M$preload") : ();
-    open my $p, '-|', $^X, @inc, @pre, '-e', $code, @args
+    # A script file, not `-e $code`: a multi-line -e does not survive the
+    # command-line quoting of a list-form open on MSWin32.
+    my $script = "$SCRIPT_DIR/child-" . ++$SCRIPT_SERIAL . '.pl';
+    write_binary($script, $code);
+    open my $p, '-|', $^X, @inc, @pre, $script, @args
         or die "cannot fork a perl: $!";
     my $out = do { local $/; <$p> };
     close $p;

@@ -1683,6 +1683,10 @@ The file's permissions are preserved, it comes back with a B<new inode> so hard
 links keep the old plaintext, and a symlink is resolved rather than replaced.
 All three, and where they differ from sops, are in L</How a file is written>.
 
+B<On Windows> perl models only the read-only bit of a file's mode: C<chmod> and
+the mode bits C<stat> reports are not Unix permissions there. The mode is
+carried over as far as perl can express it, and no more than that is promised.
+
 C<mac_only_encrypted>, the four encryption rules and C<metadata> are passed
 through to L</encrypt>; see L</Choosing what gets encrypted>.
 
@@ -2435,6 +2439,12 @@ atomically, as L</encrypt_in_place> does, and for the same reason.
 That is the same shape sops uses, and it has the same caveat: B<the plaintext
 touches the filesystem>. Point C<TMPDIR> at a C<tmpfs> if that matters to you.
 
+B<On Windows the owner-only guarantee does not hold.> The C<0700> and C<0600>
+modes above are Unix permissions; perl on Windows models only the read-only
+bit, so the plaintext file is created with whatever access the temporary
+directory's own ACL gives it. Do not rely on this method to keep the decrypted
+copy from other local users there.
+
 B<The decrypted copy is removed on every way out of this method>, which is
 three of them:
 
@@ -2474,6 +2484,11 @@ C<editor> may be a string, which is split into words the way a shell would
 (C<< editor => 'code --wait' >>), or an ArrayRef, which is used as it stands.
 It defaults to C<$ENV{EDITOR}>, and the temporary file's path is appended as
 the final argument. The editor is run without a shell.
+
+Because the string is split shell-style, a backslash in it is an escape
+character: a Windows path such as C<C:\Tools\editor.exe> loses its
+backslashes. Write such a path with forward slashes
+(C<C:/Tools/editor.exe>), quote it, or pass an ArrayRef.
 
 B<Dies if neither is set.> sops falls back to C<vim>, C<nano> or C<vi> here;
 this method does not, because a library that opens an interactive editor
@@ -2709,7 +2724,11 @@ directory holding the config file -- so with a config at the top of a
 repository, a rule matches C<secrets/prod.yaml> whether the caller said
 C<secrets/prod.yaml>, C<./secrets//prod.yaml>, C<../repo/secrets/prod.yaml> or
 the full absolute path, and whether it is called from the top of the repository
-or from inside C<secrets/>. Symlinks are B<not> resolved, so a rule sees the
+or from inside C<secrets/>. The relative path is written with the platform's
+B<native> separator, as sops does it (C<parseCreationRuleForFile> in sops's
+C<config/config.go> trims C<configDir + filepath.Separator> and matches the
+remainder, with no slash normalisation), so on Windows a C<path_regex> has to
+match backslashes; C<[\\/]> matches both separators. Symlinks are B<not> resolved, so a rule sees the
 link's path and not the target's. All of that is measured against sops 3.13.3,
 including the fallback: a file that is not under the config file's directory at
 all -- only reachable by passing C<config> here -- is matched as an absolute
