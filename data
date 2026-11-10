@@ -1,0 +1,39 @@
+---
+claimed_at: 2026-11-10T02:35:43Z
+claimed_by: karten-208-212
+class: standard
+completed: 2026-11-10T02:35:43Z
+created: 2026-11-06T20:52:16Z
+id: 210
+priority: low
+started: 2026-11-10T01:52:28Z
+status: done
+tags:
+- yaml
+- parser
+- interop
+- guards
+title: Plain-lastmodified guard fires on a document sops reads (alias key duplicate)
+updated: 2026-11-10T02:35:43Z
+---
+
+Found while working k207; pre-existing, present at HEAD 5e1e294 (the k207 change is a pure refactor and inherits it, it does not introduce it).
+
+ADR 0050 rests on "the guard never fires on a document sops reads". Measured against sops 3.13.3, one document breaks it: a sops section where `lastmodified` appears twice, the first plain, the second reached through an ALIAS used as a key:
+
+    sops:
+      x_anchor: &k lastmodified
+      ...
+      lastmodified: 2026-11-06T20:51:11Z
+      *k : "2026-11-06T20:51:11Z"
+
+- sops -d: exit 0 (yaml.v3 does not see the alias key as a duplicate; the later, quoted entry wins)
+- File::SOPS::Format::YAML->parse: carps the plain-lastmodified warning; has_bare_lastmodified answers 1
+
+Why: _has_bare_lastmodified pairs YAML::XS for the VALUE (last duplicate wins, alias key resolved -> the quoted entry) with the YAML::PP event walk in _plain_lastmodified for the STYLE. The walk cannot name an alias key (key slot is undef), so its last match is the earlier PLAIN entry. Value and style come from different scalars.
+
+A plain duplicate without an alias is harmless: sops refuses it ("mapping key \"lastmodified\" already defined"), so any answer there is about a document sops refuses.
+
+Possible fix directions (not decided): in the walk, an alias or complex key in the root sops mapping clears $plain to undef (quiet, the safe direction); or resolve anchors in the walk so `*k` names its scalar. Either changes the predicate, so it changes the warning AND File::SOPS->has_bare_lastmodified together, which is the point of k207 and must stay so. No tool writes this shape; severity low.
+
+Commit 67fcd5a; Test war rot gegen altes lib (3 von 4 Assertions), Suite 91 Dateien/1507 Tests PASS
