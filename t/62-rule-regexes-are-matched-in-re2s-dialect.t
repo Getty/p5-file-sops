@@ -235,6 +235,10 @@ subtest 'a pattern PERL cannot compile is refused with the reason' => sub {
 subtest 'the constructs both dialects have still work' => sub {
     # Every one of these is `ok` at RE2, measured through the same path_regex
     # oracle. A guard that refused any of them would refuse a rule sops takes.
+    # `a{,3}` is taken as well, but it does not MEAN the same in both dialects
+    # on every perl: RE2 reads it as the literal text `a{,3}`, so the lib
+    # rewrites the brace to a literal before Perl compiles it (docs/adr/0073;
+    # what it selects is pinned in t/92).
     for my $pattern ('^\w+$', '^[[:alpha:]]+$', '^[[:^alpha:]]+$', '\p{L}+',
                      '\pL', '\P{L}', '(?i:x)', '(?i)x', '(?m)^x$', '(?s)x.y',
                      '(?-i)x', '(?i-s:x)', '(?P<n>foo)', '(?<n>foo)',

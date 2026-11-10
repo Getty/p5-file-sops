@@ -35,7 +35,8 @@ my @CASES = (
     [ '^a{01}$',   [ 'a{01}' ],            [ 'a' ] ],
     [ '^a{,3}b$',  [ 'a{,3}b' ],           [ 'ab', 'aab' ] ],
     [ '^a\{,3}$',  [ 'a{,3}' ],            [ 'aa', 'a' ] ],
-    [ '^[a{]{,2}$', [ '{,2}' ],            [ 'a', 'aa', '{' ] ],
+    # A brace inside a class is a class member; the one after it is a literal.
+    [ '^[a{]{,2}$', [ 'a{,2}', '{{,2}' ],  [ 'a', 'aa', '{', '{,2}' ] ],
     # Real repetitions stay repetitions.
     [ '^a{1,3}$',  [ 'a', 'aaa' ],         [ 'a{1,3}', '', 'aaaa' ] ],
     [ '^a{3,}$',   [ 'aaa', 'aaaaa' ],     [ 'aa', 'a{3,}' ] ],
@@ -101,8 +102,9 @@ SKIP: {
                 my $file = "$dir/doc" . ++$n . '.json';
                 my $q = $pattern; $q =~ s/'/'\\''/g;
                 write_binary($file, qq({"$key": "hunter2"}\n));
-                my $out = `'$sops_bin' -e -i --age '$public' --input-type json `
-                        . `--output-type json --unencrypted-regex '$q' '$file' 2>&1`;
+                my $cmd = "'$sops_bin' -e -i --age '$public' --input-type json "
+                        . "--output-type json --unencrypted-regex '$q' '$file' 2>&1";
+                my $out = `$cmd`;
                 is $? >> 8, 0, "sops takes $pattern over '$key'" or diag($out);
                 my $sops_selects = do {
                     local $/; open my $fh, '<', $file or die $!; <$fh>

@@ -291,6 +291,15 @@ B<New in 0.003, and it changes which keys get encrypted.> L</unencrypted_regex>
 and L</encrypted_regex> are matched here with Perl and in sops with Go's RE2,
 and those are not the same dialect. Two things follow.
 
+B<A brace that is not an RE2 repetition is a literal brace.> RE2 reads only
+C<{n}>, C<{n,}> and C<{n,m}> (numbers without a leading zero) as repetitions;
+C<{,n}>, C<{,}>, C<{ 1,3}>, C<{a}>, C<{01}> and an unterminated C<{1,> are
+literal text to it. Perl reads C<{,n}> as a literal on 5.22 to 5.28, dies on
+it on 5.30 to 5.32 and takes it as C<{0,n}> from 5.34, so the pattern is
+rewritten for Perl (the brace becomes C<\{>) before it is compiled, on every
+perl, and C<^a{,3}$> matches the key C<a{,3}> and not C<aa>, as in sops.
+See F<docs/adr/0073-*>.
+
 B<The character classes are ASCII-only.> RE2's C<\w>, C<\W>, C<\d>, C<\D>,
 C<\s>, C<\S>, C<\b>, C<\B> and its POSIX classes reach ASCII and nothing
 else, for every subject. Perl's are Unicode-aware for any string carrying the
@@ -1451,6 +1460,96 @@ my %RE2_MEANS_OTHER = (
        . 'Perl',
 );
 
+# A brace run RE2 reads as a repetition: {n}, {n,} or {n,m}, each number
+# either 0 or without a leading zero. Anything else -- {,n}, {,}, { 1,3},
+# {a}, {-1}, {01}, {1, 3}, an unterminated {1, -- is a LITERAL brace to RE2.
+# Perl agrees on none of those uniformly: it reads {,n} as a literal on
+# 5.22-5.28, dies on it on 5.30-5.32 and as the quantifier {0,n} from 5.34.
+# Measured on sops 3.13.3, see docs/adr/0073.
+my $RE2_REPEAT = qr/\{(?:0|[1-9][0-9]*)(?:,(?:|0|[1-9][0-9]*))?\}/;
+
+# The pattern as PERL must compile it to mean what RE2 means: every unescaped
+# `{` outside a character class that does not open an RE2 repetition becomes
+# `\{`. The one place a rule pattern is turned into something Perl compiles,
+# for the encryption rules (read AND write path) and for a creation rule's
+# path_regex alike. The braces of \x{...}, \p{...} and \P{...} are part of the
+# escape and are left alone.
+sub _re2_perl_pattern {
+    my ($pattern) = @_;
+    return $pattern unless defined $pattern && index($pattern, '{') >= 0;
+
+    my @c        = split //, $pattern;
+    my $i        = 0;
+    my $in_class = 0;
+    my $class_pos = 0;
+    my $out      = '';
+
+    while ($i < @c) {
+        my $ch = $c[$i];
+
+        if ($ch eq '\\') {
+            my $next = $c[$i+1];
+            if (!defined $next) { $out .= $ch; $i++; next }
+            $out .= $ch . $next;
+            $i += 2;
+            $class_pos++ if $in_class;
+            if ($next =~ /\A[xpP]\z/ && defined $c[$i] && $c[$i] eq '{') {
+                my $end = index($pattern, '}', $i);
+                if ($end >= 0) {
+                    $out .= substr($pattern, $i, $end + 1 - $i);
+                    $i = $end + 1;
+                }
+            }
+            next;
+        }
+
+        if ($in_class) {
+            if ($ch eq ']' && $class_pos > 0) {
+                $in_class = 0;
+            }
+            elsif ($ch eq '[' && defined $c[$i+1] && $c[$i+1] eq ':'
+                   && (my $end = index($pattern, ':]', $i + 2)) >= 0) {
+                $out .= substr($pattern, $i, $end + 2 - $i);
+                $class_pos += $end + 2 - $i;
+                $i = $end + 2;
+                next;
+            }
+            else {
+                $class_pos++;
+            }
+            $out .= $ch;
+            $i++;
+            next;
+        }
+
+        if ($ch eq '[') {
+            $in_class  = 1;
+            $class_pos = 0;
+            $out .= $ch;
+            $i++;
+            if (defined $c[$i] && $c[$i] eq '^') { $out .= '^'; $i++ }
+            next;
+        }
+
+        if ($ch eq '{') {
+            if (substr($pattern, $i) =~ /\A($RE2_REPEAT)/) {
+                $out .= $1;
+                $i   += length $1;
+            }
+            else {
+                $out .= '\{';
+                $i++;
+            }
+            next;
+        }
+
+        $out .= $ch;
+        $i++;
+    }
+
+    return $out;
+}
+
 # What in this pattern, if any, the two dialects do not agree on. Returns the
 # empty list when they do, and otherwise the construct and which KIND of
 # disagreement it is:
@@ -1556,7 +1655,7 @@ sub _re2_divergent_construct {
         if ($ch eq '{') {
             # A brace run that is a repetition; anything else is a literal
             # brace in both dialects.
-            if (substr($pattern, $i) =~ /\A(\{[0-9]+(?:,[0-9]*)?\})/) {
+            if (substr($pattern, $i) =~ /\A($RE2_REPEAT)/) {
                 $i += length $1;
                 $quantified = 1;
                 next;
@@ -1662,7 +1761,8 @@ sub _re2_divergent_group {
             . "See docs/adr/0048."
         ) if defined $construct;
 
-        my $qr = eval { qr/$pattern/ };
+        my $perl = _re2_perl_pattern($pattern);
+        my $qr   = eval { qr/$perl/ };
         return ($qr, undef, undef) if defined $qr;
 
         return (undef, 'perl',

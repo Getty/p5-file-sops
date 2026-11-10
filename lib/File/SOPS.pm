@@ -2744,6 +2744,9 @@ tools reads the config. The constructs that RE2 does not have -- lookarounds
 (C<\1>..C<\9>) -- are refused here at match time, naming the offending
 construct and the config file; everything that compiles in both
 (C<(?i)>, C<.>, standard quantifiers, character classes, anchors) passes.
+A brace that does not open an RE2 repetition (C<{,3}>, C<{ 1,3}>, C<{a}>) is
+matched as a literal, as RE2 does, on every perl; see
+L<File::SOPS::Metadata/The regex rules are matched in RE2's dialect>.
 One that will not compile at all is reported here naming the config file
 and the rule; sops reports it too. Keep a C<path_regex> to what both
 accept, and you can rely on the refusal rather than on memorising the
@@ -3016,7 +3019,8 @@ sub _first_matching_rule {
                 . "creation_rules_for.";
         }
 
-        my $matched = eval { $subject =~ /$regex/ ? 1 : 0 };
+        my $perl_regex = File::SOPS::Metadata::_re2_perl_pattern($regex);
+        my $matched = eval { $subject =~ /$perl_regex/ ? 1 : 0 };
         croak "Cannot use the path_regex of creation rule $index in '$config' "
             . "as a regular expression (" . _reason($@) . "). It is compiled as "
             . "a Perl regex here and with Go's RE2 by sops, which accept "
