@@ -1,0 +1,21 @@
+---
+claimed_at: 2026-11-10T15:24:50Z
+claimed_by: orchestrator
+class: standard
+completed: 2026-11-10T15:24:50Z
+created: 2026-11-10T03:12:03Z
+id: 213
+priority: high
+started: 2026-11-10T15:24:50Z
+status: done
+tags:
+- prereqs
+- yaml
+title: 'YAML::XS and YAML::PP carry no minimum version: old ones write booleans as
+  1'
+updated: 2026-11-10T15:24:50Z
+---
+
+CPAN Testers, File-SOPS 0.005 on perl 5.36.0 with YAML::XS 0.86 / YAML::PP 0.035: t/32 (lines 184-230) and t/33 (139-182) fail, the emitter writes 1 instead of true. With YAML::XS 0.910 / YAML::PP 0.43 (5.40.5) t/32 is green. The cpanfile names no minimum for either module. Done = measure the lowest YAML::XS and YAML::PP versions that pass the suite (install candidates into a throwaway local::lib, run t/32 and t/33 then the suite; Changes of both modules name the boolean support), the cpanfile requires them, Changes entry.
+
+Measured in throwaway local::lib (t/32+t/33): YAML::XS 0.86 and 0.88 FAIL (boolean written as 1); 0.89 PASS (YAML-LibYAML Changes 0.89: core booleans recognised at dump time on perl 5.36+). YAML::PP is not the cause: 0.021-0.043 pass with XS 0.910, 0.020 does not load. Full suite with XS 0.89 + PP 0.021: 92 files, 1531 tests PASS (sops binary present). cpanfile requires XS 0.89 / PP 0.021. Commit 38ad4ed.
