@@ -54,8 +54,9 @@ an argument is its own, but what that argument makes the document look like is n
 
 The agents carry their knowledge via `briefing.skills` (see `.claude/agents/`); the main
 agent delegates rather than loading them. Skill sources live under `.claude/skills/` —
-`file-sops-core` is project-owned, the `getty-perl-*`, `perl-release-dist-ini` and
-`kanban-issues-karr-coordination` ones are hardlinked from their shared sources.
+`file-sops-core`, `file-sops-hazards` and `perl-file-sops` are project-owned; the
+`getty-perl-*`, `perl-release-dist-ini` and `kanban-issues-karr-*` ones are installed by
+skilletor from `.claude/skilletor.json`.
 
 Work coordination runs on the local `karr` board (`karr board`).
 
