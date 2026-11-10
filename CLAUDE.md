@@ -3,16 +3,14 @@
 Perl implementation of Mozilla SOPS (Secrets OPerationS) encrypted file format.
 
 > **Status of this file:** it is the original *design document*, kept as the roadmap.
-> What still does not exist: **every backend beyond age** — PGP, AWS KMS, GCP KMS,
-> Azure KV, Vault (k39; their metadata fields already round-trip, only the
-> wrapping is missing), and that one is *parked* on a maintainer decision rather
-> than merely undone.
+> What still does not exist: **every backend beyond age and Vault** — PGP, AWS KMS,
+> GCP KMS, Azure KV (their metadata fields already round-trip, only the wrapping
+> is missing). Two backends exist: `Backend::Age` and `Backend::HCVault` (k39).
 > Implemented since: `encrypt_in_place`, `edit`, `.sops.yaml` creation rules
 > (`creation_rules_for`, k38 — with one deliberate divergence from sops,
 > confirmed by the maintainer and recorded in ADR 0007), and **all four format
 > handlers** — the ENV/dotenv one (k36) and the INI one (k37) both
-> landed on 2026-08-21, so `format => 'env'` and `format => 'ini'` are no longer
-> roadmap anywhere below.
+> landed on 2026-08-21.
 > The description of what exists lives in skill `file-sops-core`; the POD in
 > `lib/File/SOPS.pm` is the contract.
 >
@@ -119,7 +117,7 @@ sops:
 
 ## API Design
 
-Everything below except the `format => 'env' | 'ini'` note exists today, with named
+Everything below exists today, with named
 arguments throughout — `encrypt_in_place` and `edit` take `file => ...` like `rotate`
 and `extract`, not a leading positional filename as this document first sketched.
 
@@ -208,7 +206,7 @@ Two things the POD spells out and this sketch cannot: the search runs upward fro
 the **file's** directory where sops searches from the **working directory** — a
 deliberate divergence, confirmed and recorded in ADR 0007 — and `$SOPS_CONFIG`
 is not read from the environment. Not supported: `key_groups`, `shamir_threshold`,
-and recipients for backends other than age (k39); all are refused rather than
+and recipients for backends other than age and Vault; all are refused rather than
 ignored.
 
 ## Dependencies
@@ -225,8 +223,9 @@ requires 'JSON::MaybeXS';     # JSON parsing
 
 ## Encryption Backends
 
-**age only** — and `File::SOPS::Backend::Age` is the only backend module. HashiCorp Vault
-is the only other one on the roadmap (k39).
+**age and HashiCorp Vault** — `File::SOPS::Backend::Age` and `File::SOPS::Backend::HCVault`
+(Vault transit, k39) are the two backend modules. PGP and the cloud KMS services are not
+implemented.
 
 `File::SOPS::Metadata` models the `sops`-section fields for every backend sops supports
 (`pgp`, `kms`, `gcp_kms`, `azure_kv`, `hc_vault`) as first-class attributes, and round-trips
