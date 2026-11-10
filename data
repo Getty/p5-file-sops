@@ -1,0 +1,18 @@
+---
+claimed_at: 2026-11-10T04:21:49Z
+claimed_by: orchestrator
+class: standard
+created: 2026-11-10T03:12:22Z
+id: 215
+priority: medium
+status: review
+tags:
+- portability
+- floats
+title: 'quadmath perls: t/36 expects double formatting in three places'
+updated: 2026-11-10T04:21:49Z
+---
+
+CPAN Testers, File-SOPS 0.005 on perl 5.30.3 x86_64-linux-quadmath (report 0410167e-ce63-11f1-8023-0dda405ef301): t/36 lines 176/186/210 fail (flag N instead of NP; 100000000000000000000 instead of 1e+20). The long-double fix (nvsize > 8, test t/87) covers quadmath in principle but these lines were not touched and no quadmath run exists. Done = read the report, decide per line whether lib or test is wrong on an NV wider than double, fix, and say on the card what could not be run here (no quadmath perl on this machine: the coordinator can run one remotely).
+
+Per line (could not read the report; reasoned from the card and code). 186 and 210: TEST assumption: how perl/Cpanel::JSON::XS print a bare NV 1e20 depends on NV width (quadmath prints all digits); lib does not control it. 176: unresolved from code: _wide_number wraps only on IOK or POK-without-NOK; line 89 (parse side) did not fail on quadmath, so the decoder still yields NP there and something between encrypt and decrypt yields a bare N; the MAC is unaffected (digest text comes from value_to_bytes narrowed to a double). t/36 now asserts the invariants on nvsize>8 (N flag, == 1e20, either spelling) and stays exactly as strict on nvsize 8. NOT RUN: any quadmath perl. Needs one remote run on x86_64-linux-quadmart WITH a sops binary: t/36, in particular whether the section-6 interop subtest (rotate leaves the unencrypted slot byte-unchanged) holds; if it fails, 176 is a lib defect in the writer, not the test. Full suite on double perl: 92 files/1531 PASS. Commit 8ad4846.
