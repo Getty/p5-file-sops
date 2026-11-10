@@ -5,10 +5,13 @@
 - Resolves part of k216 (perl 5.22 floor)
 - Depends on ADR 0002 (the type comes from the scalar's public flags), ADR 0012
   (a scalar whose two halves disagree is refused), ADR 0015, ADR 0037
-- **Moves no bytes on perl >= 5.36.** The answer of `_has_public_pv` is
-  unchanged there for every scalar whose PV differs from its number's text and
-  for every bare number; it changes, on every perl, only for a number carrying
-  a PV equal to its own text (see Consequences).
+- **Moves no bytes on perl >= 5.36, with one exception.** The answer of
+  `_has_public_pv` is unchanged there for every scalar whose PV differs from
+  its number's text and for every bare number; it changes, on every perl, only
+  for a number carrying a PV equal to its own text (see Consequences). The
+  exception is the string `"Inf"`, `"-Inf"` or `"NaN"` that was used
+  numerically (POK+NOK): it was refused before, also on 5.36+, and is now
+  written as a float.
 
 ## Context
 
@@ -48,6 +51,14 @@ IOK/NOK branches precede the plain-PV one.
   YAML-parsed `5432`, `dualvar(5,'5')`) is no longer "a string half". Its two
   halves agree, so it wrote the same bytes before; the int guard simply skips
   the string comparison it used to make.
+- The exception, measured on perl 5.40.1 with sops 3.13.3 (`my $s = 'Inf';
+  my $x = $s + 0;`, then encrypt): before this change, YAML and JSON, for
+  `Inf`, `-Inf` and `NaN`, all refused ("non-finite float ... that also
+  states a string half of its own"). Now all six write `type:float` and
+  decrypt in Perl as `Inf`/`-Inf`/`NaN`. `sops -d` reads the YAML documents
+  (`.inf`, `-.inf`, `.nan`, MAC verified); for JSON it exits with a marshal
+  error, exactly as for a bare `9**9**9` -- sops cannot print a non-finite
+  float as JSON, which is not a property of this change.
 - Known only from perldelta and B knowledge, not run (only 5.40 was available):
   the pre-5.36 flag behaviour of stringifying, and that `B::IV::IsUV`/`UVX`
   and `NV` read on 5.22-5.34 as they do on 5.40.
