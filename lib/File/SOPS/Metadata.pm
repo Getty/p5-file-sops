@@ -351,6 +351,11 @@ C<\u>, C<\l>, C<\U>, C<\L>, and C<\b> inside a character class
 code, subpattern calls and recursion, the C<< (?'name'...) >> spelling of a
 named group, the C<< (?^...) >> flag reset
 
+=item * a repetition count above 1000 (C<a{1001}>, C<.{1001,}>), a minimum above
+the maximum (C<a{2,1}>), and nested counts whose product is above 1000
+(C<(a{501}){2}>) -- RE2 refuses the whole pattern, a branch that cannot match
+included, so C<(a|b{1001})> matches nothing at all
+
 =item * every regex flag RE2 does not have: C<x>, C<a>, C<d>, C<l>, C<u>, C<n>
 and C<p>
 
@@ -1571,6 +1576,13 @@ sub _re2_divergent_construct {
                          # the literal character, in both dialects
     my $quantified = 0;  # the token just read was a quantifier
 
+    # RE2 bounds every {n,m} at 1000 and the PRODUCT of nested ones at 1000
+    # (ADR 0073). $atom is the repeat weight of the last atom read (1 for a
+    # plain one, the deepest nested product for a group); each open group
+    # keeps the heaviest thing seen inside it.
+    my @inner = (1);
+    my $atom  = 1;
+
     while ($i < @c) {
         my $ch = $c[$i];
 
@@ -1596,6 +1608,7 @@ sub _re2_divergent_construct {
             $i += 2;
             $class_pos++ if $in_class;
             $quantified = 0;
+            $atom       = 1 unless $in_class;
             next;
         }
 
@@ -1603,6 +1616,7 @@ sub _re2_divergent_construct {
             if ($ch eq ']' && $class_pos > 0) {
                 $in_class   = 0;
                 $quantified = 0;
+                $atom       = 1;
                 $i++;
                 next;
             }
@@ -1631,7 +1645,21 @@ sub _re2_divergent_construct {
             next;
         }
 
+        if ($ch eq ')') {
+            if (@inner > 1) {
+                $atom = pop @inner;
+                $inner[-1] = $atom if $atom > $inner[-1];
+            }
+            else {
+                $atom = 1;
+            }
+            $quantified = 0;
+            $i++;
+            next;
+        }
+
         if ($ch eq '(') {
+            push @inner, 1;
             $quantified = 0;
             if (defined $c[$i+1] && $c[$i+1] eq '?') {
                 my @divergent = _re2_divergent_group(substr($pattern, $i));
@@ -1656,16 +1684,42 @@ sub _re2_divergent_construct {
             # A brace run that is a repetition; anything else is a literal
             # brace in both dialects.
             if (substr($pattern, $i) =~ /\A($RE2_REPEAT)/) {
-                $i += length $1;
+                my $run = $1;
+                $i += length $run;
+
+                # RE2 refuses a count above 1000 and a minimum above the
+                # maximum, anywhere in the pattern -- a branch that never
+                # matches included, because it is a compile error.
+                my ($min, $comma, $max) = $run =~ /\{(\d+)(?:(,)(\d*))?\}/;
+                my $big = sub { length($_[0]) > 4 || $_[0] > 1000 };
+                return ('a repetition count above 1000', 'unsupported')
+                    if $big->($min) || (defined $max && length $max && $big->($max));
+                return ('a repetition whose minimum is above its maximum',
+                        'unsupported')
+                    if defined $max && length $max && $min > $max;
+
+                # A nested {n,m} multiplies; a bound of 0 ends the check below
+                # it. The weight is the maximum, or the minimum when open.
+                my $m = !defined $comma ? $min
+                      : length $max     ? $max
+                      :                   $min;
+                $atom = $m == 0 ? 1 : $atom * $m;
+                return ('nested repetitions whose product is above 1000',
+                        'unsupported')
+                    if $atom > 1000;
+                $inner[-1] = $atom if $atom > $inner[-1];
+
                 $quantified = 1;
                 next;
             }
             $quantified = 0;
+            $atom       = 1;
             $i++;
             next;
         }
 
         $quantified = 0;
+        $atom       = 1;
         $i++;
     }
 

@@ -1,19 +1,18 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
-  - The distribution now requires perl 5.022. Older perls stringify numbers,
-    read regex braces and name warning categories differently, and the
-    distribution no longer works around that.
-  - A number that was only printed or interpolated (my $s = "$n") is still
-    just a number when written, on every supported perl: a string form that
-    is exactly what perl writes for the number is no longer taken for a
-    string of its own. Before 5.36 this made +Inf, -Inf and NaN, and in some
-    cases integers, fail with "states a string half of its own". A scalar
-    that carries a different text beside its number is still refused.
+  - The distribution requires perl 5.022.
+  - A number that was only printed or interpolated (my $s = "$n") is written
+    as the number it is: a string form identical to what perl writes for the
+    number is not a string of its own. A scalar that carries a different
+    text beside its number is refused.
+  - A string "Inf", "-Inf" or "NaN" that has been used as a number is
+    written as a float and comes back as a float.
   - A brace that is not a Go RE2 repetition ({,3}, {,}, { 1,3}, {a}, {01})
-    in an encrypted_regex, unencrypted_regex or path_regex is now matched as a
-    literal on every perl, as sops does; before, {,3} meant different things
-    (a literal, a fatal error, or {0,3}) depending on the perl version.
+    in an encrypted_regex, unencrypted_regex or path_regex is a literal on
+    every perl, as in sops. A repetition count above 1000 or a minimum above
+    the maximum ({1001}, {2,1}) makes the pattern one RE2 cannot compile, so
+    it matches nothing on the read path and is refused for writing.
   - The POD now says what file modes, path_regex separators and backslashes
     in $EDITOR mean on Windows, and the test suite skips the Unix-mode,
     signal and resource-limit checks and runs child processes from script
