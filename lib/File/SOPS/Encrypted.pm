@@ -917,9 +917,10 @@ sub _go_non_finite_token_bytes {
 # refused, the same answer docs/adr/0012 gives an integer whose halves disagree,
 # and measured the same way (sops -d exit 51 for every mismatched pairing).
 #
-# The PUBLIC SVf_POK, for the reason _has_public_pv gives: merely printing a
-# float sets the private flag, and a gate that read that one would take a
-# caller's logging for a promise about the wire. Nothing here numifies the
+# The public string half, for the reason _has_public_pv gives: printing a
+# float leaves at most the number's own text behind (the private flag from
+# perl 5.36, a public flag with that same text before), and a gate that read
+# it would take a caller's logging for a promise about the wire. Nothing here numifies the
 # string half or stringifies the number (docs/adr/0002, k32).
 sub _carries_go_non_finite_token {
     my ($value, $text) = @_;
@@ -2017,13 +2018,37 @@ sub _sv_kind {
 }
 
 # Does this scalar carry a string form of its OWN, on top of its number? The
-# public SVf_POK again, for the same reason _sv_kind reads the public IOK/NOK:
-# merely stringifying a number sets the private pPOK (measured: `my $s = "$i"`,
-# `$i eq ''` and `length($i)` all leave SVf_POK clear), and a guard that read
-# the private flag would fire on a caller who logged the value.
+# public SVf_POK, for the same reason _sv_kind reads the public IOK/NOK -- but
+# the flag alone answers it only on perl >= 5.36 (docs/adr/0074). From 5.36 on
+# merely stringifying a number (`my $s = "$i"`, `$i eq ''`, `length($i)`)
+# sets only the private pPOK; BEFORE that it sets the public SVf_POK, with the
+# number's own text as the PV, so a caller who logged a float would look like
+# one who stated a string half.
+#
+# The rule that holds on every perl: a number has a string half of its OWN
+# only when its PV DIFFERS from the text this perl writes for exactly that
+# number. A PV equal to it is the trace of an output and says nothing the
+# number does not (a caller who truly states "5" beside 5 cannot be told apart,
+# and writes the same bytes either way). The number is rebuilt from the flags
+# that are already public, through B and never through the PV: the string is
+# not numified (ADR 0002, k32), nothing here sets a flag on the caller's SV.
+# With both IOK and NOK public, a match with either text is a trace.
 sub _has_public_pv {
-    my $flags = B::svref_2object(\$_[0])->FLAGS;
-    return $flags & B::SVf_POK() ? 1 : 0;
+    my $sv    = B::svref_2object(\$_[0]);
+    my $flags = $sv->FLAGS;
+    return 0 unless $flags & B::SVf_POK();
+    return 1 unless $flags & (B::SVf_IOK() | B::SVf_NOK());
+
+    my $pv = $sv->PV;
+    if ($flags & B::SVf_IOK()) {
+        my $i = ($flags & B::SVf_IVisUV()) ? $sv->UVX : $sv->IVX;
+        return 0 if $pv eq "$i";
+    }
+    if ($flags & B::SVf_NOK()) {
+        my $n = $sv->NV;
+        return 0 if $pv eq "$n";
+    }
+    return 1;
 }
 
 # Does this emitted number token carry no more significant digits than a

@@ -135,7 +135,12 @@ subtest 'a spelling go-yaml does not resolve is refused' => sub {
     # `banana` is the one that decides how tight this gate has to be: ADR 0013's
     # guard never looks at a token starting with `b`, so nothing downstream
     # would catch it.
-    for my $token (qw( .INf .iNF .Nan +.nan -.nan .infinity Inf NaN banana ), '') {
+    #
+    # `Inf` is not in the list: it is exactly the text perl writes for +Inf
+    # (and indistinguishable from `"$n"` on perl < 5.36), so as a PV it is the
+    # trace of an output, not a string half of its own (ADR 0074; t/91 wants
+    # it accepted). `NaN` stays: on a +Inf it differs from perl's text.
+    for my $token (qw( .INf .iNF .Nan +.nan -.nan .infinity +Inf inf INF Infinity NaN banana ), '') {
         my $err = refuses(dualvar($INF, $token));
         ok(defined $err, "[$token] refused");
     }
@@ -153,10 +158,9 @@ subtest 'a spelling go-yaml does not resolve is refused' => sub {
 #    carrier, and the refusal there moves to the emit walk's mac_covered
 #    croak -- which is what section 5 keeps and this section 3 splits.
 #
-#    What stays refused at this layer is a bare NV whose public PV has been
-#    forced -- `"$printed"` sets the private POK, but the public one is what
-#    the gate reads, so a caller who logged the value has not promised
-#    anything about the wire.
+#    A bare NV that was merely printed stays bare: its PV, if perl set one
+#    (public POK before 5.36), is perl's own text -- the trace of an output,
+#    not a string half of its own (ADR 0074).
 ###############################################################################
 
 subtest 'a bare non-finite float is still refused, in the format where it must be'
@@ -168,13 +172,15 @@ subtest 'a bare non-finite float is still refused, in the format where it must b
             or diag($err);
     }
 
-    # A float that was merely PRINTED is still bare: Perl sets the private
-    # SVf_POK for that and the gate reads the public one, so a caller who
-    # logged the value has not promised anything about the wire.
+    # A float that was merely PRINTED is still bare: before perl 5.36 that
+    # sets the public POK with perl's own text, but a PV equal to the text
+    # perl writes for the number is the trace of an output, not a string half
+    # of its own (ADR 0074), so a caller who logged the value has not
+    # promised anything about the wire.
     my $printed = $INF;
     my $ignored = "$printed";
     ok(!defined refuses($printed),
-        'and so is one that was only stringified: the public POK stays clear');
+        'and so is one that was only stringified: its PV is perl\'s own text');
 };
 
 # k141 / docs/adr/0062 split the slot answer by FORMAT. An ENCRYPTED

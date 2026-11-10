@@ -1,6 +1,12 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - A number that was only printed or interpolated (my $s = "$n") is still
+    just a number when written, on every supported perl: a string form that
+    is exactly what perl writes for the number is no longer taken for a
+    string of its own. Before 5.36 this made +Inf, -Inf and NaN, and in some
+    cases integers, fail with "states a string half of its own". A scalar
+    that carries a different text beside its number is still refused.
   - The POD now says what file modes, path_regex separators and backslashes
     in $EDITOR mean on Windows, and the test suite skips the Unix-mode,
     signal and resource-limit checks and runs child processes from script

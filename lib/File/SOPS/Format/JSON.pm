@@ -343,8 +343,11 @@ sub _restore_wide_numbers {
 # already made through the plain-PV test, which used to be a sub of its own.
 # The question that test asks is unchanged and so is the reason it asks it of
 # the PUBLIC SVf_POK -- as Encrypted::_has_public_pv does, because merely
-# stringifying a number sets the PRIVATE pPOK and reading that would call an
-# integer a string because someone had logged it. It is a question about the
+# stringifying a number sets the PRIVATE pPOK (perl >= 5.36; before it the
+# public flag too, with the number's own text, and Encrypted compares the PV
+# for that reason: docs/adr/0074 -- this walk needs no comparison, the IOK/NOK
+# branches come first and the plain-PV one is reached only without a number)
+# and reading that would call an integer a string because someone had logged it. It is a question about the
 # DECODER's output, not about the SOPS type; the type ladder stays in
 # File::SOPS::Encrypted::detect_type and is not repeated here.
 #
