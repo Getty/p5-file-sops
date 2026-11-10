@@ -600,7 +600,7 @@ those cases, which is how a value is recovered from such a file.
 # to recognise, so `sub { 0 }` is the whole answer there and not a degraded
 # one. Loaded through a string eval because `use builtin` and
 # `no warnings 'experimental::builtin'` are each a compile-time error on a perl
-# that has neither, and this distribution declares 5.010.
+# that has neither, and this distribution declares 5.022.
 #
 # This is NOT a return to the pattern match ADR 0002 removed: nothing looks at
 # the value's text. It reads a mark Perl itself put on the scalar, exactly as
@@ -920,8 +920,8 @@ sub _go_non_finite_token_bytes {
 # The public string half, for the reason _has_public_pv gives: printing a
 # float leaves at most the number's own text behind (the private flag from
 # perl 5.36, a public flag with that same text before), and a gate that read
-# it would take a caller's logging for a promise about the wire. Nothing here numifies the
-# string half or stringifies the number (docs/adr/0002, k32).
+# it would take a caller's logging for a promise about the wire. Nothing here
+# numifies the string half or stringifies the number (docs/adr/0002, k32).
 sub _carries_go_non_finite_token {
     my ($value, $text) = @_;
     return 0 unless _has_public_pv($value);
@@ -2028,10 +2028,11 @@ sub _sv_kind {
 # The rule that holds on every perl: a number has a string half of its OWN
 # only when its PV DIFFERS from the text this perl writes for exactly that
 # number. A PV equal to it is the trace of an output and says nothing the
-# number does not (a caller who truly states "5" beside 5 cannot be told apart,
-# and writes the same bytes either way). The number is rebuilt from the flags
-# that are already public, through B and never through the PV: the string is
-# not numified (ADR 0002, k32), nothing here sets a flag on the caller's SV.
+# number does not (a caller who truly states "5" beside 5 cannot be told
+# apart, and writes the same bytes either way). The number is rebuilt from
+# the flags that are already public, through B and never through the PV: the
+# string is not numified (ADR 0002, k32), nothing here sets a flag on the
+# caller's SV.
 # With both IOK and NOK public, a match with either text is a trace.
 sub _has_public_pv {
     my $sv    = B::svref_2object(\$_[0]);
