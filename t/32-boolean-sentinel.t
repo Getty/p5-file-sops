@@ -80,10 +80,16 @@ sub sentinels {
         [ 'defined $x'      => (defined $x),    1 ],
     );
     {
-        no warnings 'experimental::builtin';
-        require builtin;
-        push @s, [ 'builtin::true'  => builtin::true(),  1 ];
-        push @s, [ 'builtin::false' => builtin::false(), 0 ];
+        # Named only where this perl knows the category: an unknown one in a
+        # `no warnings` is a compile error before 5.36. Decided at run time,
+        # and the code is a string so that the older parser never sees it.
+        my $no_warn = exists $warnings::Offsets{'experimental::builtin'}
+            ? q{no warnings 'experimental::builtin';} : '';
+        my @b = eval qq{ $no_warn require builtin;
+                         ([ 'builtin::true'  => builtin::true(),  1 ],
+                          [ 'builtin::false' => builtin::false(), 0 ]) }
+            or die "builtin::true/false: $@";
+        push @s, @b;
     }
     {
         # A tree the CALLER loaded with their own YAML::XS::Load: our parse

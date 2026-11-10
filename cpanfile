@@ -1,4 +1,4 @@
-requires 'perl', '5.014';
+requires 'perl', '5.022';
 
 requires 'Cpanel::JSON::XS', '4.38';
 requires 'Crypt::Age', '0.005';
