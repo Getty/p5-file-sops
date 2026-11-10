@@ -5,6 +5,7 @@ use Test::More;
 use File::Temp qw(tempdir);
 use File::Slurper qw(read_binary write_binary);
 use B ();
+use Config;
 use Cpanel::JSON::XS ();
 
 use File::SOPS;
@@ -74,6 +75,25 @@ sub _raw_flags {
 }
 
 my $WIDE      = '100000000000000000000';       # 1e20, just past Perl's UV
+
+# k215: what Perl itself prints for a BARE NV 1e20, and the flags the decoder
+# leaves it with, depend on the width of the NV, not on this distribution. With
+# nvsize 8 (a double) a bare 1e20 prints '1e+20' (%.15g), and the unencrypted
+# slot keeps the decoder's POK-carrying dualvar through a write/read cycle. With
+# a wider NV (nvsize 16, e.g. x86_64-linux-quadmath) a bare 1e20 prints every
+# digit, so '1e+20' is never produced, and the slot may come back a bare NV
+# whose own print equals the document digits -- still numerically 1e20, still
+# a float for detect_type, the MAC bytes coming from value_to_bytes either way.
+# The assertions that spell Perl's or Cpanel's NV rendering are therefore exact
+# on nvsize 8 (unchanged) and assert the invariants on a wider NV. Nothing in
+# lib/ is asserted here that depended on the rendering.
+my $WIDE_NV = $Config{nvsize} > 8;
+sub _is_wide_nv_1e20 {
+    my ($v, $name) = @_;
+    ok(defined $v && !ref $v && $v == 1e20
+        && ("$v" eq $WIDE || "$v" eq '1e+20'),
+        $name);
+}
 my $HUGE_ZEROS = '1' . ('0' x 400);             # overflows a double -> +Inf
 
 ###############################################################################
@@ -173,8 +193,16 @@ subtest 'decrypt: the unencrypted slot comes back a dualvar printing the documen
     my $data = File::SOPS->decrypt(
         encrypted => read_binary($enc_file), identities => [$secret], format => 'json');
 
-    is(_pub_bits($data->{big_unencrypted}), 'NP', 'NOK+POK -- a dualvar');
-    is("$data->{big_unencrypted}", $WIDE, 'stringifying prints the document digits');
+    if ($WIDE_NV) {
+        like(_pub_bits($data->{big_unencrypted}), qr/N/,
+            "nvsize $Config{nvsize}: a number (NOK), whether or not it kept a string half");
+        _is_wide_nv_1e20($data->{big_unencrypted},
+            "nvsize $Config{nvsize}: numerically 1e20, printing the digits or the exponent form");
+    }
+    else {
+        is(_pub_bits($data->{big_unencrypted}), 'NP', 'NOK+POK -- a dualvar');
+        is("$data->{big_unencrypted}", $WIDE, 'stringifying prints the document digits');
+    }
 };
 
 subtest 'decrypt: the encrypted slot comes back the bare NV every decrypted float is' => sub {
@@ -183,8 +211,14 @@ subtest 'decrypt: the encrypted slot comes back the bare NV every decrypted floa
         encrypted => read_binary($enc_file), identities => [$secret], format => 'json');
 
     is(_pub_bits($data->{big_secret}), 'N', 'NOK only -- no string half');
-    is("$data->{big_secret}", '1e+20',
-        'stringifying gives the exponent form, NOT the document digits');
+    if ($WIDE_NV) {
+        _is_wide_nv_1e20($data->{big_secret},
+            "nvsize $Config{nvsize}: numerically 1e20 (a wide NV prints every digit, so no exponent form)");
+    }
+    else {
+        is("$data->{big_secret}", '1e+20',
+            'stringifying gives the exponent form, NOT the document digits');
+    }
 };
 
 subtest 'extract: both slots come back as a dualvar printing every digit' => sub {
@@ -207,7 +241,10 @@ subtest 'decrypt_file: the plaintext document carries the number bare, not quote
         'the unencrypted slot is written as a bare number with full digits');
     unlike($written, qr/"big_unencrypted"\s*:\s*"/,
         'and specifically not quoted, which is what the pre-0.003 code wrote');
-    like($written, qr/"big_secret"\s*:\s*1e\+20\b/,
+    # nvsize 8: Cpanel renders the bare NV as 1e+20. A wider NV is rendered
+    # with every digit (or routed to the carrier, which writes the digits).
+    my $secret_re = $WIDE_NV ? qr/(?:1e\+20|\Q$WIDE\E)/ : qr/1e\+20/;
+    like($written, qr/"big_secret"\s*:\s*$secret_re\b/,
         'the encrypted slot writes the bare NV it decrypted to');
 };
 
