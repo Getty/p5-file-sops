@@ -1,0 +1,20 @@
+---
+claimed_at: 2026-11-10T02:36:04Z
+claimed_by: karten-208-212
+class: standard
+completed: 2026-11-10T02:36:04Z
+created: 2026-11-06T21:17:36Z
+id: 212
+priority: low
+started: 2026-11-10T01:52:51Z
+status: done
+tags:
+- docs
+- skills
+title: Consumer skill perl-file-sops could name has_bare_lastmodified
+updated: 2026-11-10T02:36:04Z
+---
+
+Found while working k207. The consumer skill perl-file-sops says a file with a bare sops.lastmodified only warns on every read until a rotate. Since the public check File::SOPS->has_bare_lastmodified exists, the skill could tell consumers to ask it before rotating instead of matching the warning or the text. Left alone in the 2026-11-06 round because the hub fixed that the consumer skill stays as it is. Done when the skill names the method, its two call forms and rotate as the rewrite.
+
+Commit 4ab3b57
