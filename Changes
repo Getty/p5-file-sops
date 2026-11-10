@@ -1,6 +1,9 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - A directory passed as a file argument is refused with a "Cannot open"
+    message naming the path, instead of failing later with "content
+    required" or "encrypted required".
   - A sops section that names lastmodified through an alias key no longer
     draws the plain-lastmodified warning, and has_bare_lastmodified answers
     false for it; sops reads such a document.

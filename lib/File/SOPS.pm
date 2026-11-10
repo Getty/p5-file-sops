@@ -3141,6 +3141,10 @@ sub _creation_rule_args {
 sub _read_file {
     my ($path, $what) = @_;
 
+    # A directory opens for reading and reads as undef; refuse it here, once,
+    # so no caller fails further down without the path in the message.
+    croak "Cannot open $what '$path': Is a directory" if -d $path;
+
     open my $fh, '<:raw', $path
         or croak "Cannot open $what '$path': $!";
     my $content = do { local $/; <$fh> };
