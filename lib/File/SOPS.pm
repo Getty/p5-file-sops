@@ -143,7 +143,7 @@ L</creation_rules_for> a rule naming them
 
 =item 1. Generate a random 256-bit data key
 
-=item 2. Encrypt the data key for each recipient using age (X25519 + ChaCha20-Poly1305)
+=item 2. Encrypt the data key for each recipient for each recipient: age (X25519 + ChaCha20-Poly1305) or a HashiCorp Vault transit key
 
 =item 3. Store encrypted data keys in the C<sops> metadata section
 
@@ -1297,10 +1297,10 @@ concatenated leaf order is preserved; what the MAC does catch is a deleted,
 duplicated, reordered or altered value. This is a property of the sops format,
 not of this implementation. See L<File::SOPS::Format::YAML>.
 
-Until 0.003 a multi-document stream was refused outright -- it was
-L<File::SOPS::Format::YAML/parse> that stopped it, before C<decrypt> saw it -- so
-no caller has ever received a value from this path, and widening the return type
-over it breaks nothing.
+Until 0.003 a multi-document stream was loaded in scalar context, which yields
+only its B<last> document, so a caller received that one document's values and
+nothing said the rest was gone. A stream now comes back whole, as an ArrayRef:
+code that relied on the old last-document HashRef has to index the result.
 
 B<New in 0.003, and a change for existing callers:> a JSON number past Go's
 C<int64> comes back as a B<float>. Past C<2**64-1> it used to come back as a
@@ -2461,6 +2461,12 @@ Returns 1 if the file was rewritten, and B<0 if the editor left the content
 byte-identical> -- in which case the file is not touched at all, so its
 C<lastmodified>, MAC and wrapped data keys stay as they were. sops reports the
 same situation as C<File has not changed, exiting.> with exit code 200.
+
+B<A multi-document YAML stream is refused>, both as the file to edit and as
+what the editor hands back: the method dies before decrypting anything in the
+first case and before writing anything in the second. Edit re-encrypts under a
+new data key where sops edit keeps it, and what editing a stream should mean is
+left open (docs/adr/0033); change a stream with L</decrypt> and L</encrypt>.
 
 =head3 The editor
 

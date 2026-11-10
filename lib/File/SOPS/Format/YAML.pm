@@ -79,18 +79,16 @@ loading File::SOPS changed how unrelated code parsed YAML.
 
 =head2 Multi-document YAML
 
-B<A YAML stream with more than one document is refused.> L</parse> dies rather
-than returning part of it.
+B<A YAML stream with more than one document is parsed into a document
+list.> L</parse> returns every document, in order, rather than part of it.
 
-This is a restriction, not a preference: it replaces silent data loss. Until
-0.003 the stream was loaded in scalar context, which yields only the B<last>
-document, so C<a: 1\n---\nb: 2> parsed to C<{b =E<gt> 2}> and
-L<File::SOPS/encrypt_file> wrote that back as the entire file. Every document
-but the last disappeared with no error.
+This replaces silent data loss. Until 0.003 the stream was loaded in scalar
+context, which yields only the B<last> document, so C<a: 1\n---\nb: 2> parsed
+to C<{b =E<gt> 2}> and L<File::SOPS/encrypt_file> wrote that back as the entire
+file. Every document but the last disappeared with no error.
 
-sops itself does support multi-document YAML, so this is a gap to close rather
-than a rule to keep. Its model, measured against sops 3.13.3, is not "several
-independent files in one":
+sops supports multi-document YAML too. Its model, measured against sops 3.13.3,
+is not "several independent files in one":
 
 =over 4
 
@@ -116,9 +114,10 @@ is the same rule as the HashRef check in L</parse>.
 
 =back
 
-Supporting that means one tree of N branches with a shared metadata and a
+Supporting that takes one tree of N branches with a shared metadata and a
 digest spanning all of them, which reaches into encryption, MAC computation and
-the shape of the public API -- not this parser alone.
+the shape of the public API as well as this parser; L<File::SOPS> does all of
+it. L<File::SOPS/edit> and the non-YAML writers refuse a stream.
 
 =cut
 
@@ -227,13 +226,10 @@ sub _load_documents {
 # Reached only when YAML::XS::Load returned more than one document. The wire
 # machinery below this -- the MAC over all documents (File::SOPS::_compute_mac,
 # _verify_mac) and the order-preserving reparse (parse_in_document_order) -- is
-# built to consume this list, but the public API return shape, the one-instance
-# metadata attach/detach and the emitter's separators are NOT in place yet
-# (k31 steps 4-5). Until they are, File::SOPS refuses a multi-document
-# read or write at its own boundary rather than processing only the first
-# document, which is the k14 data-loss defect this whole ticket exists to
-# fix. So this returns a correct, non-corrupting list; it does not yet round
-# trip.
+# built to consume this list, and File::SOPS does: decrypt returns the stream as
+# an ArrayRef, encrypt writes one, with one shared metadata and the emitter's
+# separators. Only edit and the non-YAML writers refuse a stream. Processing
+# just the first or last document was the data-loss defect this exists to fix.
 #
 # The single-document walks are run once PER DOCUMENT here, each with a fresh
 # visited set -- which is what docs/adr/0033 Decision 4 requires for the

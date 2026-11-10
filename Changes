@@ -27,7 +27,9 @@ Revision history for File-SOPS
   - The documentation now matches the code: multi-document YAML is described
     as supported (edit and non-YAML output of a stream are refused), Vault
     Transit is named as the second backend, and .ini is listed among the
-    extensions encrypt_file recognises.
+    extensions encrypt_file recognises. The edit documentation says it
+    refuses a stream, and decrypt no longer claims that a stream was refused
+    before 0.003: it was reduced to its last document.
 
 0.005     2026-10-21 18:35:30Z
   - Crypt::Age is raised to 0.005, the release whose header parser no longer

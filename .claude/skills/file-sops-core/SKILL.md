@@ -14,7 +14,7 @@ API is class methods on `File::SOPS`.
 
 | Module | Owns |
 |---|---|
-| `File::SOPS` | public API (`encrypt`/`decrypt`/`encrypt_file`/`decrypt_file`/`extract`/`rotate`), tree walk, path→AAD, MAC |
+| `File::SOPS` | public API (`encrypt`/`decrypt`/`encrypt_file`/`decrypt_file`/`extract`/`rotate`/`encrypt_in_place`/`edit`/`creation_rules_for`), tree walk, path→AAD, MAC |
 | `File::SOPS::Encrypted` | one `ENC[...]` value — parse, encrypt, decrypt, type (de)serialization |
 | `File::SOPS::Metadata` | the `sops:` section — backends, mac, lastmodified, version, encryption rules |
 | `File::SOPS::Backend::Age` | data-key encryption via `Crypt::Age` |
