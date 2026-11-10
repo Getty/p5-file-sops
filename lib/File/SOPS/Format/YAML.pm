@@ -1302,6 +1302,12 @@ sub _has_bare_lastmodified {
 # style of its own and nothing here would be measuring the right scalar. A
 # quiet miss on a document sops refuses is this guard's safe direction.
 #
+# An alias or complex KEY directly in the root `sops` mapping answers undef
+# too: it can spell `lastmodified` (`x: &k lastmodified` ... `*k : "..."`),
+# sops reads such a document -- the alias key is no duplicate to yaml.v3 and
+# the later, quoted entry wins -- and this walk cannot name the scalar the
+# entry carries. Quiet is the safe direction.
+#
 # Fails safe like its merge and !!bool twins: a document YAML::PP will not read
 # answers undef, which leaves today's behaviour exactly in place.
 sub _plain_lastmodified {
@@ -1317,7 +1323,20 @@ sub _plain_lastmodified {
     # the value of `lastmodified` in the mapping that is the value of `sops`
     # in the root mapping -- never a user's own `lastmodified` somewhere else.
     my (@kind, @expect_key, @key);
-    my ($plain, $done);
+    my ($plain, $done, $unnameable);
+
+    # An alias or complex KEY in the root `sops` mapping may name
+    # `lastmodified` without this walk being able to say which scalar that is
+    # (the key slot is undef). yaml.v3 does not see such a key as a duplicate
+    # of a plain one, so the entry that wins in sops can be another than the
+    # one measured here: the walk then answers "could not say" for the whole
+    # section.
+    my $note_key = sub {
+        my ($slot, $named) = @_;
+        return unless ($slot // '') eq 'key' && !$named;
+        return unless @kind == 2 && $kind[0] eq 'map' && ($key[0] // '') eq 'sops';
+        $unnameable = 1;
+    };
 
     my $ok = eval {
         YAML::PP::Parser->new(receiver => sub {
@@ -1325,7 +1344,8 @@ sub _plain_lastmodified {
             return if $done;
 
             if ($name eq 'mapping_start_event' || $name eq 'sequence_start_event') {
-                _consume_node_slot(\@kind, \@expect_key, \@key, undef);
+                my $started = _consume_node_slot(\@kind, \@expect_key, \@key, undef);
+                $note_key->($started, 0);
                 push @kind, $name eq 'mapping_start_event' ? 'map' : 'seq';
                 push @expect_key, 1;
                 push @key, undef;
@@ -1345,6 +1365,7 @@ sub _plain_lastmodified {
 
             my $slot = _consume_node_slot(\@kind, \@expect_key, \@key,
                 $name eq 'scalar_event' ? $event->{value} : undef);
+            $note_key->($slot, $name eq 'scalar_event');
             return unless ($slot // '') eq 'value';
             return unless @kind == 2
                 && $kind[0] eq 'map'
@@ -1359,6 +1380,7 @@ sub _plain_lastmodified {
     };
 
     return unless $ok;
+    return if $unnameable;
     return $plain;
 }
 

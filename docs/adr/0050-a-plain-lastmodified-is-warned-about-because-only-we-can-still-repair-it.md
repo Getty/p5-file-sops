@@ -221,6 +221,26 @@ against sops 3.13.3 rather than skipped.
 What changes is that the caller is told their file is one no sops can open, and
 told how to fix it — including that re-encrypting it here is the fix.
 
+## Amendment: an alias or complex key in the `sops` mapping silences the guard
+
+"The guard never fires on a document sops reads" had one measured exception.
+A `sops` section holding `x_anchor: &k lastmodified`, a plain
+`lastmodified: <timestamp>` and then `*k : "<timestamp>"` is read by sops 3.13.3
+(`sops -d` exit 0: yaml.v3 does not see the alias key as a duplicate, and the
+later, quoted entry wins). The value came from YAML::XS (alias key resolved, the
+quoted entry) while the style came from the event walk, which cannot name an
+alias key and so matched the earlier plain entry: value and style described
+different scalars.
+
+Decision: an alias or complex key directly in the root `sops` mapping makes
+`_plain_lastmodified` answer undef ("could not say"), so the warning and
+`File::SOPS->has_bare_lastmodified` both go quiet, from the one predicate
+`_has_bare_lastmodified`. Resolving anchors in the walk was the alternative and
+was not taken: quiet is this guard's safe direction. A plain duplicate without
+an alias is unchanged -- sops refuses it, so any answer is about a document it
+refuses. Moves no bytes. Pinned by
+`t/89-an-alias-key-in-the-sops-section-silences-the-plain-lastmodified-guard.t`.
+
 ## Rejected alternatives
 
 **Refuse the document.** The fail-loud reading, and what k145's question

@@ -1,6 +1,9 @@
 Revision history for File-SOPS
 
 {{$NEXT}}
+  - A sops section that names lastmodified through an alias key no longer
+    draws the plain-lastmodified warning, and has_bare_lastmodified answers
+    false for it; sops reads such a document.
   - edit and the non-YAML writers refuse a multi-document stream with a
     message that names docs/adr/0033 and the way that works instead.
   - Test::Fatal is declared as a test prerequisite, so installing the
