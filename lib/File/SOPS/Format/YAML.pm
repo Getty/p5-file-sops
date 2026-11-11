@@ -814,10 +814,42 @@ sub _restring_non_finite_leaf {
         return;
     }
 
+    # Perl before 5.30 converts decimal text inexactly and reads the largest
+    # finite double (1.7976931348623157e308, or the integer one bit below the
+    # threshold) as Inf, where Go reads a finite float. The NV is Inf but the
+    # literal does not overflow, so the exact double comes from strtod, which
+    # rounds correctly on those perls. A true overflow stays a string.
+    if (($wide == $POSITIVE_INFINITY || $wide == -$POSITIVE_INFINITY)
+        && !_text_overflows_double($pv)) {
+        my $exact = _exact_double($pv);
+        if (defined $exact) {
+            $_[0] = $exact;
+            return;
+        }
+    }
+
     return unless length $pv;
 
     $_[0] = $pv;
     return;
+}
+
+# The double strtod reads from this text, or undef when it does not consume all
+# of it or yields a non-finite one. strtod takes its decimal point from
+# LC_NUMERIC, so that is "C" for the call and restored after, error or not.
+sub _exact_double {
+    my ($text) = @_;
+    require POSIX;
+    my $locale = POSIX::setlocale(POSIX::LC_NUMERIC());
+    POSIX::setlocale(POSIX::LC_NUMERIC(), 'C');
+    my @result = eval { POSIX::strtod($text) };
+    POSIX::setlocale(POSIX::LC_NUMERIC(), $locale) if defined $locale;
+    return unless @result == 2 && $result[1] == 0;
+    my $value = $result[0];
+    return if $value != $value
+        || $value == $POSITIVE_INFINITY
+        || $value == -$POSITIVE_INFINITY;
+    return $value;
 }
 
 ###############################################################################

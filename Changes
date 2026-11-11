@@ -2,6 +2,8 @@ Revision history for File-SOPS
 
 {{$NEXT}}
   - The distribution requires perl 5.022.
+  - A finite YAML number at the double limit (1.7976931348623157e308) stays
+    a number on perl before 5.30, as it does later.
   - A number that was only printed or interpolated (my $s = "$n") is written
     as the number it is: a string form identical to what perl writes for the
     number is not a string of its own. A scalar that carries a different
