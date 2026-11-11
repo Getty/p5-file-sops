@@ -5,6 +5,7 @@ use Test::More;
 use File::Temp qw(tempdir);
 use File::Slurper qw(write_binary);
 use Scalar::Util qw(dualvar);
+use B ();
 
 use File::SOPS;
 use Crypt::Age;
@@ -53,9 +54,18 @@ my @numbers = (
 # The states a number can be in. Each builder gets a fresh copy of the number.
 my @states = (
     [ 'bare'                      => sub { my $n = $_[0] + 0; $n } ],
-    [ 'dualvar(n, "$n")'          => sub { my $n = $_[0]; dualvar($n, "$n") } ],
+    [ 'dualvar(n, "$n")'          => sub { my $n = $_[0]; my $text = "$n"; dualvar($n + 0, $text) } ],
     [ 'explicitly stringified'    => sub { my $n = $_[0]; my $s = "$n"; $n } ],
 );
+
+# The number half of a leaf, read off the flags: an int case must carry a real
+# IV (IOK, no NOK). Before perl 5.36 `dualvar($n, "$n")` takes the NV path for
+# an $n the interpolation has just given a PV, so the state it builds would be
+# a float 42, not the int 42 the case claims to test.
+sub number_half_is_integer {
+    my $flags = B::svref_2object(\$_[0])->FLAGS;
+    return ($flags & B::SVf_IOK()) && !($flags & B::SVf_NOK()) ? 1 : 0;
+}
 
 sub same_number {
     my ($x, $y) = @_;
@@ -106,6 +116,8 @@ for my $format (qw( yaml json )) {
                 };
                 ok(defined $document, "$label: written, no croak") or do { diag($@); next };
 
+                ok(number_half_is_integer($leaf), "$label: the number half is an integer")
+                    if $type eq 'int';
                 is(wire_type_of($document, 'v'), $type, "$label: type:$type on the wire");
 
                 # decrypt checks the MAC: a document whose emitted bytes and
