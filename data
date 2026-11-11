@@ -1,0 +1,25 @@
+---
+claimed_at: 2026-11-11T02:23:12Z
+claimed_by: k217-altperl
+class: standard
+completed: 2026-11-11T02:23:12Z
+created: 2026-11-11T02:13:58Z
+id: 217
+priority: high
+started: 2026-11-11T02:23:12Z
+status: done
+tags:
+- portability
+- test
+title: 'perl 5.22-5.34: t/91 dualvar ints and t/39 DBL_MAX literal still red'
+updated: 2026-11-11T02:23:12Z
+---
+
+Hub pre-release smoke on machamp 2026-11-10 (main d68d79e, requires only): perl 5.36.3-5.44.0 PASS, 5.22.4-5.34.3 FAIL.
+1. t/91:109/135/157/174 on 5.22-5.34: state dualvar(n, "$n") for int 42 and -7 is written as type:float ("42.0") instead of int. The builder is `dualvar($n, "$n")`: the interpolation stringifies $n before dualvar sees it, and the Scalar::Util these perls ship then takes the NV path for a number that is also POK, so the leaf carries NV 42, not IV 42.
+2. t/39:173/176/177 on 5.22-5.28 (green from 5.30): the YAML literals 1.7976931348623157e308 and the 309-digit integer one bit below the rounding threshold come back as str, not float. perl converts decimal text exactly only from 5.30; before, DBL_MAX text becomes Inf (Format/YAML.pm around 795-819).
+Logs: hub .smoke/logs/20261110-224447/remote/machamp/logs/perl-5.22.4/File-SOPS-0.006.log (and perl-5.32.1).
+
+Punkt 1 (d80225d): perl:5.22 gemessen: dualvar(n,"$n") -> IOK=0 NOK=1 POK=1; dualvar(n+0,text) -> IOK=1 NOK=0 POK=1. Hub-Vermutung stimmt, lib/ unberuehrt, Test baut Zustand mit echter Ganzzahl + Vorabpruefung.
+
+Punkt 2 (6921303): perl:5.22 gemessen: 1.7976931348623157e308 und die 309-stellige Ganzzahl: $t+0 = Inf, POSIX::strtod = endlich (Rest 0); 1.7976931348623159e308 und 1e309 bleiben Inf/str. Fix: _exact_double in Format/YAML.pm (strtod, LC_NUMERIC C). Volle Suite lokal (5.36+, sops-Binary, interop lief): 96 Dateien, 1549 Tests gruen. Auf 5.22-5.28 nur Bausteine gemessen, Voll-Lauf macht der Hub.
